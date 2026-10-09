@@ -2,13 +2,19 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 import random
+import os
 from datetime import datetime
+from dotenv import load_dotenv
 
 # ================= 參數設定區 =================
 GUILD_ID = 1557751571205333082       # 你的伺服器 ID
 ANNOUNCE_CHANNEL_ID = 1557751571742330892  # 想定時推播的文字頻道 ID
 gcp_vm_server_CHANNEL_ID = 1558122364062015570  # gcp-vm-server 文字頻道 ID
-BOT_TOKEN = "MTU1Nzc1NTg3OTcxNjAzNjYwOA.GZzHAq.AXiQfDfYlYgTQwhD1HU3xEoPqCupXV0-DeTwi0"          # 填入你的 Bot Token
+
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is missing. Set it in .env or the environment.")
 # =============================================
 
 # 1. 權限意圖設定：開啟讀取訊息內容權限

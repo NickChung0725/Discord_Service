@@ -1,0 +1,15 @@
+[project]
+name = "discord-service"
+version = "0.1.0"
+description = "Discord bot service"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "discord",
+    "python-dotenv",
+    "requests",
+    "schedule",
+]
+
+[tool.uv]
+package = false
