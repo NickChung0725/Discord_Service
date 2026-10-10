@@ -3,9 +3,12 @@ name = "discord-service"
 version = "0.1.0"
 description = "Discord bot service"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
-    "discord",
+    "discord.py>=2.0",
+    "finmind",
+    "pandas>=2.0",
+    "plotly>=5.0",
     "python-dotenv",
     "requests",
     "schedule",

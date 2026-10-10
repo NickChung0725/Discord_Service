@@ -1,0 +1,7 @@
+discord.py>=2.0
+FinMind
+pandas>=2.0
+plotly>=5.0
+python-dotenv
+requests
+schedule

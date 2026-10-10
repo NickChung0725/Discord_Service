@@ -5,6 +5,7 @@ import random
 import os
 from datetime import datetime
 from dotenv import load_dotenv
+from bot import register_stock_command
 
 # ================= 參數設定區 =================
 GUILD_ID = 1557751571205333082       # 你的伺服器 ID
@@ -12,9 +13,9 @@ ANNOUNCE_CHANNEL_ID = 1557751571742330892  # 想定時推播的文字頻道 ID
 gcp_vm_server_CHANNEL_ID = 1558122364062015570  # gcp-vm-server 文字頻道 ID
 
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing. Set it in .env or the environment.")
+    raise RuntimeError("DISCORD_TOKEN (or legacy BOT_TOKEN) is missing.")
 # =============================================
 
 # 1. 權限意圖設定：開啟讀取訊息內容權限
@@ -49,6 +50,7 @@ class MyClient(discord.Client):
         print("✅ 斜線指令同步完成！")
 
 client = MyClient()
+register_stock_command(client.tree)
 
 # 4. 背景定時排程任務（每 6 小時觸發一次）
 @tasks.loop(hours=6)
