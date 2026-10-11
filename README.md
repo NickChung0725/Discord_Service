@@ -25,6 +25,8 @@ Windows PowerShell 啟用虛擬環境請使用 `.venv\Scripts\Activate.ps1`，�
 | 變數 | 說明 |
 | --- | --- |
 | `DISCORD_TOKEN` | Discord Bot Token（必要；舊的 `BOT_TOKEN` 仍可使用） |
+| `GEMINI_API_KEY` | Google AI Studio API Key（使用 `/ai` 時必要） |
+| `GEMINI_MODEL` | Gemini 模型名稱（選填，預設 `gemini-flash-lite-latest`） |
 | `FINMIND_API_TOKEN` | FinMind API Token（選填） |
 | `GITHUB_TOKEN` | 有目標 repo Contents 讀寫權限的 GitHub fine-grained PAT |
 | `GITHUB_REPO` | 儲存庫，格式為 `username/repo_name` |
@@ -36,13 +38,13 @@ GitHub Token 建議僅授予目標 repo 的 **Contents: Read and write** 權限�
 
 ## 啟動
 
-`bot.py` 是僅含股票功能的獨立入口：
+`bot.py` 是同步全域斜線指令的獨立入口，提供 `/stock`、`/ai` 和 `/weather`：
 
 ```bash
 python bot.py
 ```
 
-既有 `bot_server.py` 也已加入 `/stock`，並保留原有 ping、say、roll、buttons、card 及排程功能：
+`bot_server.py` 提供相同斜線指令，並保留原有 ping、say、roll、buttons、card 及排程功能：
 
 ```bash
 python bot_server.py
@@ -51,6 +53,12 @@ python bot_server.py
 使用 `uv` 時，在更新依賴後執行 `uv sync`，再用 `uv run python bot_server.py` 啟動。
 
 使用既有的 `bot_server.py` 前，請先將檔案頂端的 `GUILD_ID` 改成你的 Discord 伺服器 ID；此入口會同步伺服器限定指令。獨立 `bot.py` 則同步全域指令，首次發布可能需要一些時間才會顯示。
+
+## Gemini AI 與每日天氣
+
+在 [Google AI Studio](https://aistudio.google.com/) 建立 API Key，將它存入 `.env` 的 `GEMINI_API_KEY`，然後重新啟動機器人。Discord 的 `/ai` 指令會使用 Gemini `generate_content` API 與 `gemini-flash-lite-latest` 模型；此組合已依專案的 `TEST.PY` 成功範例設定。如需更換模型，可設定 `GEMINI_MODEL`。請勿將 API Key 提交到 Git。
+
+`bot_server.py` 每天台灣時間早上 8 點會將台北天氣預報發送至 `ANNOUNCE_CHANNEL_ID` 指定的文字頻道。天氣資料來自 Open-Meteo，不需要額外 API Key。也可以使用 `/weather` 立即查詢；`/ai` 和 `/weather` 在 `bot.py`、`bot_server.py` 兩個入口都可使用，但每日排程只由 `bot_server.py` 執行。
 
 ## `/stock` 流程與指標
 

@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from ai_weather import register_ai_command, register_weather_command
 from chart_generator import (
     InvalidStockIDError,
     StockNotFoundError,
@@ -67,6 +68,8 @@ class StockBot(commands.Bot):
 intents = discord.Intents.default()
 bot = StockBot(command_prefix="!", intents=intents)
 register_stock_command(bot.tree)
+register_ai_command(bot.tree)
+register_weather_command(bot.tree)
 
 
 if __name__ == "__main__":

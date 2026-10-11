@@ -3,14 +3,19 @@ from discord import app_commands
 from discord.ext import tasks
 import random
 import os
-from datetime import datetime
+import logging
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from dotenv import load_dotenv
+from ai_weather import get_weather_report, register_ai_command, register_weather_command
 from bot import register_stock_command
+
+logger = logging.getLogger(__name__)
 
 # ================= 參數設定區 =================
 GUILD_ID = 1557751571205333082       # 你的伺服器 ID
 ANNOUNCE_CHANNEL_ID = 1557751571742330892  # 想定時推播的文字頻道 ID
 gcp_vm_server_CHANNEL_ID = 1558122364062015570  # gcp-vm-server 文字頻道 ID
+TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 
 load_dotenv()
 BOT_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
@@ -51,6 +56,8 @@ class MyClient(discord.Client):
 
 client = MyClient()
 register_stock_command(client.tree)
+register_ai_command(client.tree)
+register_weather_command(client.tree)
 
 # 4. 背景定時排程任務（每 6 小時觸發一次）
 @tasks.loop(hours=6)
@@ -62,10 +69,42 @@ async def scheduled_task():
         print(f"[排程記錄] 背景任務運作中，當前時間：{current_time}")
         await channel.send(f"⏰ 定時心跳通知：當前系統時間為 {current_time}")
 
+
+@tasks.loop(time=datetime_time(hour=8, minute=0, tzinfo=TAIPEI_TIMEZONE))
+async def daily_weather_task():
+    try:
+        report = await get_weather_report()
+    except Exception:
+        logger.exception("Failed to fetch Taipei weather for the daily report.")
+        report = "⚠️ 今日台北天氣資料取得失敗，請稍後再試。"
+
+    channel = client.get_channel(ANNOUNCE_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(ANNOUNCE_CHANNEL_ID)
+        except discord.NotFound:
+            logger.exception("Configured weather announcement channel was not found.")
+            return
+        except discord.HTTPException:
+            logger.exception("Failed to fetch the configured weather announcement channel.")
+            return
+
+    try:
+        await channel.send(report)
+    except discord.HTTPException:
+        logger.exception("Failed to post the daily weather report.")
+
+
 @scheduled_task.before_loop
 async def before_scheduled_task():
     # 等待機器人完全連線登入後再開始跑排程
     await client.wait_until_ready()
+
+
+@daily_weather_task.before_loop
+async def before_daily_weather_task():
+    await client.wait_until_ready()
+
 
 # 5. 上線事件
 @client.event
@@ -74,6 +113,8 @@ async def on_ready():
     # 啟動背景排程
     if not scheduled_task.is_running():
         scheduled_task.start()
+    if not daily_weather_task.is_running():
+        daily_weather_task.start()
 
 # 6. 即時聊天訊息監聽事件
 @client.event

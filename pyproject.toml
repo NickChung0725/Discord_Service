@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "discord.py>=2.0",
     "finmind",
+    "google-genai>=1.0.0",
     "pandas>=2.0",
     "plotly>=5.0",
     "python-dotenv",
