@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 # ================= 參數設定區 =================
 GUILD_ID = 1557751571205333082       # 你的伺服器 ID
 ANNOUNCE_CHANNEL_ID = 1557751571742330892  # 想定時推播的文字頻道 ID
+STOCK_CHANNEL_ID = int(
+    os.getenv("STOCK_CHANNEL_ID") or "1557778164124622918"
+)
 gcp_vm_server_CHANNEL_ID = 1558122364062015570  # gcp-vm-server 文字頻道 ID
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 

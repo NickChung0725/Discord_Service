@@ -68,6 +68,77 @@ python bot_server.py
 
 如果 Discord 指令尚未出現，請確認 Bot 已成功登入，並依使用的入口檢查伺服器限定指令（`bot_server.py`）或等待全域指令（`bot.py`）同步完成。
 
+## FinMind 市場／產業均線掃描
+
+`finmind_stock_scanner.py` 是獨立命令列工具，可先檢視 FinMind 回傳的市場與產業，再掃描指定市場、產業近六個月的個股日線資料。`FINMIND_API_TOKEN` 可沿用 `.env` 設定；沒有 Token 時會嘗試使用 FinMind SDK 的未登入存取。
+
+```bash
+python finmind_stock_scanner.py list-markets
+python finmind_stock_scanner.py list-industries --market 上市
+python finmind_stock_scanner.py scan --market 上市 --industry "半導體業" --post-to-discord
+```
+
+市場選項為 `上市`、`上櫃`、`興櫃`。掃描下載近 12 個月日線計算 MA17、MA45、MA117、MA189，再將價格與均線資料裁切為近六個月輸出。一般訊號清單保留最新交易日 **MA45 >= MA17** 或 **MA45 低於 MA17 不超過 1%** 的股票；「接近」只表示均線距離，不是未來交叉的預測。另產生 `alignment_signals_*.csv`，條件為 **MA17、MA45 都高於 MA117、MA189，且 MA17 與 MA45 的差距不超過 1%**。加上 `--post-to-discord` 後，會把這份特別清單傳到 `.env` 的 `STOCK_CHANNEL_ID`；也可以用 `--channel-id` 指定頻道。傳送需要 `DISCORD_TOKEN`（或舊名稱 `BOT_TOKEN`），Bot 必須對該頻道有檢視及發送訊息權限；Discord 失敗會明確回報，不影響已產生的 CSV。
+
+### 每日上市／上櫃指定產業掃描
+
+`finmind_scanner.json` 設定上市與上櫃的半導體業、電子通路業、綠能環保、航運業、電腦及週邊設備業；排除 ETF／ETN 等非個股類別，以及設定檔列出的 19 檔已下市股票。每日批次使用：
+
+```bash
+python finmind_stock_scanner.py scan-all --config finmind_scanner.json
+```
+
+掃描以台北時間午夜為排程時間，近 12 個月資料用於計算 MA17、MA45、MA117、MA189，報表保留近六個月。所有指定市場與產業合併到 `finmind_reports/daily/YYYY-MM-DD_prices.csv`、`..._signals.csv`、`..._alignment_signals.csv`、`..._failures.csv`；空失敗表也會輸出。報表採原子寫入，僅清除超過設定保留天數的這四類日報，限流資料庫保留於 `finmind_reports/.state/`。
+
+FinMind SDK 會在請求錯誤時重試，且登入、取得股票清單也會發出 HTTP 請求。批次限流器在每一次 `requests` HTTP adapter 實際送出請求前記錄 SQLite 滾動視窗，因此 SDK 每次重試及登入／股票清單請求都各自計數；預設最多每小時 540 次，且相鄰請求至少間隔 6.7 秒。設定的五產業目前上市／上櫃約 475 檔（排除清單與 ETF 後依當日股票資料略少），順利時約需 51–54 分鐘；重試會計入額度並可能延長時間。SQLite 可跨程式重啟保存歷史，但只協調使用同一個輸出目錄／資料庫的程序；其他 VM 或程式若共用同一 FinMind Token，仍須另行合併計算額度。請勿用同一 Token 同時從其他主機查詢，否則無法保證總額低於 600 次／小時。
+
+### GCP VM systemd 部署
+
+部署範本位於 `deploy/finmind-scan.service` 與 `deploy/finmind-scan.timer`。在 VM 將專案放在 `/home/<Linux使用者>/Discord_Service`，建立 Python 虛擬環境並安裝 `requirements.txt`；將 `.env.example` 複製成 `.env`，至少設定 `FINMIND_API_TOKEN`、`DISCORD_TOKEN`。`.env` 僅供服務讀取，請設為 `chmod 600 .env`，不要提交 Token。系統需安裝 systemd，且 FinMind 與 Discord 網域須可連線。
+
+```bash
+cd /home/<Linux使用者>/Discord_Service
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env
+chmod 600 .env
+nano .env
+```
+
+以下以專案路徑 `/home/alice/Discord_Service` 為例，先複製 unit 範本，再將 service 檔案中的 `YOUR_LINUX_USER` 全部換成 VM 的 Linux 使用者名稱。timer 檔案不需替換。使用 `sudoedit` 修改 systemd 檔案；不要把實際 Token 寫入 unit。
+
+```bash
+sudo cp deploy/finmind-scan.service /etc/systemd/system/finmind-scan.service
+sudo cp deploy/finmind-scan.timer /etc/systemd/system/finmind-scan.timer
+sudoedit /etc/systemd/system/finmind-scan.service
+sudo systemctl daemon-reload
+sudo systemctl start finmind-scan.service
+sudo systemctl status finmind-scan.service
+sudo journalctl -u finmind-scan.service -n 100 --no-pager
+sudo systemctl enable --now finmind-scan.timer
+systemctl list-timers finmind-scan.timer
+```
+
+服務範本明確呼叫虛擬環境的 Python，並讀取專案 `.env`。Timer 指定 `Asia/Taipei` 每日 00:00 啟動；執行需約一小時內，但重試可延長。啟用 timer 前可先手動跑一次 service 驗證 Token、Discord 權限及目錄寫入。檢查報表：`ls -l finmind_reports/daily/`。如果改了設定檔啟動時間，目前程式會拒絕非 `00:00`，以免與 timer 設定不一致。
+
+這些範本與測試可確認本機部署設定格式，但無法代替實際 GCP VM 驗證。上傳到 VM 後仍需依該 VM 的使用者、專案路徑、Python 版本、網路、Token 及 Discord 權限完成上面手動測試；本專案目前尚未實作 Google Drive 自動上傳。
+
+### 將日報 SIGNALS 備份至 Google Drive
+
+日報訊號檔是 `finmind_reports/daily/YYYY-MM-DD_signals.csv`，均線排列特別訊號則是 `..._alignment_signals.csv`。可在 GCP VM 安裝並設定 `rclone` 的 Google Drive remote（`rclone config`），授權的 Google 帳號必須能寫入目標 Drive 資料夾。VM 無瀏覽器時，可在可信任的管理電腦完成 OAuth 授權後，安全地將 rclone 設定傳到 VM；該設定含敏感憑證，須限制檔案權限，不能放進 repo。亦可使用 Google Workspace Shared Drive 與具備相應權限的服務帳號；個人雲端硬碟並非自動授權給 VM 的 GCP service account。
+
+設定好 remote（以下假設名稱為 `gdrive`、目的資料夾為 `FinMind/signals`）後，可手動上傳並核對：
+
+```bash
+REPORT_DATE=$(TZ=Asia/Taipei date +%F)
+rclone copyto "finmind_reports/daily/${REPORT_DATE}_signals.csv" \
+  "gdrive:FinMind/signals/${REPORT_DATE}_signals.csv"
+rclone check "finmind_reports/daily/${REPORT_DATE}_signals.csv" \
+  "gdrive:FinMind/signals/${REPORT_DATE}_signals.csv" --one-way
+```
+
+此命令是手動備份示例，不會由 `finmind-scan.service` 自動執行；要自動化需在確認 Drive 認證方式後，另行加入上傳步驟並讓備份失敗明確告警，再調整本機報表清理期限，避免只剩雲端副本前就刪除本機資料。
+
 ## Linux VM 背景執行
 
 使用 `systemd` 可在 VM 重開機後自動啟動並於程式意外結束時重啟。將下列範例存成 `/etc/systemd/system/discordbot.service`，並替換 Linux 使用者名稱與專案路徑：

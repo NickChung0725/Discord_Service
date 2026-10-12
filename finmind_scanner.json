@@ -1,0 +1,129 @@
+{
+  "markets": [
+    "上市",
+    "上櫃"
+  ],
+  "industries": [
+    "半導體業",
+    "電子通路業",
+    "綠能環保",
+    "航運業",
+    "電腦及週邊設備業"
+  ],
+  "excluded_industry_categories": [
+    "ETF",
+    "ETN",
+    "Index",
+    "大盤",
+    "所有證券",
+    "受益證券",
+    "上櫃ETF",
+    "上櫃指數股票型基金(ETF)",
+    "指數投資證券(ETN)"
+  ],
+  "excluded_stocks": [
+    {
+      "stock_id": "2473",
+      "stock_name": "思源",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "2446",
+      "stock_name": "全懋",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3271",
+      "stock_name": "其樂達",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3534",
+      "stock_name": "雷凌",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3474",
+      "stock_name": "華亞科",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3598",
+      "stock_name": "奕力",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3614",
+      "stock_name": "誠致",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3638",
+      "stock_name": "F-IML",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3697",
+      "stock_name": "F-晨星",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "6286",
+      "stock_name": "立錡",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "5280",
+      "stock_name": "F-敦泰",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3063",
+      "stock_name": "飛信",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3559",
+      "stock_name": "全智科",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3536",
+      "stock_name": "誠創",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3519",
+      "stock_name": "綠能",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "2311",
+      "stock_name": "日月光",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "5305",
+      "stock_name": "敦南",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "3579",
+      "stock_name": "尚志",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "2325",
+      "stock_name": "矽品",
+      "reason": "已下市"
+    }
+  ],
+  "max_requests_per_hour": 540,
+  "min_request_interval_seconds": 6.7,
+  "daily_start_time": "00:00",
+  "timezone": "Asia/Taipei",
+  "post_alignment_to_discord": true,
+  "stock_channel_id": "1557778164124622918",
+  "output_directory": "finmind_reports",
+  "local_retention_days": 30
+}
