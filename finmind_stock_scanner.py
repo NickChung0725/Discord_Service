@@ -956,7 +956,7 @@ def main(argv: list[str] | None = None) -> int:
                 float(config["min_request_interval_seconds"]),
             )
             with _rate_limit_finmind_http_requests(request_limiter):
-                loader = DataLoader(api_token=api_token)
+                loader = DataLoader(token=api_token)
                 stock_info = loader.taiwan_stock_info(
                     timeout=REQUEST_TIMEOUT_SECONDS
                 )
@@ -980,7 +980,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1 if failure_count or failed_groups else 0
 
-        loader = DataLoader(api_token=api_token)
+        loader = DataLoader(token=api_token)
         stock_info = loader.taiwan_stock_info(timeout=REQUEST_TIMEOUT_SECONDS)
         if stock_info.empty:
             raise RuntimeError("FinMind 股票總覽沒有回傳任何資料。")
