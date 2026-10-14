@@ -20,7 +20,12 @@ class GitHubUploadError(RuntimeError):
     """Raised when GitHub cannot accept or publish a chart page."""
 
 
-def upload_to_github(file_path: str, stock_id: str) -> str:
+def upload_to_github(
+    file_path: str,
+    stock_id: str,
+    *,
+    filename_suffix: str = "",
+) -> str:
     """Create or update a chart file in the configured GitHub Pages repository."""
     token = os.getenv("GITHUB_TOKEN", "").strip()
     repository = os.getenv("GITHUB_REPO", "").strip()
@@ -37,7 +42,7 @@ def upload_to_github(file_path: str, stock_id: str) -> str:
         raise GitHubUploadError("股票代號必須是 4 至 6 位數字。")
 
     chart_path = Path(file_path)
-    expected_filename = f"{normalized_stock_id}.html"
+    expected_filename = f"{normalized_stock_id}{filename_suffix}.html"
     if not chart_path.is_file() or chart_path.name != expected_filename:
         raise GitHubUploadError(f"找不到有效的圖表檔案：{expected_filename}")
 

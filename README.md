@@ -1,171 +1,224 @@
-# Discord 台股圖表機器人
+# Discord_Service — 個人智慧生活與台股量化分析助理
 
-使用 Discord `/stock` 指令取得台股近半年 K 線、均線、成交量、KD 與 MACD 互動圖表，並將 HTML 發布至 GitHub Pages。
+這是一個部署於 **Google Cloud Platform (GCP) Compute Engine** 的全方位 Discord 機器人與台股自動化掃描服務。系統整合了 **FinMind 台股數據分析**、**Plotly 互動式看盤圖表自動發布 (GitHub Pages)**、**Google Gemini AI 智慧問答** 以及 **Open-Meteo 每日氣象推播**，透過 `systemd` 實現 24 小時常駐與每日自動化排程。
 
-## 需求
+---
 
-- Python 3.10 或更新版本
-- Discord Bot Token，並邀請機器人加入伺服器及授予使用應用程式指令的權限
-- 公開 GitHub 儲存庫，且已設定 GitHub Pages
-- FinMind API Token 為選填；未設定時使用 FinMind SDK 的未登入存取
+## 核心功能一覽（目前已實作現況）
 
-## 安裝與設定
+### 1. 台股互動式技術分析圖表 (`/stock`)
+* **即時指標運算**：輸入台股代號（如 `2330`），自動透過 FinMind API 抓取歷史日 K 資料，計算以下核心技術指標：
+  * **均線系統 (MA)**：`17MA`、`45MA`、`117MA`、`189MA`
+  * **動能指標 (KD)**：9 日 RSV，K=3、D=3 平滑移動平均
+  * **趨勢指標 (MACD)**：12 日與 26 日 EMA，9 日訊號線 (Signal) 與柱狀圖 (Histogram)
+  * **量能分析**：成交量與 5 日均量比、漲跌幅與振幅統計
+* **自動發布 GitHub Pages**：使用 Plotly 繪製可縮放、懸停查價的 HTML 互動式 K 線圖，透過 **GitHub Contents API** 自動上傳至指定的 GitHub Pages 分支。
+* **Discord 視覺化圖卡**：於頻道回傳結構化 Embed 摘要（含收盤價、漲跌、各期均線乖離、KD/MACD 狀態）及專屬互動式網頁連結。
+
+### 2. 台股產業均線多頭自動掃描 (`finmind_stock_scanner.py`)
+* **目標產業過濾**：預設鎖定台股五大重點產業進行批次掃描：
+  * `半導體業`、`電子通路業`、`綠能環保`、`航運業`、`電腦及週邊設備業`
+* **多頭排列與糾結篩選**：自動檢視個股是否符合 `17 / 45 / 117 / 189` 均線多頭排列與量價突破訊號。
+* **本地 CSV 報表與 Discord 推播**：
+  * 每次執行自動於本地 `./finmind_reports/` 產出 4 份結構化 CSV 檔案（價格快照 `prices`、技術訊號 `signals`、均線多頭 `alignment_signals`、異常紀錄 `failures`）。
+  * 支援透過 `--post-to-discord` 參數將當日強勢股清單直接推播至指定的 Discord 股票頻道 (`STOCK_CHANNEL_ID`)。
+
+### 3. Gemini AI 智慧助理 (`/ai`)
+* 串接 Google `google-genai` SDK，支援於 Discord 頻道內直接呼叫 Gemini 模型（可由環境變數指定模型版本，如 `gemini-2.5-flash`）進行程式解答、數據分析與日常問答。
+
+### 4. 即時氣象查詢與每日早安推播 (`/weather`)
+* **手動查詢**：透過 `/weather` 串接 Open-Meteo API，即時回傳當前溫度、體感溫度、降雨機率與天氣狀況。
+* **每日定時推播**：於 `bot_server.py` 內建 `discord.ext.tasks` 排程，每日上午 **08:00 (Asia/Taipei)** 自動發送台北地區早安天氣預報至公告頻道 (`ANNOUNCE_CHANNEL_ID`)。
+
+### 5. 台股基本面財報快取 + AI 戰情室 (`/stock_ai`)
+* **Google Sheets 六張固定 Tabs 快取**：自動建立/補齊以下分頁（不做每股一張表）：
+  * `00_Watchlist_Master`、`01_Monthly_Revenue`、`02_Income_Statement`、`03_Balance_Sheet`、`04_Cash_Flow`、`05_AI_Metrics_Wide`
+* **FinMind 增量更新 + 冷卻保護**：以 `MAX(raw_date)` 做真實水位，落後時採 `start_date = max_raw_date + 1 day` 增量抓取；並使用 `FINMIND_PROBE_COOLDOWN_HOURS` 避免空窗期重複探測。
+* **Gemini AI 分析快取**：以 `ai_cached_period=last_fin_qtr_last_rev_ym` 做快取鍵，資料未變且未強制刷新時可 0 token 秒回。
+* **Plotly 戰情室頁面**：產生 `{stock_id}_fund.html` 並發布到 GitHub Pages `charts/{stock_id}_fund.html`。
+
+### 6. 伺服器實用工具指令
+* `/ping`：檢測機器人與 Discord 伺服器的連線延遲 (Latency)。
+* `/say`：讓機器人代為發送指定文字訊息。
+* `/roll`：隨機擲骰小工具。
+
+---
+
+## 專案目錄結構
+
+```text
+Discord_Service/
+├── bot_server.py               # [主程式] 綁定特定伺服器 (Guild) 之完整版機器人（含 Slash 指令與每日 08:00 天氣排程）
+├── finmind_stock_scanner.py    # [掃描器] 台股五大產業均線與技術指標批次掃描腳本（支援 CLI 與 Discord 推播）
+├── bot.py                      # [備用入口] 全域 (Global) Slash 指令版機器人入口
+├── stock_bot.py                # [開發測試] 獨立測試股票圖表生成與 GitHub Pages 上傳之腳本
+├── TEST.PY                     # [連線測試] 驗證 Gemini API Key 與模型回應之最小化測試腳本
+├── .env                        # [環境變數] 存放 API Keys、Tokens 與頻道 ID（不納入版控）
+├── requirements.txt            # [相依套件] Python 執行環境套件清單
+├── deploy/                     # [部署設定] Linux systemd 常駐與定時任務設定檔範本
+│   ├── finmind-scan.service    # 產業掃描單次執行服務定義檔
+│   └── finmind-scan.timer      # 每日 00:00 定時觸發掃描之 Timer 設定檔
+└── finmind_reports/            # [輸出目錄] 存放每日掃描產出的 CSV 報表檔案
+```
+
+---
+
+## 環境需求與安裝步驟
+
+### 1. 系統與 Python 環境
+* **作業系統**：Debian / Ubuntu Linux（推薦部署於 GCP Compute Engine e2-micro 免費方案）或 Windows/macOS 本地開發環境
+* **Python 版本**：Python 3.10 以上
+
+### 2. 建立虛擬環境並安裝套件
 
 ```bash
-python -m venv .venv
+# 進入專案目錄
+cd ~/Discord_Service
+
+# 建立 Python 虛擬環境
+python3 -m venv .venv
+
+# 啟用虛擬環境 (Linux / macOS)
 source .venv/bin/activate
+
+# 安裝相依套件
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
-Windows PowerShell 啟用虛擬環境請使用 `.venv\Scripts\Activate.ps1`，複製範例設定檔請使用 `Copy-Item .env.example .env`。
+*(若尚未建立 `requirements.txt`，核心依賴包含：`discord.py`、`python-dotenv`、`requests`、`pandas`、`plotly`、`google-genai`、`FinMind`。)*
 
-編輯 `.env`，設定以下變數：
+---
 
-| 變數 | 說明 |
-| --- | --- |
-| `DISCORD_TOKEN` | Discord Bot Token（必要；舊的 `BOT_TOKEN` 仍可使用） |
-| `GEMINI_API_KEY` | Google AI Studio API Key（使用 `/ai` 時必要） |
-| `GEMINI_MODEL` | Gemini 模型名稱（選填，預設 `gemini-flash-lite-latest`） |
-| `FINMIND_API_TOKEN` | FinMind API Token（選填） |
-| `GITHUB_TOKEN` | 有目標 repo Contents 讀寫權限的 GitHub fine-grained PAT |
-| `GITHUB_REPO` | 儲存庫，格式為 `username/repo_name` |
-| `GITHUB_BRANCH` | Pages 發布分支，預設 `gh-pages` |
+## 環境變數設定 (`.env`)
 
-GitHub Token 建議僅授予目標 repo 的 **Contents: Read and write** 權限（GitHub 可能同時要求 Metadata 讀取權限）。請勿將 `.env` 或 Token 提交到 Git。
+請於專案根目錄建立 `.env` 檔案，並填入以下設定值：
 
-如果目前 `.env` 已有 `GITHUB_BRANCH=main`，請改成 `GITHUB_BRANCH=gh-pages`；程式會優先採用 `.env` 中明確設定的分支。接著在 GitHub 儲存庫的 **Settings → Pages**，將發布來源設為 `gh-pages` branch 及根目錄 `/`；首次使用前，請先在 GitHub 建立 `gh-pages` 分支。上傳器會將 HTML 放在該分支的 `charts/` 資料夾中；若 repo 名稱不是 `<username>.github.io`，網址格式為 `https://<username>.github.io/<repo_name>/charts/<股票代號>.html`。此流程會在 `gh-pages` 分支建立或更新單一股票檔案，不會再於 `main` 分支新增圖表提交。重複查詢會先取得既有檔案 SHA 再更新，不會建立多份同名 HTML；每次內容更新仍會在 `gh-pages` 新增一筆 commit。Pages 初次啟用或更新可能需要數分鐘才會公開。
+```ini
+# ==========================================
+# 1. Discord Bot 設定
+# ==========================================
+DISCORD_TOKEN=你的_Discord_Bot_Token
 
-## 啟動
+# 每日 08:00 早安天氣推播目標頻道 ID
+ANNOUNCE_CHANNEL_ID=123456789012345678
 
-`bot.py` 是同步全域斜線指令的獨立入口，提供 `/stock`、`/ai` 和 `/weather`：
+# 每日 00:00 FinMind 產業掃描報告推播頻道 ID
+STOCK_CHANNEL_ID=123456789012345678
 
-```bash
-python bot.py
+# ==========================================
+# 2. Google Gemini AI 設定
+# ==========================================
+GEMINI_API_KEY=你的_Gemini_API_Key
+GEMINI_MODEL=gemini-2.5-flash
+
+# ==========================================
+# 3. FinMind 台股數據 API 設定
+# ==========================================
+FINMIND_API_TOKEN=你的_FinMind_API_Token
+
+# ==========================================
+# 4. GitHub Pages 圖表自動發布設定
+# ==========================================
+GITHUB_TOKEN=你的_GitHub_Fine_Grained_PAT
+GITHUB_REPO=你的帳號/你的儲存庫名稱
+GITHUB_BRANCH=gh-pages
+
+# ==========================================
+# 5. Google Sheets 財報快取資料庫設定 (/stock_ai)
+# ==========================================
+GOOGLE_APPLICATION_CREDENTIALS=/home/你的帳號/Discord_Service/service_account.json
+GSHEET_SPREADSHEET_ID=你的_Google_Sheet_ID
+
+FINMIND_PROBE_COOLDOWN_HOURS=6
+AI_WINDOW_QUARTERS=8
+AI_WINDOW_MONTHS=12
+CHART_WINDOW_QUARTERS=16
+CHART_WINDOW_MONTHS=36
 ```
 
-`bot_server.py` 提供相同斜線指令，並保留原有 ping、say、roll、buttons、card 及排程功能：
+> **注意**：`bot_server.py` 頂端設有 `GUILD_ID` 常數，部署至新 Discord 伺服器時，請確認將其修改為你的 Discord 伺服器 ID，以確保 Slash 指令能立即同步生效。
+
+---
+
+## 執行與使用方式
+
+### 1. 啟動 Discord 機器人主服務
 
 ```bash
+source .venv/bin/activate
 python bot_server.py
 ```
 
-使用 `uv` 時，在更新依賴後執行 `uv sync`，再用 `uv run python bot_server.py` 啟動。
+啟動成功後，即可在 Discord 頻道內使用以下 Slash 指令：
+* `/stock stock_id:2330` — 產生台積電 (2330) 互動式技術分析 K 線圖並取得 GitHub Pages 網址
+* `/stock_ai symbol:2330` — 產生台積電 (2330) 基本面財報快取 + AI 診斷（並發布基本面戰情室到 GitHub Pages）
+* `/stock_ai symbol:2330 prompt:為什麼最新一季自由現金流減少？` — 針對該股做財報專題追問
+* `/ai prompt:請幫我解釋 KD 指標鈍化的意義` — 呼叫 Gemini AI 進行解答
+* `/weather` — 查詢台北即時天氣狀況
+* `/ping`、`/say`、`/roll` — 基礎互動指令
 
-使用既有的 `bot_server.py` 前，請先將檔案頂端的 `GUILD_ID` 改成你的 Discord 伺服器 ID；此入口會同步伺服器限定指令。獨立 `bot.py` 則同步全域指令，首次發布可能需要一些時間才會顯示。
-
-## Gemini AI 與每日天氣
-
-在 [Google AI Studio](https://aistudio.google.com/) 建立 API Key，將它存入 `.env` 的 `GEMINI_API_KEY`，然後重新啟動機器人。Discord 的 `/ai` 指令會使用 Gemini `generate_content` API 與 `gemini-flash-lite-latest` 模型；此組合已依專案的 `TEST.PY` 成功範例設定。如需更換模型，可設定 `GEMINI_MODEL`。請勿將 API Key 提交到 Git。
-
-`bot_server.py` 每天台灣時間早上 8 點會將台北天氣預報發送至 `ANNOUNCE_CHANNEL_ID` 指定的文字頻道。天氣資料來自 Open-Meteo，不需要額外 API Key。也可以使用 `/weather` 立即查詢；`/ai` 和 `/weather` 在 `bot.py`、`bot_server.py` 兩個入口都可使用，但每日排程只由 `bot_server.py` 執行。
-
-## `/stock` 流程與指標
-
-收到指令後會先 defer Discord interaction，再以背景執行緒取得至少近一年 FinMind `TaiwanStockPrice` 資料計算均線，圖表只顯示近六個月，並呼叫 GitHub Contents API 建立或更新頁面。K 線與價格使用 FinMind；成交量使用 Yahoo Finance 日線 API，並以 1,000 股換算為張。若 Yahoo 缺少對應交易日的成交量，程式會明確回報錯誤，不會靜默改用不同統計口徑的 FinMind 數字。KD 以 9 期 RSV 和 3 期平滑計算，MACD 使用 12/26 EMA 及 9 期訊號線。圖表採用 17/45/117/189 日均線、`plotly_dark`、四個共用日期軸的子圖和 CDN 載入 Plotly.js，以減少儲存庫檔案大小。游標移至圖表時會顯示橫跨圖面的十字線，日期軸會隱藏沒有交易資料的日期（包含週末與休市日），讓交易日連續呈現。拖曳 K 線圖放大任一日期區間時，頁面右上方會即時顯示該區間的最高價、最低價，以及兩者的平均值；雙擊圖表還原全區間後，數值也會回到目前整張圖表的範圍。
-
-成交量數字會因資料來源的統計口徑而異：例如 2026-09-01 台積電，FinMind/TWSE 日成交資料為 31,855,287 股，而 Yahoo Finance 日線 API 為 17,216,484 股（與 Yahoo 歷史資料頁顯示值相同）。FinMind 的 `TotalDealVolume` 是全市場每 5 秒彙總，不含個股代號，不能用來取代台積電個股成交量。Yahoo Finance chart API 為非官方介面，可能受其服務可用性或流量限制；失敗時機器人會回報查詢錯誤，不會悄悄切換成交量來源。
-
-如果 Discord 指令尚未出現，請確認 Bot 已成功登入，並依使用的入口檢查伺服器限定指令（`bot_server.py`）或等待全域指令（`bot.py`）同步完成。
-
-## FinMind 市場／產業均線掃描
-
-`finmind_stock_scanner.py` 是獨立命令列工具，可先檢視 FinMind 回傳的市場與產業，再掃描指定市場、產業近六個月的個股日線資料。`FINMIND_API_TOKEN` 可沿用 `.env` 設定；沒有 Token 時會嘗試使用 FinMind SDK 的未登入存取。
+### 2. 手動執行 FinMind 台股產業掃描
 
 ```bash
-python finmind_stock_scanner.py list-markets
-python finmind_stock_scanner.py list-industries --market 上市
-python finmind_stock_scanner.py scan --market 上市 --industry "半導體業" --post-to-discord
+source .venv/bin/activate
+
+# 執行預設五大產業掃描，並將結果推播至 Discord STOCK_CHANNEL_ID
+python finmind_stock_scanner.py --post-to-discord
+
+# 指定特定市場或單一產業進行掃描（不推播至 Discord，僅輸出本地 CSV）
+python finmind_stock_scanner.py --market twse --industry 半導體業
 ```
 
-市場選項為 `上市`、`上櫃`、`興櫃`。掃描下載近 12 個月日線計算 MA17、MA45、MA117、MA189，再將價格與均線資料裁切為近六個月輸出。一般訊號清單保留最新交易日 **MA45 >= MA17** 或 **MA45 低於 MA17 不超過 1%** 的股票；「接近」只表示均線距離，不是未來交叉的預測。另產生 `alignment_signals_*.csv`，條件為 **MA17、MA45 都高於 MA117、MA189，且 MA17 與 MA45 的差距不超過 1%**。加上 `--post-to-discord` 後，會把這份特別清單傳到 `.env` 的 `STOCK_CHANNEL_ID`；也可以用 `--channel-id` 指定頻道。傳送需要 `DISCORD_TOKEN`（或舊名稱 `BOT_TOKEN`），Bot 必須對該頻道有檢視及發送訊息權限；Discord 失敗會明確回報，不影響已產生的 CSV。
+掃描完成後，會在 `./finmind_reports/` 目錄下生成當日 CSV 報表：
+* `finmind_prices_YYYYMMDD.csv`（個股收盤與量價快照）
+* `finmind_signals_YYYYMMDD.csv`（全市場技術指標訊號）
+* `finmind_alignment_signals_YYYYMMDD.csv`（符合 17/45/117/189 均線多頭排列之標的）
+* `finmind_failures_YYYYMMDD.csv`（API 抓取失敗或資料不足之紀錄）
 
-### 每日上市／上櫃指定產業掃描
+---
 
-`finmind_scanner.json` 設定上市與上櫃的半導體業、電子通路業、綠能環保、航運業、電腦及週邊設備業；排除 ETF／ETN 等非個股類別，以及設定檔列出的 19 檔已下市股票。每日批次使用：
+## GCP VM 自動化部署與 `systemd` 維運
 
-```bash
-python finmind_stock_scanner.py scan-all --config finmind_scanner.json
-```
+在 GCP Linux VM 上，本專案透過 `systemd` 實現「機器人 24 小時背景常駐」與「每日 00:00 自動化選股掃描」。
 
-掃描以台北時間午夜為排程時間，近 12 個月資料用於計算 MA17、MA45、MA117、MA189，報表保留近六個月。所有指定市場與產業合併到 `finmind_reports/daily/YYYY-MM-DD_prices.csv`、`..._signals.csv`、`..._alignment_signals.csv`、`..._failures.csv`；空失敗表也會輸出。報表採原子寫入，僅清除超過設定保留天數的這四類日報，限流資料庫保留於 `finmind_reports/.state/`。
+### 1. 部署每日 00:00 產業掃描排程 (`finmind-scan`)
 
-FinMind SDK 會在請求錯誤時重試，且登入、取得股票清單也會發出 HTTP 請求。批次限流器在每一次 `requests` HTTP adapter 實際送出請求前記錄 SQLite 滾動視窗，因此 SDK 每次重試及登入／股票清單請求都各自計數；預設最多每小時 540 次，且相鄰請求至少間隔 6.7 秒。設定的五產業目前上市／上櫃約 475 檔（排除清單與 ETF 後依當日股票資料略少），順利時約需 51–54 分鐘；重試會計入額度並可能延長時間。SQLite 可跨程式重啟保存歷史，但只協調使用同一個輸出目錄／資料庫的程序；其他 VM 或程式若共用同一 FinMind Token，仍須另行合併計算額度。請勿用同一 Token 同時從其他主機查詢，否則無法保證總額低於 600 次／小時。
-
-### GCP VM systemd 部署
-
-部署範本位於 `deploy/finmind-scan.service` 與 `deploy/finmind-scan.timer`。在 VM 將專案放在 `/home/<Linux使用者>/Discord_Service`，建立 Python 虛擬環境並安裝 `requirements.txt`；將 `.env.example` 複製成 `.env`，至少設定 `FINMIND_API_TOKEN`、`DISCORD_TOKEN`。`.env` 僅供服務讀取，請設為 `chmod 600 .env`，不要提交 Token。系統需安裝 systemd，且 FinMind 與 Discord 網域須可連線。
+將 `deploy/` 目錄下的設定檔複製至系統目錄並啟用 Timer：
 
 ```bash
-cd /home/<Linux使用者>/Discord_Service
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env
-chmod 600 .env
-nano .env
-```
+sudo cp ~/Discord_Service/deploy/finmind-scan.service /etc/systemd/system/
+sudo cp ~/Discord_Service/deploy/finmind-scan.timer /etc/systemd/system/
 
-以下以專案路徑 `/home/alice/Discord_Service` 為例，先複製 unit 範本，再將 service 檔案中的 `YOUR_LINUX_USER` 全部換成 VM 的 Linux 使用者名稱。timer 檔案不需替換。使用 `sudoedit` 修改 systemd 檔案；不要把實際 Token 寫入 unit。
-
-```bash
-sudo cp deploy/finmind-scan.service /etc/systemd/system/finmind-scan.service
-sudo cp deploy/finmind-scan.timer /etc/systemd/system/finmind-scan.timer
-sudoedit /etc/systemd/system/finmind-scan.service
+# 重新載入 systemd 並啟用每日排程
 sudo systemctl daemon-reload
-sudo systemctl start finmind-scan.service
-sudo systemctl status finmind-scan.service
-sudo journalctl -u finmind-scan.service -n 100 --no-pager
 sudo systemctl enable --now finmind-scan.timer
-systemctl list-timers finmind-scan.timer
+
+# 檢查排程下次觸發時間
+systemctl list-timers --all | grep finmind-scan
+
+# 手動測試觸發一次掃描任務並查看即時 Log
+sudo systemctl start finmind-scan.service
+journalctl -u finmind-scan.service -n 50 -f
 ```
 
-服務範本明確呼叫虛擬環境的 Python，並讀取專案 `.env`。Timer 指定 `Asia/Taipei` 每日 00:00 啟動；執行需約一小時內，但重試可延長。啟用 timer 前可先手動跑一次 service 驗證 Token、Discord 權限及目錄寫入。檢查報表：`ls -l finmind_reports/daily/`。如果改了設定檔啟動時間，目前程式會拒絕非 `00:00`，以免與 timer 設定不一致。
+### 2. 常用 Discord Bot 常駐服務管理指令
 
-這些範本與測試可確認本機部署設定格式，但無法代替實際 GCP VM 驗證。上傳到 VM 後仍需依該 VM 的使用者、專案路徑、Python 版本、網路、Token 及 Discord 權限完成上面手動測試；本專案目前尚未實作 Google Drive 自動上傳。
-
-### 將日報 SIGNALS 備份至 Google Drive
-
-日報訊號檔是 `finmind_reports/daily/YYYY-MM-DD_signals.csv`，均線排列特別訊號則是 `..._alignment_signals.csv`。可在 GCP VM 安裝並設定 `rclone` 的 Google Drive remote（`rclone config`），授權的 Google 帳號必須能寫入目標 Drive 資料夾。VM 無瀏覽器時，可在可信任的管理電腦完成 OAuth 授權後，安全地將 rclone 設定傳到 VM；該設定含敏感憑證，須限制檔案權限，不能放進 repo。亦可使用 Google Workspace Shared Drive 與具備相應權限的服務帳號；個人雲端硬碟並非自動授權給 VM 的 GCP service account。
-
-設定好 remote（以下假設名稱為 `gdrive`、目的資料夾為 `FinMind/signals`）後，可手動上傳並核對：
+若已將 `bot_server.py` 配置為系統常駐服務（如 `discordbot.service`），可使用以下指令維護：
 
 ```bash
-REPORT_DATE=$(TZ=Asia/Taipei date +%F)
-rclone copyto "finmind_reports/daily/${REPORT_DATE}_signals.csv" \
-  "gdrive:FinMind/signals/${REPORT_DATE}_signals.csv"
-rclone check "finmind_reports/daily/${REPORT_DATE}_signals.csv" \
-  "gdrive:FinMind/signals/${REPORT_DATE}_signals.csv" --one-way
+# 查看機器人運行狀態
+sudo systemctl status discordbot.service
+
+# 修改程式碼或 .env 後重啟機器人
+sudo systemctl restart discordbot.service
+
+# 查看即時執行日誌
+journalctl -u discordbot.service -f
 ```
 
-此命令是手動備份示例，不會由 `finmind-scan.service` 自動執行；要自動化需在確認 Drive 認證方式後，另行加入上傳步驟並讓備份失敗明確告警，再調整本機報表清理期限，避免只剩雲端副本前就刪除本機資料。
+---
 
-## Linux VM 背景執行
+## 未來架構演進規劃 (Roadmap)
 
-使用 `systemd` 可在 VM 重開機後自動啟動並於程式意外結束時重啟。將下列範例存成 `/etc/systemd/system/discordbot.service`，並替換 Linux 使用者名稱與專案路徑：
-
-```ini
-[Unit]
-Description=Discord Stock Bot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=YOUR_LINUX_USER
-WorkingDirectory=/home/YOUR_LINUX_USER/Discord_Service
-ExecStart=/home/YOUR_LINUX_USER/Discord_Service/.venv/bin/python /home/YOUR_LINUX_USER/Discord_Service/bot_server.py
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now discordbot
-sudo systemctl status discordbot
-journalctl -u discordbot -f
-```
-
-也可用 `nohup .venv/bin/python bot_server.py > bot.log 2>&1 &` 暫時背景執行；正式長期部署建議使用 `systemd`。
+* **專案入口與模組重構**
+  * 整合 `bot.py`、`stock_bot.py` 與 `bot_server.py`，將共用看盤圖表邏輯抽離為獨立模組，保留單一主程式入口以降低維護成本。

@@ -146,6 +146,40 @@ class StockChartTests(unittest.TestCase):
 
 
 class GitHubUploaderTests(unittest.TestCase):
+    def test_upload_supports_suffix_fund_html(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            chart_file = Path(directory) / "2330_fund.html"
+            chart_file.write_text("<html>fund</html>", encoding="utf-8")
+            created_response = Mock(status_code=201)
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "GITHUB_TOKEN": "test-token",
+                        "GITHUB_REPO": "example/stock-charts",
+                    },
+                    clear=True,
+                ),
+                patch("github_uploader.requests.get", return_value=Mock(status_code=404)),
+                patch("github_uploader.requests.put", return_value=created_response) as put_request,
+            ):
+                pages_url = upload_to_github(str(chart_file), "2330", filename_suffix="_fund")
+
+        self.assertEqual(
+            pages_url,
+            "https://example.github.io/stock-charts/charts/2330_fund.html",
+        )
+        self.assertEqual(
+            put_request.call_args.args[0],
+            "https://api.github.com/repos/example/stock-charts/contents/charts/2330_fund.html",
+        )
+        payload = put_request.call_args.kwargs["json"]
+        self.assertEqual(
+            base64.b64decode(payload["content"]).decode("utf-8"),
+            "<html>fund</html>",
+        )
+
+
     def test_upload_creates_pages_file_and_returns_pages_url(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             chart_file = Path(directory) / "2330.html"
@@ -163,7 +197,7 @@ class GitHubUploaderTests(unittest.TestCase):
                 patch("github_uploader.requests.get", return_value=Mock(status_code=404)),
                 patch("github_uploader.requests.put", return_value=created_response) as put_request,
             ):
-                pages_url = upload_to_github(str(chart_file), "2330")
+                pages_url = upload_to_github(str(chart_file), "2330", filename_suffix="")
 
         self.assertEqual(
             pages_url,
@@ -202,7 +236,7 @@ class GitHubUploaderTests(unittest.TestCase):
                     return_value=Mock(status_code=200),
                 ) as put_request,
             ):
-                upload_to_github(str(chart_file), "2330")
+                upload_to_github(str(chart_file), "2330", filename_suffix="")
 
         self.assertEqual(put_request.call_args.kwargs["json"]["sha"], "existing-file-sha")
         self.assertEqual(put_request.call_args.kwargs["json"]["branch"], "gh-pages")

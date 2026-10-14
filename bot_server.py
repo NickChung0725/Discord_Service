@@ -8,20 +8,23 @@ from datetime import datetime, time as datetime_time, timedelta, timezone
 from dotenv import load_dotenv
 from ai_weather import get_weather_report, register_ai_command, register_weather_command
 from bot import register_stock_command
+from stock_ai_command import register_stock_ai_command
 
 logger = logging.getLogger(__name__)
+load_dotenv()
 
 # ================= 參數設定區 =================
-GUILD_ID = 1557751571205333082       # 你的伺服器 ID
-ANNOUNCE_CHANNEL_ID = 1557751571742330892  # 想定時推播的文字頻道 ID
-STOCK_CHANNEL_ID = int(
-    os.getenv("STOCK_CHANNEL_ID") or "1557778164124622918"
-)
-gcp_vm_server_CHANNEL_ID = 1558122364062015570  # gcp-vm-server 文字頻道 ID
+def get_env_int(key: str) -> int | None:
+    val = os.getenv(key)
+    return int(val.strip()) if val and val.strip().isdigit() else None
+
+GUILD_ID = get_env_int("GUILD_ID")       # 你的伺服器 ID
+ANNOUNCE_CHANNEL_ID = get_env_int("ANNOUNCE_CHANNEL_ID")  # 想定時推播的文字頻道 ID
+STOCK_CHANNEL_ID = get_env_int("STOCK_CHANNEL_ID")
+gcp_vm_server_CHANNEL_ID = get_env_int("GCP_VM_SERVER_CHANNEL_ID")  # gcp-vm-server 文字頻道 ID
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 
-load_dotenv()
-BOT_TOKEN = os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("DISCORD_TOKEN (or legacy BOT_TOKEN) is missing.")
 # =============================================
@@ -59,6 +62,7 @@ class MyClient(discord.Client):
 
 client = MyClient()
 register_stock_command(client.tree)
+register_stock_ai_command(client.tree)
 register_ai_command(client.tree)
 register_weather_command(client.tree)
 

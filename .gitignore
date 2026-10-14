@@ -1,0 +1,19 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# runtime outputs
+finmind_reports/
+generated_charts/
+generated_reports/
+
+# secrets / credentials
+service_account.json
+*service_account*.json
+upbeat-agent-*.json
+
+# local scratch
+TEST.PY
+gcp_discord.md
+.vscode/

@@ -36,7 +36,9 @@ def register_stock_command(
             file_path, closing_price, trading_date = await asyncio.to_thread(
                 generate_stock_html_with_summary, stock_id
             )
-            pages_url = await asyncio.to_thread(upload_to_github, file_path, stock_id.strip())
+            pages_url = await asyncio.to_thread(
+                upload_to_github, file_path, stock_id.strip(), filename_suffix=""
+            )
         except (InvalidStockIDError, StockNotFoundError) as error:
             await interaction.followup.send(f"⚠️ {error}")
             return
