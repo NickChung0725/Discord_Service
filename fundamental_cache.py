@@ -635,7 +635,10 @@ class FundamentalCacheManager:
         if "type" not in df.columns or "value" not in df.columns:
             raise FundamentalCacheError("FinMind statement payload missing type/value columns.")
 
-        # 同時建立英文 type 樞紐表與中文 origin_name 樞紐表
+        # 【關鍵修正 1】徹底過濾掉 FinMind 資產負債表中以 '_per' 結尾的百分比列！
+        # 避免中文 origin_name 樞紐表把「11.6%」覆蓋掉「1,007 億元」的真實金額。
+        df = df[~df["type"].astype(str).str.endswith("_per")].copy()
+
         pivot_type = df.pivot_table(
             index=["stock_id", "raw_date", "year_qtr"],
             columns="type",
@@ -667,27 +670,19 @@ class FundamentalCacheManager:
                 "revenue",
                 "cost_of_goods_sold",
                 "gross_profit",
-                "selling_expenses",
-                "admin_expenses",
-                "rd_expenses",
                 "operating_expenses",
                 "operating_income",
-                "interest_income",
-                "other_income",
-                "other_gains_losses",
-                "finance_costs",
-                "equity_method_income",
                 "non_op_income_total",
                 "pretax_income",
                 "income_tax_expense",
                 "net_income",
                 "net_income_parent",
                 "net_income_nci",
+                "other_comprehensive_income",
                 "eps",
             ):
                 out[col] = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP[col], pivot_origin)
 
-            # 若母公司淨利缺值，以合併總淨利保底
             out["net_income_parent"] = out["net_income_parent"].combine_first(out["net_income"])
             out["updated_at"] = updated_at
             out["pk_key"] = out["stock_id"] + "_" + out["year_qtr"]
@@ -698,34 +693,48 @@ class FundamentalCacheManager:
                 "total_assets",
                 "current_assets",
                 "cash_and_equiv",
-                "fvpl_assets",
-                "fvoci_assets",
-                "ac_assets",
-                "accounts_receivable",
+                "equity_method_investments",
                 "inventory",
                 "prepayments",
                 "total_liabilities",
                 "current_liabilities",
                 "accounts_payable",
+                "other_payables",
                 "contract_liabilities",
                 "short_term_debt",
-                "short_term_bills",
-                "current_portion_lt_debt",
                 "long_term_debt",
-                "bonds_payable",
                 "parent_equity",
                 "total_equity",
             ):
                 out[col] = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP[col], pivot_origin)
 
+            # 合併流動與非流動金融資產 (FVPL / FVOCI / AC) 以及應收帳款+應收票據
+            fvpl_c = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP["fvpl_assets_curr"], pivot_origin).fillna(0.0)
+            fvpl_nc = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP["fvpl_assets_noncurr"], pivot_origin).fillna(0.0)
+            out["fvpl_assets"] = fvpl_c + fvpl_nc
+
+            fvoci_c = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP["fvoci_assets_curr"], pivot_origin).fillna(0.0)
+            fvoci_nc = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP["fvoci_assets_noncurr"], pivot_origin).fillna(0.0)
+            out["fvoci_assets"] = fvoci_c + fvoci_nc
+
+            ac_c = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP["ac_assets_curr"], pivot_origin).fillna(0.0)
+            ac_nc = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP["ac_assets_noncurr"], pivot_origin).fillna(0.0)
+            out["ac_assets"] = ac_c + ac_nc
+
+            ar_only = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP["accounts_receivable_only"], pivot_origin).fillna(0.0)
+            bills_r = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP["bills_receivable"], pivot_origin).fillna(0.0)
+            out["accounts_receivable"] = ar_only + bills_r
+
             out["inventory"] = out["inventory"].fillna(0.0)
             out["prepayments"] = out["prepayments"].fillna(0.0)
+            out["short_term_debt"] = out["short_term_debt"].fillna(0.0)
+            out["long_term_debt"] = out["long_term_debt"].fillna(0.0)
             out["parent_equity"] = out["parent_equity"].combine_first(out["total_equity"])
             out["updated_at"] = updated_at
             out["pk_key"] = out["stock_id"] + "_" + out["year_qtr"]
             return out[SHEET_SCHEMAS["03_Balance_Sheet"]]
 
-        # ================= 現金流量表 (CF)：擷取並將「YTD 累季值」拆解還原為「真實單季值」 =================
+        # ================= 現金流量表 (CF)：擷取並將「YTD 累季值」還原為「真實單季值」 =================
         cf_cols = [
             "operating_cf",
             "investing_cf",
@@ -733,15 +742,18 @@ class FundamentalCacheManager:
             "capex",
             "depreciation",
             "amortization",
+            "interest_expense_cf",
+            "interest_income_cf",
             "cf_change_ar",
             "cf_change_inv",
             "cf_change_ap",
-            "cash_dividends_paid",
         ]
         for col in cf_cols:
             out[col] = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP[col], pivot_origin)
 
-        # 按日期排序後，針對同年度 (year) 執行差額拆算：Q1 維持原值，Q2=Q2-Q1, Q3=Q3-Q2, Q4=Q4-Q3
+        # 現金流量表中「利息收入」為負向調整項 (-16.6億)，取絕對值還原為正向金額後再做累季相減
+        out["interest_income_cf"] = out["interest_income_cf"].abs()
+
         out = out.sort_values("raw_date").reset_index(drop=True)
         out["_year"] = out["year_qtr"].str[:4]
         out["_qtr_num"] = out["year_qtr"].str[-1].astype(int)
@@ -750,7 +762,6 @@ class FundamentalCacheManager:
             ytd_series = pd.to_numeric(out[col], errors="coerce")
             prev_ytd = out.groupby("_year")[col].shift(1)
             prev_qtr_num = out.groupby("_year")["_qtr_num"].shift(1)
-            # 僅當上一筆確實是同年度緊鄰的前一季 (qtr_num - prev_qtr_num == 1) 時才相減，確保不因缺季算錯
             is_consecutive = (out["_qtr_num"] - prev_qtr_num) == 1
             out[col] = ytd_series.where(~is_consecutive, ytd_series - prev_ytd)
 
@@ -795,7 +806,6 @@ class FundamentalCacheManager:
         merged = merged.merge(df_cf_, on=["pk_key", "stock_id", "raw_date", "year_qtr"], how="outer")
         merged = merged.sort_values("raw_date").reset_index(drop=True)
 
-        # 將所有數值欄位轉為 float
         id_cols = {"pk_key", "stock_id", "raw_date", "year_qtr"}
         for col in merged.columns:
             if col not in id_cols:
@@ -808,25 +818,17 @@ class FundamentalCacheManager:
         equity_nonzero = merged["total_equity"].replace({0: float("nan")})
         curr_liab_nonzero = merged["current_liabilities"].replace({0: float("nan")})
 
-        # 1. 三率與三項費用率、業外佔比
+        # 1. 三率、營業費用率與業外佔比
         merged["gross_margin_pct"] = (merged["gross_profit"] / rev_nonzero) * 100.0
-        merged["selling_exp_pct"] = (merged["selling_expenses"] / rev_nonzero) * 100.0
-        merged["admin_exp_pct"] = (merged["admin_expenses"] / rev_nonzero) * 100.0
-        merged["rd_exp_pct"] = (merged["rd_expenses"] / rev_nonzero) * 100.0
+        merged["op_expense_pct"] = (merged["operating_expenses"] / rev_nonzero) * 100.0
         merged["op_margin_pct"] = (merged["operating_income"] / rev_nonzero) * 100.0
         merged["non_op_share_pct"] = (merged["non_op_income_total"] / pretax_nonzero) * 100.0
         merged["net_margin_pct"] = (merged["net_income"] / rev_nonzero) * 100.0
         merged["parent_net_margin_pct"] = (merged["net_income_parent"] / rev_nonzero) * 100.0
 
-        # 2. 財務槓桿、償債能力與淨負債比
+        # 2. 財務槓桿、償債能力與淨負債比 (使用 04_Cash_Flow 跨表提取之利息費用算利息保障倍數)
         merged["debt_ratio_pct"] = (merged["total_liabilities"] / assets_nonzero) * 100.0
-        total_interest_debt = (
-            merged["short_term_debt"].fillna(0.0)
-            + merged["short_term_bills"].fillna(0.0)
-            + merged["current_portion_lt_debt"].fillna(0.0)
-            + merged["long_term_debt"].fillna(0.0)
-            + merged["bonds_payable"].fillna(0.0)
-        )
+        total_interest_debt = merged["short_term_debt"].fillna(0.0) + merged["long_term_debt"].fillna(0.0)
         merged["net_debt_ratio_pct"] = (
             (total_interest_debt - merged["cash_and_equiv"].fillna(0.0)) / equity_nonzero
         ) * 100.0
@@ -835,10 +837,10 @@ class FundamentalCacheManager:
             (merged["current_assets"] - merged["inventory"].fillna(0.0) - merged["prepayments"].fillna(0.0))
             / curr_liab_nonzero
         ) * 100.0
-        fin_cost_abs = merged["finance_costs"].abs().replace({0: float("nan")})
-        merged["interest_coverage"] = (merged["pretax_income"] + fin_cost_abs) / fin_cost_abs
+        int_exp_abs = merged["interest_expense_cf"].abs().replace({0: float("nan")})
+        merged["interest_coverage"] = (merged["pretax_income"] + int_exp_abs) / int_exp_abs
 
-        # 3. 營運週轉天數 (DIO / DSO / DPO / CCC，以單季 91.25 天計)
+        # 3. 營運週轉天數 (DIO / DSO / DPO / CCC)
         avg_inv = (merged["inventory"] + merged["inventory"].shift(1)) / 2.0
         avg_ar = (merged["accounts_receivable"] + merged["accounts_receivable"].shift(1)) / 2.0
         avg_ap = (merged["accounts_payable"] + merged["accounts_payable"].shift(1)) / 2.0
@@ -858,7 +860,7 @@ class FundamentalCacheManager:
         merged["roe_pct"] = (parent_ni_ttm / avg_parent_equity.replace({0: float("nan")})) * 100.0
         merged["roa_pct"] = (parent_ni_ttm / avg_assets.replace({0: float("nan")})) * 100.0
 
-        # 5. 現金流、EBITDA 與獲利含金量 (OCF / 母公司淨利)
+        # 5. 現金流、EBITDA 與獲利含金量
         ebitda = (
             merged["operating_income"]
             + merged["depreciation"].fillna(0.0)
