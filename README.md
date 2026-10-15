@@ -214,6 +214,12 @@ sudo systemctl restart discordbot.service
 
 # 查看即時執行日誌
 journalctl -u discordbot.service -f
+
+# 一鍵更新改版部署
+cd ~/Discord_Service && git pull && uv sync && sudo systemctl restart discordbot
+
+# 停止機器人服務
+sudo systemctl stop discordbot
 ```
 
 ---

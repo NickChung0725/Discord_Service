@@ -11,9 +11,8 @@ generated_reports/
 # secrets / credentials
 service_account.json
 *service_account*.json
-upbeat-agent-*.json
+sheetbot.json
 
 # local scratch
 TEST.PY
-gcp_discord.md
 .vscode/

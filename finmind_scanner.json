@@ -116,6 +116,131 @@
       "stock_id": "2325",
       "stock_name": "矽品",
       "reason": "已下市"
+    },
+    {
+      "stock_id": "2403",
+      "stock_name": "友尚",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "6119",
+      "stock_name": "大傳",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "3702A",
+      "stock_name": "大聯大甲特",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "3020",
+      "stock_name": "奇普仕",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "3315",
+      "stock_name": "宣昶",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "6145",
+      "stock_name": "勁永",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "6702",
+      "stock_name": "興航",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "2336",
+      "stock_name": "致伸",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "2315",
+      "stock_name": "神達",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "2463",
+      "stock_name": "研揚",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "8008",
+      "stock_name": "建興電",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "2341",
+      "stock_name": "英群",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "2361",
+      "stock_name": "鴻友",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "2381",
+      "stock_name": "華宇",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "5264",
+      "stock_name": "鎧勝-KY",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "6172",
+      "stock_name": "互億",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "6594",
+      "stock_name": "展匯科",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "6457",
+      "stock_name": "紘康",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "6287",
+      "stock_name": "元隆",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "4945",
+      "stock_name": "陞達科技",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "5304",
+      "stock_name": "鼎創達",
+      "reason": "FinMind 未回傳日線資料"
+    },
+    {
+      "stock_id": "3036A",
+      "stock_name": "文曄甲特",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "6806",
+      "stock_name": "森崴能源",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "6907",
+      "stock_name": "雅特力-KY",
+      "reason": "已下市"
+    },
+    {
+      "stock_id": "4987",
+      "stock_name": "科誠",
+      "reason": "已下市"
     }
   ],
   "max_requests_per_hour": 540,
