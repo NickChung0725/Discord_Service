@@ -131,11 +131,34 @@ def _expected_fin_raw_date(today: date) -> date:
     return date(year, 12, 31)
 
 
-def _anchor_pick(pivot: pd.DataFrame, aliases: list[str]) -> pd.Series:
+def _anchor_pick(
+    pivot_type: pd.DataFrame,
+     aliases: list[str],
+    pivot_origin: pd.DataFrame | None = None,
+) -> pd.Series:
+    """依優先序從英文 type 樞紐表與中文 origin_name 樞紐表提取數值，支援跨期互補。"""
+    result = pd.Series(float("nan"), index=pivot_type.index, dtype="float64")
+
     for alias in aliases:
-        if alias in pivot.columns:
-            return pd.to_numeric(pivot[alias], errors="coerce")
-    return pd.Series(float("nan"), index=pivot.index, dtype="float64")
+        if alias in pivot_type.columns:
+            col_series = pd.to_numeric(pivot_type[alias], errors="coerce")
+            result = result.combine_first(col_series)
+        elif pivot_origin is not None and alias in pivot_origin.columns:
+            col_series = pd.to_numeric(pivot_origin[alias], errors="coerce")
+            result = result.combine_first(col_series)
+
+    # 若仍為全空，針對中文 origin_name 進行去括號模糊比對保底
+    if result.isna().all() and pivot_origin is not None:
+        for alias in aliases:
+            clean_alias = alias.replace("（", "(").replace("）", ")")
+            for col in pivot_origin.columns:
+                clean_col = str(col).replace("（", "(").replace("）", ")").strip()
+                if clean_alias == clean_col or (len(clean_alias) >= 4 and clean_alias in clean_col):
+                    col_series = pd.to_numeric(pivot_origin[col], errors="coerce")
+                    result = result.combine_first(col_series)
+                    break
+
+    return result
 
 
 def _sheet_cell_value(value: Any) -> Any:
@@ -218,6 +241,9 @@ class FundamentalCacheManager:
         if finmind_token:
             self._finmind.login_by_token(api_token=finmind_token)
 
+        # 新增：台股基本資料記憶體快取 {stock_id: (stock_name, industry_category)}
+        self._stock_info_cache: dict[str, tuple[str, str]] = {}
+
     def ensure_workbook_schema(self) -> None:
         existing_tabs = {sheet.title for sheet in self._spreadsheet.worksheets()}
         for tab_name, headers in SHEET_SCHEMAS.items():
@@ -254,6 +280,14 @@ class FundamentalCacheManager:
 
         watchlist = self._spreadsheet.worksheet("00_Watchlist_Master")
         watch_row = self._get_or_create_watch_row(watchlist, normalized_id)
+
+        # 新增：若 Watchlist_Master 內的 stock_name 或 industry_category 為空，自動查詢補齊
+        stock_name = str(watch_row.get("stock_name", "")).strip()
+        industry_category = str(watch_row.get("industry_category", "")).strip()
+        if not stock_name or not industry_category:
+            fetched_name, fetched_industry = self._get_stock_basic_info(normalized_id)
+            stock_name = stock_name or fetched_name
+            industry_category = industry_category or fetched_industry
 
         cooldown_active = False
         last_probe_at = watch_row.get("last_probe_at")
@@ -295,7 +329,11 @@ class FundamentalCacheManager:
             self._update_watchlist_master(
                 watchlist,
                 normalized_id,
-                {"last_accessed_at": now.isoformat(timespec="seconds")},
+                {
+                    "stock_name": stock_name,
+                    "industry_category": industry_category,
+                    "last_accessed_at": now.isoformat(timespec="seconds"),
+                },
             )
             max_rev_raw_date_str = df_rev_sheet["raw_date"].max() if not df_rev_sheet.empty else None
             max_fin_raw_date_str = df_wide_sheet["raw_date"].max() if not df_wide_sheet.empty else None
@@ -387,7 +425,9 @@ class FundamentalCacheManager:
         self._update_watchlist_master(
             watchlist,
             normalized_id,
-            {
+{
+                "stock_name": stock_name,
+                "industry_category": industry_category,
                 "max_rev_raw_date": max_rev_raw_date_str or "",
                 "last_rev_ym": last_rev_ym or "",
                 "max_fin_raw_date": max_fin_raw_date_str or "",
@@ -420,6 +460,25 @@ class FundamentalCacheManager:
         watchlist.append_row(row)
         return {"stock_id": stock_id}
 
+    def _get_stock_basic_info(self, stock_id: str) -> tuple[str, str]:
+        """從 FinMind TaiwanStockInfo 取得 (stock_name, industry_category) 並快取於記憶體。"""
+        if stock_id in self._stock_info_cache:
+            return self._stock_info_cache[stock_id]
+
+        try:
+            df_info = self._finmind.taiwan_stock_info()
+            if df_info is not None and not df_info.empty and "stock_id" in df_info.columns:
+                for _, row in df_info.iterrows():
+                    sid = str(row.get("stock_id", "")).strip()
+                    sname = str(row.get("stock_name", "")).strip()
+                    ind = str(row.get("industry_category", "")).strip()
+                    if sid and sname:
+                        self._stock_info_cache[sid] = (sname, ind)
+        except Exception:
+            pass
+
+        return self._stock_info_cache.get(stock_id, ("", ""))
+    
     def _update_watchlist_master(
         self,
         watchlist: gspread.Worksheet,
@@ -518,11 +577,16 @@ class FundamentalCacheManager:
         df_cf_sheet: pd.DataFrame,
     ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         today = _today_in_taipei()
-        start_date = (today - timedelta(days=365 * 3)).isoformat()
+        start_date = f"{today.year - 3}-01-01"
         if not df_is_sheet.empty:
             max_raw = _parse_iso_date(str(df_is_sheet["raw_date"].max()))
             if max_raw is not None:
                 start_date = (max_raw + timedelta(days=1)).isoformat()
+
+        # 【關鍵修正】現金流量表 (CF) 在 FinMind 為「年初至今累計值 (YTD)」
+        # 為了將 Q2/Q3/Q4 精準減去前一季還原為「單季值」，CF 的抓取起點必須對齊該年 1 月 1 日！
+        cf_start_year = int(start_date[:4])
+        cf_start_date = f"{cf_start_year:04d}-01-01"
 
         df_is_raw = self._finmind.taiwan_stock_financial_statement(
             stock_id=stock_id,
@@ -536,28 +600,32 @@ class FundamentalCacheManager:
         )
         df_cf_raw = self._finmind.taiwan_stock_cash_flows_statement(
             stock_id=stock_id,
-            start_date=start_date,
+            start_date=cf_start_date,
             end_date=today.isoformat(),
         )
 
         df_is = self._normalize_quarterly_statement(df_is_raw, stock_id, statement="IS")
         df_bs = self._normalize_quarterly_statement(df_bs_raw, stock_id, statement="BS")
         df_cf = self._normalize_quarterly_statement(df_cf_raw, stock_id, statement="CF")
+
+        # 過濾掉 CF 因為對齊年初而多抓的已存在舊季度（若非 force_refresh）
+        if not df_cf.empty and not df_cf_sheet.empty:
+            df_cf = df_cf[df_cf["raw_date"] >= start_date].reset_index(drop=True)
+
         return df_is, df_bs, df_cf
 
     def _normalize_quarterly_statement(
         self, df_raw: pd.DataFrame, stock_id: str, *, statement: str
     ) -> pd.DataFrame:
+        schema_key = (
+            "02_Income_Statement"
+            if statement == "IS"
+            else "03_Balance_Sheet"
+            if statement == "BS"
+            else "04_Cash_Flow"
+        )
         if df_raw.empty:
-            return pd.DataFrame(
-                columns=SHEET_SCHEMAS[
-                    "02_Income_Statement"
-                    if statement == "IS"
-                    else "03_Balance_Sheet"
-                    if statement == "BS"
-                    else "04_Cash_Flow"
-                ]
-            )
+            return pd.DataFrame(columns=SHEET_SCHEMAS[schema_key])
 
         df = df_raw.copy()
         df.rename(columns={"date": "raw_date"}, inplace=True)
@@ -567,50 +635,127 @@ class FundamentalCacheManager:
         if "type" not in df.columns or "value" not in df.columns:
             raise FundamentalCacheError("FinMind statement payload missing type/value columns.")
 
-        pivot = df.pivot_table(
+        # 同時建立英文 type 樞紐表與中文 origin_name 樞紐表
+        pivot_type = df.pivot_table(
             index=["stock_id", "raw_date", "year_qtr"],
             columns="type",
             values="value",
             aggfunc="first",
         ).reset_index()
 
+        pivot_origin = None
+        if "origin_name" in df.columns:
+            pivot_origin = df.pivot_table(
+                index=["stock_id", "raw_date", "year_qtr"],
+                columns="origin_name",
+                values="value",
+                aggfunc="first",
+            ).reset_index()
+
         out = pd.DataFrame(
             {
-                "stock_id": pivot["stock_id"].astype(str).str.strip(),
-                "raw_date": pivot["raw_date"].astype(str),
-                "year_qtr": pivot["year_qtr"].astype(str),
+                "stock_id": pivot_type["stock_id"].astype(str).str.strip(),
+                "raw_date": pivot_type["raw_date"].astype(str),
+                "year_qtr": pivot_type["year_qtr"].astype(str),
             }
         )
 
         updated_at = _now_in_taipei().isoformat(timespec="seconds")
 
         if statement == "IS":
-            out["revenue"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["revenue"])
-            out["gross_profit"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["gross_profit"])
-            out["operating_income"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["operating_income"])
-            out["pretax_income"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["pretax_income"])
-            out["net_income"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["net_income"])
-            out["eps"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["eps"])
+            for col in (
+                "revenue",
+                "cost_of_goods_sold",
+                "gross_profit",
+                "selling_expenses",
+                "admin_expenses",
+                "rd_expenses",
+                "operating_expenses",
+                "operating_income",
+                "interest_income",
+                "other_income",
+                "other_gains_losses",
+                "finance_costs",
+                "equity_method_income",
+                "non_op_income_total",
+                "pretax_income",
+                "income_tax_expense",
+                "net_income",
+                "net_income_parent",
+                "net_income_nci",
+                "eps",
+            ):
+                out[col] = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP[col], pivot_origin)
+
+            # 若母公司淨利缺值，以合併總淨利保底
+            out["net_income_parent"] = out["net_income_parent"].combine_first(out["net_income"])
             out["updated_at"] = updated_at
             out["pk_key"] = out["stock_id"] + "_" + out["year_qtr"]
             return out[SHEET_SCHEMAS["02_Income_Statement"]]
 
         if statement == "BS":
-            out["total_assets"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["total_assets"])
-            out["cash_and_equiv"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["cash_and_equiv"])
-            out["accounts_receivable"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["accounts_receivable"])
-            out["inventory"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["inventory"]).fillna(0.0)
-            out["total_liabilities"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["total_liabilities"])
-            out["total_equity"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["total_equity"])
+            for col in (
+                "total_assets",
+                "current_assets",
+                "cash_and_equiv",
+                "fvpl_assets",
+                "fvoci_assets",
+                "ac_assets",
+                "accounts_receivable",
+                "inventory",
+                "prepayments",
+                "total_liabilities",
+                "current_liabilities",
+                "accounts_payable",
+                "contract_liabilities",
+                "short_term_debt",
+                "short_term_bills",
+                "current_portion_lt_debt",
+                "long_term_debt",
+                "bonds_payable",
+                "parent_equity",
+                "total_equity",
+            ):
+                out[col] = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP[col], pivot_origin)
+
+            out["inventory"] = out["inventory"].fillna(0.0)
+            out["prepayments"] = out["prepayments"].fillna(0.0)
+            out["parent_equity"] = out["parent_equity"].combine_first(out["total_equity"])
             out["updated_at"] = updated_at
             out["pk_key"] = out["stock_id"] + "_" + out["year_qtr"]
             return out[SHEET_SCHEMAS["03_Balance_Sheet"]]
 
-        # CF
-        out["operating_cf"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["operating_cf"])
-        out["investing_cf"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["investing_cf"])
-        out["financing_cf"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["financing_cf"])
-        out["capex"] = _anchor_pick(pivot, ACCOUNT_ANCHOR_MAP["capex"])
+        # ================= 現金流量表 (CF)：擷取並將「YTD 累季值」拆解還原為「真實單季值」 =================
+        cf_cols = [
+            "operating_cf",
+            "investing_cf",
+            "financing_cf",
+            "capex",
+            "depreciation",
+            "amortization",
+            "cf_change_ar",
+            "cf_change_inv",
+            "cf_change_ap",
+            "cash_dividends_paid",
+        ]
+        for col in cf_cols:
+            out[col] = _anchor_pick(pivot_type, ACCOUNT_ANCHOR_MAP[col], pivot_origin)
+
+        # 按日期排序後，針對同年度 (year) 執行差額拆算：Q1 維持原值，Q2=Q2-Q1, Q3=Q3-Q2, Q4=Q4-Q3
+        out = out.sort_values("raw_date").reset_index(drop=True)
+        out["_year"] = out["year_qtr"].str[:4]
+        out["_qtr_num"] = out["year_qtr"].str[-1].astype(int)
+
+        for col in cf_cols:
+            ytd_series = pd.to_numeric(out[col], errors="coerce")
+            prev_ytd = out.groupby("_year")[col].shift(1)
+            prev_qtr_num = out.groupby("_year")["_qtr_num"].shift(1)
+            # 僅當上一筆確實是同年度緊鄰的前一季 (qtr_num - prev_qtr_num == 1) 時才相減，確保不因缺季算錯
+            is_consecutive = (out["_qtr_num"] - prev_qtr_num) == 1
+            out[col] = ytd_series.where(~is_consecutive, ytd_series - prev_ytd)
+
+        out.drop(columns=["_year", "_qtr_num"], inplace=True)
+        out["capex"] = out["capex"].fillna(0.0)
         out["free_cf"] = out["operating_cf"] - out["capex"].abs()
         out["updated_at"] = updated_at
         out["pk_key"] = out["stock_id"] + "_" + out["year_qtr"]
@@ -642,39 +787,93 @@ class FundamentalCacheManager:
         df_cf: pd.DataFrame,
         df_wide_sheet: pd.DataFrame,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        # Join quarterly frames.
-        df_is_ = df_is.copy()
-        df_bs_ = df_bs.copy()
-        df_cf_ = df_cf.copy()
+        df_is_ = df_is.copy().drop(columns=["updated_at"], errors="ignore")
+        df_bs_ = df_bs.copy().drop(columns=["updated_at"], errors="ignore")
+        df_cf_ = df_cf.copy().drop(columns=["updated_at"], errors="ignore")
 
         merged = df_is_.merge(df_bs_, on=["pk_key", "stock_id", "raw_date", "year_qtr"], how="outer")
         merged = merged.merge(df_cf_, on=["pk_key", "stock_id", "raw_date", "year_qtr"], how="outer")
         merged = merged.sort_values("raw_date").reset_index(drop=True)
 
-        merged["gross_margin_pct"] = (merged["gross_profit"] / merged["revenue"]) * 100.0
-        merged["op_margin_pct"] = (merged["operating_income"] / merged["revenue"]) * 100.0
-        merged["net_margin_pct"] = (merged["net_income"] / merged["revenue"]) * 100.0
-        merged["debt_ratio_pct"] = (merged["total_liabilities"] / merged["total_assets"]) * 100.0
+        # 將所有數值欄位轉為 float
+        id_cols = {"pk_key", "stock_id", "raw_date", "year_qtr"}
+        for col in merged.columns:
+            if col not in id_cols:
+                merged[col] = pd.to_numeric(merged[col], errors="coerce")
 
-        merged["ttm_eps"] = pd.to_numeric(merged["eps"], errors="coerce").rolling(4).sum()
-        merged["qtr_rev_yoy_pct"] = pd.to_numeric(merged["revenue"], errors="coerce").pct_change(4) * 100.0
+        rev_nonzero = merged["revenue"].replace({0: float("nan")})
+        cogs_nonzero = merged["cost_of_goods_sold"].abs().replace({0: float("nan")})
+        pretax_nonzero = merged["pretax_income"].replace({0: float("nan")})
+        assets_nonzero = merged["total_assets"].replace({0: float("nan")})
+        equity_nonzero = merged["total_equity"].replace({0: float("nan")})
+        curr_liab_nonzero = merged["current_liabilities"].replace({0: float("nan")})
 
-        # ROE/ROA: TTM net income / avg equity/assets.
-        net_income_ttm = pd.to_numeric(merged["net_income"], errors="coerce").rolling(4).sum()
-        equity = pd.to_numeric(merged["total_equity"], errors="coerce")
-        assets = pd.to_numeric(merged["total_assets"], errors="coerce")
-        avg_equity = (equity + equity.shift(1)) / 2
-        avg_assets = (assets + assets.shift(1)) / 2
-        merged["roe_pct"] = (net_income_ttm / avg_equity) * 100.0
-        merged["roa_pct"] = (net_income_ttm / avg_assets) * 100.0
+        # 1. 三率與三項費用率、業外佔比
+        merged["gross_margin_pct"] = (merged["gross_profit"] / rev_nonzero) * 100.0
+        merged["selling_exp_pct"] = (merged["selling_expenses"] / rev_nonzero) * 100.0
+        merged["admin_exp_pct"] = (merged["admin_expenses"] / rev_nonzero) * 100.0
+        merged["rd_exp_pct"] = (merged["rd_expenses"] / rev_nonzero) * 100.0
+        merged["op_margin_pct"] = (merged["operating_income"] / rev_nonzero) * 100.0
+        merged["non_op_share_pct"] = (merged["non_op_income_total"] / pretax_nonzero) * 100.0
+        merged["net_margin_pct"] = (merged["net_income"] / rev_nonzero) * 100.0
+        merged["parent_net_margin_pct"] = (merged["net_income_parent"] / rev_nonzero) * 100.0
 
-        merged["revenue_亿元"] = pd.to_numeric(merged["revenue"], errors="coerce") / 1e8
-        merged["ocf_亿元"] = pd.to_numeric(merged["operating_cf"], errors="coerce") / 1e8
-        merged["capex_亿元"] = pd.to_numeric(merged["capex"], errors="coerce") / 1e8
-        merged["fcf_亿元"] = pd.to_numeric(merged["free_cf"], errors="coerce") / 1e8
+        # 2. 財務槓桿、償債能力與淨負債比
+        merged["debt_ratio_pct"] = (merged["total_liabilities"] / assets_nonzero) * 100.0
+        total_interest_debt = (
+            merged["short_term_debt"].fillna(0.0)
+            + merged["short_term_bills"].fillna(0.0)
+            + merged["current_portion_lt_debt"].fillna(0.0)
+            + merged["long_term_debt"].fillna(0.0)
+            + merged["bonds_payable"].fillna(0.0)
+        )
+        merged["net_debt_ratio_pct"] = (
+            (total_interest_debt - merged["cash_and_equiv"].fillna(0.0)) / equity_nonzero
+        ) * 100.0
+        merged["current_ratio_pct"] = (merged["current_assets"] / curr_liab_nonzero) * 100.0
+        merged["quick_ratio_pct"] = (
+            (merged["current_assets"] - merged["inventory"].fillna(0.0) - merged["prepayments"].fillna(0.0))
+            / curr_liab_nonzero
+        ) * 100.0
+        fin_cost_abs = merged["finance_costs"].abs().replace({0: float("nan")})
+        merged["interest_coverage"] = (merged["pretax_income"] + fin_cost_abs) / fin_cost_abs
+
+        # 3. 營運週轉天數 (DIO / DSO / DPO / CCC，以單季 91.25 天計)
+        avg_inv = (merged["inventory"] + merged["inventory"].shift(1)) / 2.0
+        avg_ar = (merged["accounts_receivable"] + merged["accounts_receivable"].shift(1)) / 2.0
+        avg_ap = (merged["accounts_payable"] + merged["accounts_payable"].shift(1)) / 2.0
+        merged["dio_days"] = (avg_inv / cogs_nonzero) * 91.25
+        merged["dso_days"] = (avg_ar / rev_nonzero) * 91.25
+        merged["dpo_days"] = (avg_ap / cogs_nonzero) * 91.25
+        merged["ccc_days"] = merged["dio_days"] + merged["dso_days"] - merged["dpo_days"]
+
+        # 4. TTM EPS 與真實母公司 ROE / ROA
+        merged["ttm_eps"] = merged["eps"].rolling(4).sum()
+        merged["qtr_rev_yoy_pct"] = merged["revenue"].pct_change(4) * 100.0
+
+        parent_ni_ttm = merged["net_income_parent"].rolling(4).sum()
+        parent_eq = merged["parent_equity"].combine_first(merged["total_equity"])
+        avg_parent_equity = (parent_eq + parent_eq.shift(1)) / 2.0
+        avg_assets = (merged["total_assets"] + merged["total_assets"].shift(1)) / 2.0
+        merged["roe_pct"] = (parent_ni_ttm / avg_parent_equity.replace({0: float("nan")})) * 100.0
+        merged["roa_pct"] = (parent_ni_ttm / avg_assets.replace({0: float("nan")})) * 100.0
+
+        # 5. 現金流、EBITDA 與獲利含金量 (OCF / 母公司淨利)
+        ebitda = (
+            merged["operating_income"]
+            + merged["depreciation"].fillna(0.0)
+            + merged["amortization"].fillna(0.0)
+        )
+        merged["revenue_亿元"] = merged["revenue"] / 1e8
+        merged["ocf_亿元"] = merged["operating_cf"] / 1e8
+        merged["capex_亿元"] = merged["capex"] / 1e8
+        merged["fcf_亿元"] = merged["free_cf"] / 1e8
+        merged["ebitda_亿元"] = ebitda / 1e8
+        merged["ocf_to_ni_pct"] = (
+            merged["operating_cf"] / merged["net_income_parent"].replace({0: float("nan")})
+        ) * 100.0
         merged["updated_at"] = _now_in_taipei().isoformat(timespec="seconds")
 
-        # Keep only wide schema columns.
         wide = merged[[c for c in SHEET_SCHEMAS["05_AI_Metrics_Wide"] if c in merged.columns]].copy()
         if wide.empty:
             wide = pd.DataFrame(columns=SHEET_SCHEMAS["05_AI_Metrics_Wide"])
