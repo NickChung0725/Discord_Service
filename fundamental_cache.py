@@ -908,22 +908,25 @@ class FundamentalCacheManager:
             if k and k not in key_to_row:
                 key_to_row[k] = offset
 
-        update_rows: list[tuple[int, list[Any]]] = []
+        batch_updates: list[dict[str, Any]] = []
         append_rows: list[list[Any]] = []
+        num_cols = len(headers)
 
         for _, row in df_delta.iterrows():
             row_key = str(row.get(key_col, "")).strip()
             row_values = [_sheet_cell_value(row.get(col, "")) for col in headers]
             if row_key and row_key in key_to_row:
-                update_rows.append((key_to_row[row_key], row_values))
+                row_index = key_to_row[row_key]
+                # 若 df_delta 內剛好有重複的 key，直接覆蓋最新一筆，避免同一個 range 重複送出
+                batch_updates.append({
+                    "range": f"A{row_index}:{gspread.utils.rowcol_to_a1(row_index, num_cols)}",
+                    "values": [row_values],
+                })
             else:
                 append_rows.append(row_values)
 
-        for row_index, values in update_rows:
-            worksheet.update(
-                range_name=f"A{row_index}:{gspread.utils.rowcol_to_a1(row_index, len(headers))}",
-                values=[values],
-            )
+        if batch_updates:
+            worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
 
         if append_rows:
             worksheet.append_rows(append_rows, value_input_option="USER_ENTERED")
