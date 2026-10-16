@@ -14,5 +14,6 @@ service_account.json
 sheetbot.json
 
 # local scratch
-TEST.PY
+test_log.PY
 .vscode/
+Findmind_API_TEST.txt

@@ -12,7 +12,10 @@ import pandas as pd
 import requests
 
 from finmind_stock_scanner import (
+    SIGNAL_TRACKER_HEADERS,
+    SIGNAL_TRACKER_SHEET_NAME,
     add_moving_averages,
+    build_signal_tracker_rows,
     classify_latest_alignment_signal,
     classify_latest_signal,
     FinMindRequestLimiter,
@@ -25,6 +28,7 @@ from finmind_stock_scanner import (
     scan_configured_universe,
     scan_industry,
     select_stocks,
+    sync_signals_to_gsheet,
 )
 
 
@@ -205,29 +209,28 @@ class FinMindStockScannerTests(unittest.TestCase):
     def test_calculates_ma17_and_ma45_and_classifies_near_cross(self) -> None:
         prices = pd.DataFrame(
             {
-                "date": pd.date_range("2026-01-01", periods=50, freq="B"),
-                "close": [100.0] * 49 + [100.5],
+                "date": pd.date_range("2025-01-01", periods=220, freq="B"),
+                "close": [100.0] * 190 + [100.5] * 30,
             }
         )
 
         analyzed = add_moving_averages(prices)
         signal = classify_latest_signal(analyzed)
 
-        self.assertAlmostEqual(analyzed["MA17"].iloc[-1], 100.0294117647)
-        self.assertAlmostEqual(analyzed["MA45"].iloc[-1], 100.0111111111)
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertEqual(signal["signal"], "接近（差距 <= 1%）")
-        self.assertIsNone(signal["MA117"])
-        self.assertIsNone(signal["MA189"])
-        self.assertTrue(pd.isna(analyzed["MA117"].iloc[49]))
-        self.assertTrue(pd.isna(analyzed["MA189"].iloc[49]))
+        self.assertGreater(signal["MA45"], signal["MA117"])
+        self.assertGreater(signal["MA117"], signal["MA189"])
+        self.assertLessEqual(signal["gap_percent"], 1.0)
+        self.assertGreater(signal["gap_percent"], 0.0)
 
     def test_classifies_ma45_above_ma17(self) -> None:
+        # Construct series where MA45 >= MA17 and MA45 > MA117 > MA189
         prices = pd.DataFrame(
             {
-                "date": pd.date_range("2026-01-01", periods=45, freq="B"),
-                "close": [150.0] * 44 + [100.0],
+                "date": pd.date_range("2025-01-01", periods=220, freq="B"),
+                "close": [90.0] * 100 + [100.0] * 75 + [120.0] * 28 + [110.0] * 17,
             }
         )
 
@@ -236,12 +239,28 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertEqual(signal["signal"], "已超過")
+        self.assertGreaterEqual(signal["MA45"], signal["MA17"])
+        self.assertGreater(signal["MA45"], signal["MA117"])
+        self.assertGreater(signal["MA117"], signal["MA189"])
+
+    def test_rejects_signal_when_ma189_is_not_below_ma117(self) -> None:
+        # Make MA189 > MA117 while MA45 is near MA17
+        prices = pd.DataFrame(
+            {
+                "date": pd.date_range("2025-01-01", periods=220, freq="B"),
+                "close": [150.0] * 103 + [90.0] * 72 + [105.0] * 44 + [105.2],
+            }
+        )
+        analyzed = add_moving_averages(prices)
+        latest = analyzed.iloc[-1]
+        self.assertGreater(latest["MA189"], latest["MA117"])
+        self.assertIsNone(classify_latest_signal(analyzed))
 
     def test_does_not_select_stocks_well_below_ma17(self) -> None:
         prices = pd.DataFrame(
             {
-                "date": pd.date_range("2026-01-01", periods=45, freq="B"),
-                "close": [100.0] * 44 + [200.0],
+                "date": pd.date_range("2025-01-01", periods=220, freq="B"),
+                "close": [90.0] * 100 + [100.0] * 119 + [200.0],
             }
         )
 
@@ -259,10 +278,8 @@ class FinMindStockScannerTests(unittest.TestCase):
 
         self.assertIsNotNone(signal)
         assert signal is not None
-        self.assertGreater(signal["MA17"], signal["MA117"])
-        self.assertGreater(signal["MA17"], signal["MA189"])
         self.assertGreater(signal["MA45"], signal["MA117"])
-        self.assertGreater(signal["MA45"], signal["MA189"])
+        self.assertGreater(signal["MA117"], signal["MA189"])
         self.assertLessEqual(signal["MA17_MA45_gap_percent"], 1)
 
     def test_does_not_classify_alignment_if_fast_averages_are_not_both_above(self) -> None:
@@ -432,6 +449,138 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertEqual(set(saved_prices["stock_id"]), {"2330", "2303", "6488"})
         self.assertGreater(len(saved_prices), 0)
         self.assertLess(len(saved_prices), 660)
+
+    def test_build_signal_tracker_rows_tracks_new_and_continuing_stocks(self) -> None:
+        day1_df = pd.DataFrame(
+            [
+                {
+                    "market": "上市",
+                    "industry_category": "半導體業",
+                    "stock_id": "2330",
+                    "stock_name": "台積電",
+                    "date": "2026-10-15",
+                    "close": 1000.0,
+                    "MA17": 990.0,
+                    "MA45": 985.0,
+                    "MA117": 950.0,
+                    "MA189": 910.0,
+                    "gap_percent": 0.51,
+                    "signal": "接近（差距 <= 1%）",
+                }
+            ]
+        )
+        day1_rows = build_signal_tracker_rows(
+            day1_df,
+            existing_records=[],
+            as_of=date(2026, 10, 15),
+            updated_at="2026-10-15 18:00:00",
+        )
+        self.assertEqual(len(day1_rows), 1)
+        self.assertEqual(day1_rows[0]["當日新進"], "🆕 是（新進榜）")
+        self.assertEqual(day1_rows[0]["連續天數"], 1)
+
+        day2_df = pd.DataFrame(
+            [
+                {
+                    "market": "上市",
+                    "industry_category": "半導體業",
+                    "stock_id": "2330",
+                    "stock_name": "台積電",
+                    "date": "2026-10-16",
+                    "close": 1010.0,
+                    "MA17": 992.0,
+                    "MA45": 995.0,
+                    "MA117": 955.0,
+                    "MA189": 915.0,
+                    "gap_percent": -0.30,
+                    "signal": "已超過",
+                },
+                {
+                    "market": "上櫃",
+                    "industry_category": "半導體業",
+                    "stock_id": "6488",
+                    "stock_name": "環球晶",
+                    "date": "2026-10-16",
+                    "close": 500.0,
+                    "MA17": 490.0,
+                    "MA45": 487.0,
+                    "MA117": 460.0,
+                    "MA189": 430.0,
+                    "gap_percent": 0.61,
+                    "signal": "接近（差距 <= 1%）",
+                },
+            ]
+        )
+        day2_rows = build_signal_tracker_rows(
+            day2_df,
+            existing_records=day1_rows,
+            as_of=date(2026, 10, 16),
+            updated_at="2026-10-16 18:00:00",
+        )
+
+        self.assertEqual(len(day2_rows), 3)
+        # 最新日期排最前面，且當日新進排在同日最上方
+        self.assertEqual(day2_rows[0]["執行日期"], "2026-10-16")
+        self.assertEqual(day2_rows[0]["股票代號"], "6488")
+        self.assertEqual(day2_rows[0]["當日新進"], "🆕 是（新進榜）")
+        self.assertEqual(day2_rows[0]["連續天數"], 1)
+
+        self.assertEqual(day2_rows[1]["執行日期"], "2026-10-16")
+        self.assertEqual(day2_rows[1]["股票代號"], "2330")
+        self.assertEqual(day2_rows[1]["當日新進"], "🔄 否（持續符合）")
+        self.assertEqual(day2_rows[1]["連續天數"], 2)
+        self.assertIn("轉強突破", str(day2_rows[1]["每日執行狀況"]))
+
+    def test_sync_signals_to_gsheet_auto_creates_worksheet_and_writes_rows(self) -> None:
+        signals_df = pd.DataFrame(
+            [
+                {
+                    "market": "上市",
+                    "industry_category": "半導體業",
+                    "stock_id": "2330",
+                    "stock_name": "台積電",
+                    "date": "2026-10-16",
+                    "close": 1000.0,
+                    "MA17": 990.0,
+                    "MA45": 985.0,
+                    "MA117": 950.0,
+                    "MA189": 910.0,
+                    "gap_percent": 0.51,
+                    "signal": "接近（差距 <= 1%）",
+                }
+            ]
+        )
+        fake_ws = MagicMock()
+        fake_ws.id = 42
+        fake_ws.row_count = 1000
+        fake_ws.col_count = len(SIGNAL_TRACKER_HEADERS)
+
+        fake_spreadsheet = MagicMock()
+        fake_spreadsheet.worksheets.return_value = []
+        fake_spreadsheet.add_worksheet.return_value = fake_ws
+
+        fake_gc = MagicMock()
+        fake_gc.open_by_key.return_value = fake_spreadsheet
+
+        with patch("finmind_stock_scanner.gspread.service_account", return_value=fake_gc):
+            row_count = sync_signals_to_gsheet(
+                signals_df,
+                as_of=date(2026, 10, 16),
+                spreadsheet_id="test-sheet-id",
+                credentials_path="sheetbot.json",
+            )
+
+        self.assertEqual(row_count, 1)
+        fake_spreadsheet.add_worksheet.assert_called_once_with(
+            title=SIGNAL_TRACKER_SHEET_NAME,
+            rows=1000,
+            cols=len(SIGNAL_TRACKER_HEADERS),
+        )
+        fake_ws.update.assert_called_once()
+        updated_values = fake_ws.update.call_args.kwargs["values"]
+        self.assertEqual(updated_values[0], SIGNAL_TRACKER_HEADERS)
+        self.assertEqual(updated_values[1][4], "2330")
+        self.assertIn("🆕", updated_values[1][6])
 
 
 if __name__ == "__main__":

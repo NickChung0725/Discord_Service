@@ -2,7 +2,7 @@
 Description=Start the daily FinMind Taiwan stock scan at midnight Taipei time
 
 [Timer]
-OnCalendar=*-*-* 00:00:00 Asia/Taipei
+OnCalendar=Mon..Fri *-*-* 19:00:00 Asia/Taipei
 Persistent=true
 Unit=finmind-scan.service
 
