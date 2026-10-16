@@ -1403,10 +1403,6 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
         datetime.strptime(config["daily_start_time"], "%H:%M")
     except ValueError as error:
         raise ValueError("daily_start_time 必須符合 HH:MM 格式。") from error
-    if config["daily_start_time"] != "00:00":
-        raise ValueError(
-            "daily_start_time 目前必須是 00:00，且需與 deploy/finmind-scan.timer 相同。"
-        )
     return config
 
 
