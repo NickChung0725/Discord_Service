@@ -220,17 +220,19 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertEqual(signal["signal"], "接近（差距 <= 1%）")
+        self.assertGreaterEqual(signal["MA3"], signal["MA17"])
         self.assertGreater(signal["MA45"], signal["MA117"])
         self.assertGreater(signal["MA117"], signal["MA189"])
         self.assertLessEqual(signal["gap_percent"], 1.0)
         self.assertGreater(signal["gap_percent"], 0.0)
+        self.assertIn("ma17_trend", signal)
 
     def test_classifies_ma45_above_ma17(self) -> None:
-        # Construct series where MA45 >= MA17 and MA45 > MA117 > MA189
+        # Construct series where MA3 >= MA45 >= MA17 and MA45 > MA117 > MA189
         prices = pd.DataFrame(
             {
                 "date": pd.date_range("2025-01-01", periods=220, freq="B"),
-                "close": [90.0] * 100 + [100.0] * 75 + [120.0] * 28 + [110.0] * 17,
+                "close": [90.0] * 100 + [100.0] * 75 + [120.0] * 28 + [108.0] * 14 + [118.0] * 3,
             }
         )
 
@@ -239,9 +241,24 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertEqual(signal["signal"], "已超過")
+        self.assertGreaterEqual(signal["MA3"], signal["MA45"])
         self.assertGreaterEqual(signal["MA45"], signal["MA17"])
         self.assertGreater(signal["MA45"], signal["MA117"])
         self.assertGreater(signal["MA117"], signal["MA189"])
+
+    def test_rejects_signal_when_ma3_is_not_above_all_lines(self) -> None:
+        # MA45 >= MA17 and MA45 > MA117 > MA189, but MA3 < MA45
+        prices = pd.DataFrame(
+            {
+                "date": pd.date_range("2025-01-01", periods=220, freq="B"),
+                "close": [90.0] * 100 + [100.0] * 75 + [120.0] * 28 + [110.0] * 17,
+            }
+        )
+        analyzed = add_moving_averages(prices)
+        latest = analyzed.iloc[-1]
+        self.assertGreaterEqual(latest["MA45"], latest["MA17"])
+        self.assertLess(latest["MA3"], latest["MA45"])
+        self.assertIsNone(classify_latest_signal(analyzed))
 
     def test_rejects_signal_when_ma189_is_not_below_ma117(self) -> None:
         # Make MA189 > MA117 while MA45 is near MA17
@@ -278,6 +295,7 @@ class FinMindStockScannerTests(unittest.TestCase):
 
         self.assertIsNotNone(signal)
         assert signal is not None
+        self.assertGreaterEqual(signal["MA3"], signal["MA17"])
         self.assertGreater(signal["MA45"], signal["MA117"])
         self.assertGreater(signal["MA117"], signal["MA189"])
         self.assertLessEqual(signal["MA17_MA45_gap_percent"], 1)

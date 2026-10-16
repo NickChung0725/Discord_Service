@@ -38,7 +38,7 @@ MARKET_TYPES = {
 MARKET_CODES = {"上市": "twse", "上櫃": "tpex", "興櫃": "emerging"}
 STOCK_INFO_COLUMNS = {"stock_id", "stock_name", "industry_category", "type"}
 PRICE_COLUMNS = {"date", "close"}
-MOVING_AVERAGE_PERIODS = (17, 45, 117, 189)
+MOVING_AVERAGE_PERIODS = (3, 17, 45, 117, 189)
 NEAR_CROSS_PERCENT = 1.0
 ALIGNMENT_MAX_GAP_PERCENT = 1.0
 REQUEST_PAUSE_SECONDS = 6.2
@@ -280,27 +280,58 @@ def add_moving_averages(prices: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def describe_ma17_trend(ma17_series: pd.Series) -> str:
+    """綜合比對今日 MA17 與前 1 日、前 5 日變化，判斷 MA17 近期走勢。"""
+    valid = pd.to_numeric(ma17_series, errors="coerce").dropna()
+    if valid.empty:
+        return "-"
+    latest = float(valid.iloc[-1])
+    if latest <= 0:
+        return "-"
+    prev_1d = float(valid.iloc[-2]) if len(valid) >= 2 else latest
+    prev_5d = float(valid.iloc[-6]) if len(valid) >= 6 else float(valid.iloc[0])
+
+    chg_1d_pct = ((latest - prev_1d) / prev_1d * 100.0) if prev_1d > 0 else 0.0
+    chg_5d_pct = ((latest - prev_5d) / prev_5d * 100.0) if prev_5d > 0 else 0.0
+
+    if abs(chg_1d_pct) < 0.01 and abs(chg_5d_pct) < 0.05:
+        return f"➡️ 走平整理 (5日 {chg_5d_pct:+.2f}%)"
+    if chg_1d_pct >= 0 and chg_5d_pct >= 0:
+        return f"📈 連漲上揚 (5日 {chg_5d_pct:+.2f}%)"
+    if chg_1d_pct > 0 and chg_5d_pct < 0:
+        return f"↗️ 轉折向上 (日 {chg_1d_pct:+.2f}%｜5日 {chg_5d_pct:+.2f}%)"
+    if chg_1d_pct < 0 and chg_5d_pct > 0:
+        return f"↘️ 漲勢收斂 (日 {chg_1d_pct:+.2f}%｜5日 {chg_5d_pct:+.2f}%)"
+    return f"📉 持續下彎 (5日 {chg_5d_pct:+.2f}%)"
+
+
 def classify_latest_signal(
     analyzed_prices: pd.DataFrame,
 ) -> dict[str, object] | None:
-    required_columns = ("MA17", "MA45", "MA117", "MA189")
+    required_columns = ("MA3", "MA17", "MA45", "MA117", "MA189")
+    if not set(required_columns).issubset(analyzed_prices.columns):
+        return None
     usable = analyzed_prices.dropna(subset=list(required_columns))
     if usable.empty:
         return None
 
     latest = usable.iloc[-1]
-    ma17, ma45, ma117, ma189 = (
+    ma3, ma17, ma45, ma117, ma189 = (
         float(latest[column]) for column in required_columns
     )
     close = float(latest["close"])
-    if min(ma17, ma45, ma117, ma189) <= 0:
+    if min(ma3, ma17, ma45, ma117, ma189) <= 0:
         return None
 
-    # 117MA 與 189MA 皆需在 45MA 底下，且 189MA 必須在 117MA 底下 (45MA > 117MA > 189MA)
+    # 1. 三日線 (MA3) 必須 >= 所有均線 (MA17, MA45, MA117, MA189)
+    if ma3 < max(ma17, ma45, ma117, ma189):
+        return None
+
+    # 2. 117MA 與 189MA 皆需在 45MA 底下，且 189MA 必須在 117MA 底下 (45MA > 117MA > 189MA)
     if not (ma45 > ma117 and ma117 > ma189):
         return None
 
-    # 以 17MA 為基準計算差距百分比
+    # 3. 以 17MA 為基準計算差距百分比
     gap_percent = (ma17 - ma45) / ma17 * 100
     if ma45 >= ma17:
         signal = "已超過"
@@ -309,15 +340,19 @@ def classify_latest_signal(
     else:
         return None
 
+    ma17_trend = describe_ma17_trend(usable["MA17"])
+
     return {
         "date": latest["date"].strftime("%Y-%m-%d"),
         "close": close,
+        "MA3": ma3,
         "MA17": ma17,
         "MA45": ma45,
         "MA117": ma117,
         "MA189": ma189,
         "gap_percent": gap_percent,
         "signal": signal,
+        "ma17_trend": ma17_trend,
     }
 
 
@@ -331,12 +366,14 @@ def classify_latest_alignment_signal(
     return {
         "date": signal_data["date"],
         "close": signal_data["close"],
+        "MA3": signal_data["MA3"],
         "MA17": signal_data["MA17"],
         "MA45": signal_data["MA45"],
         "MA117": signal_data["MA117"],
         "MA189": signal_data["MA189"],
         "MA17_MA45_gap_percent": signal_data["gap_percent"],
         "signal": signal_data["signal"],
+        "ma17_trend": signal_data["ma17_trend"],
     }
 
 
@@ -348,7 +385,7 @@ def format_alignment_report(
     report_date = (as_of or _today_in_taipei()).isoformat()
     heading = (
         f"📊 {report_date} MA 均線排列訊號"
-        "\n條件：以 MA17 為基準，MA45 已超過或即將超過 MA17（差距 <= 1%）；"
+        "\n條件：MA3 >= 所有均線；以 MA17 為基準，MA45 已超過或即將超過 MA17（差距 <= 1%）；"
         "且 MA45 > MA117 > MA189"
     )
     if failed_count:
@@ -366,13 +403,23 @@ def format_alignment_report(
         )
         signal_label = getattr(row, "signal", None)
         signal_part = f" | {signal_label}" if signal_label else ""
+        ma3_val = getattr(row, "MA3", None)
+        ma3_part = (
+            f" | MA3 {float(ma3_val):,.2f}"
+            if ma3_val is not None and not pd.isna(ma3_val)
+            else ""
+        )
+        trend_label = getattr(row, "ma17_trend", None)
+        trend_part = f" | 17MA走勢 {trend_label}" if trend_label else ""
         line = (
             f"\n{row.stock_id} {row.stock_name}{signal_part} | 收盤 {float(row.close):,.2f}"
+            f"{ma3_part}"
             f" | MA17 {float(row.MA17):,.2f}"
             f" | MA45 {float(row.MA45):,.2f}"
             f" | MA117 {float(row.MA117):,.2f}"
             f" | MA189 {float(row.MA189):,.2f}"
             f" | 17/45 差 {float(gap_val):.2f}%"
+            f"{trend_part}"
         )
         if len(current) + len(line) > 1800:
             chunks.append(current)
@@ -482,8 +529,10 @@ def _normalize_existing_tracker_record(raw: Mapping[str, object]) -> dict[str, o
         streak_days = 0
     daily_status = str(raw.get("每日執行狀況") or raw.get("daily_status") or "").strip()
     signal = str(raw.get("訊號類型") or raw.get("signal") or "").strip()
+    ma17_trend = str(raw.get("17MA近期走勢") or raw.get("ma17_trend") or "-").strip()
 
     close_val = _parse_optional_float(raw.get("收盤價") if "收盤價" in raw else raw.get("close"))
+    ma3_val = _parse_optional_float(raw.get("3MA") if "3MA" in raw else raw.get("MA3"))
     ma17_val = _parse_optional_float(raw.get("17MA") if "17MA" in raw else raw.get("MA17"))
     ma45_val = _parse_optional_float(raw.get("45MA") if "45MA" in raw else raw.get("MA45"))
     ma117_val = _parse_optional_float(raw.get("117MA") if "117MA" in raw else raw.get("MA117"))
@@ -496,7 +545,7 @@ def _normalize_existing_tracker_record(raw: Mapping[str, object]) -> dict[str, o
     alignment = str(
         raw.get("均線排列檢核")
         or raw.get("ma_alignment")
-        or ("45MA > 117MA > 189MA ✓" if stock_id and stock_id != "-" else "-")
+        or ("3MA >= 各線 & 45MA > 117MA > 189MA ✓" if stock_id and stock_id != "-" else "-")
     ).strip()
     updated_at = str(raw.get("更新時間") or raw.get("updated_at") or "").strip()
 
@@ -511,7 +560,9 @@ def _normalize_existing_tracker_record(raw: Mapping[str, object]) -> dict[str, o
         "連續天數": streak_days,
         "每日執行狀況": daily_status,
         "訊號類型": signal,
+        "17MA近期走勢": ma17_trend,
         "收盤價": "" if close_val is None else round(close_val, 2),
+        "3MA": "" if ma3_val is None else round(ma3_val, 2),
         "17MA": "" if ma17_val is None else round(ma17_val, 2),
         "45MA": "" if ma45_val is None else round(ma45_val, 2),
         "117MA": "" if ma117_val is None else round(ma117_val, 2),
@@ -578,12 +629,14 @@ def build_signal_tracker_rows(
                         "stock_name": rec["股票名稱"],
                         "date": rec["K線日期"],
                         "close": rec["收盤價"],
+                        "MA3": rec["3MA"],
                         "MA17": rec["17MA"],
                         "MA45": rec["45MA"],
                         "MA117": rec["117MA"],
                         "MA189": rec["189MA"],
                         "gap_percent": rec["17與45MA差距(%)"],
                         "signal": rec["訊號類型"],
+                        "ma17_trend": rec["17MA近期走勢"],
                     }
                 )
         if retained_rows:
@@ -606,8 +659,11 @@ def build_signal_tracker_rows(
             industry = str(row.get("industry_category", "")).strip()
             data_date = str(row.get("date", scan_date_str)).strip()
             signal = str(row.get("signal", "")).strip()
+            ma17_trend = str(row.get("ma17_trend", "") or "-").strip()
 
             close_val = round(float(row["close"]), 2)
+            ma3_raw = _parse_optional_float(row.get("MA3"))
+            ma3_val = "" if ma3_raw is None else round(ma3_raw, 2)
             ma17_val = round(float(row["MA17"]), 2)
             ma45_val = round(float(row["MA45"]), 2)
             ma117_val = round(float(row["MA117"]), 2)
@@ -658,13 +714,15 @@ def build_signal_tracker_rows(
                     "連續天數": streak,
                     "每日執行狀況": daily_status,
                     "訊號類型": signal,
+                    "17MA近期走勢": ma17_trend,
                     "收盤價": close_val,
+                    "3MA": ma3_val,
                     "17MA": ma17_val,
                     "45MA": ma45_val,
                     "117MA": ma117_val,
                     "189MA": ma189_val,
                     "17與45MA差距(%)": gap_val,
-                    "均線排列檢核": "45MA > 117MA > 189MA ✓",
+                    "均線排列檢核": "3MA >= 各線 & 45MA > 117MA > 189MA ✓",
                     "更新時間": now_str,
                 }
             )
@@ -681,7 +739,9 @@ def build_signal_tracker_rows(
                 "連續天數": 0,
                 "每日執行狀況": "✅ 每日掃描執行完成，今日無符合條件之個股",
                 "訊號類型": "-",
+                "17MA近期走勢": "-",
                 "收盤價": "",
+                "3MA": "",
                 "17MA": "",
                 "45MA": "",
                 "117MA": "",
@@ -745,12 +805,15 @@ def _load_local_prior_signals(
         except Exception:
             continue
         if not df.empty:
-            # 確保歷史 CSV 亦符合 45MA > 117MA > 189MA
-            for col in ("MA17", "MA45", "MA117", "MA189"):
+            for col in ("MA3", "MA17", "MA45", "MA117", "MA189"):
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
             df = df.dropna(subset=["MA17", "MA45", "MA117", "MA189"])
             df = df.loc[(df["MA45"] > df["MA117"]) & (df["MA117"] > df["MA189"])].copy()
+            if "MA3" in df.columns and df["MA3"].notna().any():
+                df = df.loc[
+                    df["MA3"] >= df[["MA17", "MA45", "MA117", "MA189"]].max(axis=1)
+                ].copy()
         seeded_records = build_signal_tracker_rows(
             df,
             existing_records=seeded_records,
@@ -772,24 +835,26 @@ def _format_signal_tracker_worksheet(
     total_rows = max(len(records) + 1, 2)
 
     column_widths = [
-        105,  # 執行日期
-        105,  # K線日期
-        75,   # 市場別
-        130,  # 產業類別
-        85,   # 股票代號
-        105,  # 股票名稱
-        135,  # 當日新進
-        85,   # 連續天數
-        320,  # 每日執行狀況
-        145,  # 訊號類型
-        95,   # 收盤價
-        95,   # 17MA
-        95,   # 45MA
-        95,   # 117MA
-        95,   # 189MA
-        130,  # 17與45MA差距(%)
-        165,  # 均線排列檢核
-        155,  # 更新時間
+        105,  # 0: 執行日期
+        105,  # 1: K線日期
+        75,   # 2: 市場別
+        130,  # 3: 產業類別
+        85,   # 4: 股票代號
+        105,  # 5: 股票名稱
+        135,  # 6: 當日新進
+        85,   # 7: 連續天數
+        320,  # 8: 每日執行狀況
+        145,  # 9: 訊號類型
+        215,  # 10: 17MA近期走勢
+        95,   # 11: 收盤價
+        95,   # 12: 3MA
+        95,   # 13: 17MA
+        95,   # 14: 45MA
+        95,   # 15: 117MA
+        95,   # 16: 189MA
+        130,  # 17: 17與45MA差距(%)
+        225,  # 18: 均線排列檢核
+        155,  # 19: 更新時間
     ]
 
     requests_payload: list[dict[str, object]] = [
@@ -866,15 +931,15 @@ def _format_signal_tracker_worksheet(
                 "fields": "userEnteredFormat(backgroundColor,verticalAlignment,textFormat)",
             }
         },
-        # 5. 收盤價與各均線欄位 (index 10..15) 數值格式 #,##0.00
+        # 5. 收盤價與各均線欄位 (index 11..17) 數值格式 #,##0.00
         {
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": 1,
                     "endRowIndex": total_rows,
-                    "startColumnIndex": 10,
-                    "endColumnIndex": 15,
+                    "startColumnIndex": 11,
+                    "endColumnIndex": 17,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -885,15 +950,15 @@ def _format_signal_tracker_worksheet(
                 "fields": "userEnteredFormat(numberFormat,horizontalAlignment)",
             }
         },
-        # 6. 差距百分比欄位 (index 15..16) 數值格式 0.00
+        # 6. 差距百分比欄位 (index 17..18) 數值格式 0.00
         {
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": 1,
                     "endRowIndex": total_rows,
-                    "startColumnIndex": 15,
-                    "endColumnIndex": 16,
+                    "startColumnIndex": 17,
+                    "endColumnIndex": 18,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -1277,12 +1342,14 @@ def scan_industry(
             "stock_name",
             "date",
             "close",
+            "MA3",
             "MA17",
             "MA45",
             "MA117",
             "MA189",
             "gap_percent",
             "signal",
+            "ma17_trend",
         ],
     )
     alignment_frame = pd.DataFrame(
@@ -1294,12 +1361,14 @@ def scan_industry(
             "stock_name",
             "date",
             "close",
+            "MA3",
             "MA17",
             "MA45",
             "MA117",
             "MA189",
             "MA17_MA45_gap_percent",
             "signal",
+            "ma17_trend",
         ],
     )
     _atomic_write_csv(price_frame, price_path)
@@ -1545,12 +1614,14 @@ def scan_configured_universe(
                     "stock_name",
                     "date",
                     "close",
+                    "MA3",
                     "MA17",
                     "MA45",
                     "MA117",
                     "MA189",
                     "gap_percent",
                     "signal",
+                    "ma17_trend",
                 ],
             ),
             "alignment_signals": _combine_csvs(
@@ -1562,12 +1633,14 @@ def scan_configured_universe(
                     "stock_name",
                     "date",
                     "close",
+                    "MA3",
                     "MA17",
                     "MA45",
                     "MA117",
                     "MA189",
                     "MA17_MA45_gap_percent",
                     "signal",
+                    "ma17_trend",
                 ],
             ),
             "failures": _combine_csvs(

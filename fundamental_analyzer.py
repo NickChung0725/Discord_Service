@@ -21,6 +21,11 @@ from plotly.subplots import make_subplots
 import requests
 
 from ai_weather import ask_gemini
+from finmind_stock_scanner import (
+    MOVING_AVERAGE_PERIODS,
+    classify_latest_signal,
+    describe_ma17_trend,
+)
 from github_uploader import upload_to_github
 from fundamental_cache import FundamentalCacheManager
 from fundamental_config import PROMPT_TEMPLATES
@@ -28,6 +33,7 @@ from fundamental_config import PROMPT_TEMPLATES
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 _OUTPUT_DIR = Path(__file__).resolve().parent / "generated_charts"
+_DEFAULT_REPORTS_DIR = Path(__file__).resolve().parent / "finmind_reports"
 
 
 @dataclass
@@ -40,8 +46,19 @@ class DiagnosisReport:
 
 
 class FundamentalAnalyzer:
-    def __init__(self, cache: FundamentalCacheManager) -> None:
+    def __init__(
+        self,
+        cache: FundamentalCacheManager,
+        *,
+        reports_dir: Path | None = None,
+    ) -> None:
         self.cache = cache
+        env_reports_dir = os.getenv("FINMIND_REPORTS_DIR", "").strip()
+        self.reports_dir = (
+            reports_dir
+            if reports_dir is not None
+            else (Path(env_reports_dir) if env_reports_dir else _DEFAULT_REPORTS_DIR)
+        )
 
         self.ai_window_quarters = int(os.getenv("AI_WINDOW_QUARTERS", "8") or "8")
         self.ai_window_months = int(os.getenv("AI_WINDOW_MONTHS", "12") or "12")
@@ -280,6 +297,11 @@ class FundamentalAnalyzer:
             parts.append("\n- 【法人籌碼 (最新週)】")
             parts.append(show.to_markdown(index=False))
 
+        # Table 7: Optional latest prices.csv moving averages (if available locally)
+        ma_context = self.build_latest_ma_context(stock_id)
+        if ma_context:
+            parts.append(ma_context)
+
         # News injection (using cached Watchlist_Master)
         stock_name = ""
         try:
@@ -295,6 +317,140 @@ class FundamentalAnalyzer:
             parts.append(self.fetch_free_stock_news_and_search(stock_id, stock_name))
 
         return "\n".join(parts)
+
+    def _find_latest_prices_csv_for_stock(
+        self,
+        stock_id: str,
+        *,
+        base_dir: Path | None = None,
+    ) -> pd.DataFrame:
+        """從本地 finmind_reports 尋找最新包含該 stock_id 的 prices.csv，若無則回傳空 DataFrame。"""
+        target_id = stock_id.strip()
+        root_dir = base_dir if base_dir is not None else self.reports_dir
+        if not target_id or not root_dir.is_dir():
+            return pd.DataFrame()
+
+        candidate_files: list[Path] = []
+        daily_dir = root_dir / "daily"
+        if daily_dir.is_dir():
+            daily_files = sorted(
+                daily_dir.glob("*_prices.csv"),
+                key=lambda p: p.name,
+                reverse=True,
+            )
+            candidate_files.extend(daily_files)
+
+        single_files = sorted(
+            root_dir.glob("prices_*.csv"),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        candidate_files.extend(single_files)
+
+        other_files = sorted(
+            (p for p in root_dir.rglob("*prices*.csv") if p not in candidate_files),
+            key=lambda p: str(p),
+            reverse=True,
+        )
+        candidate_files.extend(other_files)
+
+        for csv_path in candidate_files:
+            if not csv_path.is_file():
+                continue
+            try:
+                df = pd.read_csv(csv_path, dtype={"stock_id": str})
+            except Exception:
+                continue
+            if df.empty or "stock_id" not in df.columns or "close" not in df.columns:
+                continue
+            matched = df.loc[df["stock_id"].astype(str).str.strip() == target_id].copy()
+            if not matched.empty:
+                return matched
+        return pd.DataFrame()
+
+    def build_latest_ma_context(
+        self,
+        stock_id: str,
+        *,
+        base_dir: Path | None = None,
+    ) -> str:
+        """讀取最新 prices.csv 並計算/提取 MA3、MA17、MA45、MA117、MA189 與 17MA 走勢；若無資料則回傳空字串。"""
+        try:
+            stock_prices = self._find_latest_prices_csv_for_stock(stock_id, base_dir=base_dir)
+            if stock_prices.empty:
+                return ""
+
+            stock_prices["date"] = pd.to_datetime(stock_prices["date"], errors="coerce")
+            stock_prices["close"] = pd.to_numeric(stock_prices["close"], errors="coerce")
+            stock_prices = (
+                stock_prices.dropna(subset=["date", "close"])
+                .sort_values("date")
+                .drop_duplicates(subset=["date"], keep="last")
+                .reset_index(drop=True)
+            )
+            if stock_prices.empty:
+                return ""
+
+            for period in MOVING_AVERAGE_PERIODS:
+                col = f"MA{period}"
+                if col in stock_prices.columns:
+                    stock_prices[col] = pd.to_numeric(stock_prices[col], errors="coerce")
+                if col not in stock_prices.columns or stock_prices[col].isna().all():
+                    stock_prices[col] = (
+                        stock_prices["close"]
+                        .rolling(window=period, min_periods=period)
+                        .mean()
+                    )
+
+            latest = stock_prices.iloc[-1]
+            latest_date = latest["date"].strftime("%Y-%m-%d")
+            close_val = float(latest["close"])
+
+            def _fmt_ma(col_name: str) -> str:
+                val = latest.get(col_name)
+                if val is None or pd.isna(val):
+                    return "N/A"
+                return f"{float(val):,.2f}"
+
+            ma17_val = latest.get("MA17")
+            ma45_val = latest.get("MA45")
+            gap_str = "N/A"
+            if (
+                ma17_val is not None
+                and ma45_val is not None
+                and not pd.isna(ma17_val)
+                and not pd.isna(ma45_val)
+                and float(ma17_val) > 0
+            ):
+                gap_pct = (float(ma17_val) - float(ma45_val)) / float(ma17_val) * 100.0
+                gap_str = f"{gap_pct:.2f}%"
+
+            ma17_trend = describe_ma17_trend(stock_prices["MA17"])
+            signal_info = classify_latest_signal(stock_prices)
+            if signal_info is not None:
+                signal_status = f"✅ 符合強勢均線排列訊號（{signal_info['signal']}）"
+            else:
+                signal_status = "➖ 未同時滿足五線強勢排列條件"
+
+            recent_5d = stock_prices.tail(5).copy()
+            recent_5d["date"] = recent_5d["date"].dt.strftime("%Y-%m-%d")
+            display_cols = ["date", "close", *(f"MA{p}" for p in MOVING_AVERAGE_PERIODS)]
+            for c in display_cols[1:]:
+                if c in recent_5d.columns:
+                    recent_5d[c] = pd.to_numeric(recent_5d[c], errors="coerce").round(2)
+
+            lines = [
+                f"\n■ 表 7：近期日線與均線排列動態 (本地 prices.csv｜最新交易日：{latest_date})",
+                (
+                    f"- 最新收盤：{close_val:,.2f}｜MA3：{_fmt_ma('MA3')}｜MA17：{_fmt_ma('MA17')}"
+                    f"｜MA45：{_fmt_ma('MA45')}｜MA117：{_fmt_ma('MA117')}｜MA189：{_fmt_ma('MA189')}"
+                ),
+                f"- 17MA與45MA差距：{gap_str}｜17MA近期走勢：{ma17_trend}｜均線訊號：{signal_status}",
+                recent_5d[display_cols].to_markdown(index=False),
+            ]
+            return "\n".join(lines)
+        except Exception:
+            return ""
 
     async def run_full_diagnosis(self, stock_id: str, *, force_ai: bool = False) -> DiagnosisReport:
         watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
