@@ -31,10 +31,19 @@
 * **每日定時推播**：於 `bot_server.py` 內建 `discord.ext.tasks` 排程，每日上午 **08:00 (Asia/Taipei)** 自動發送台北地區早安天氣預報至公告頻道 (`ANNOUNCE_CHANNEL_ID`)。
 
 ### 5. 台股基本面財報快取 + AI 戰情室 (`/stock_ai`)
-* **Google Sheets 六張固定 Tabs 快取**：自動建立/補齊以下分頁（不做每股一張表）：
-  * `00_Watchlist_Master`、`01_Monthly_Revenue`、`02_Income_Statement`、`03_Balance_Sheet`、`04_Cash_Flow`、`05_AI_Metrics_Wide`
-* **FinMind 增量更新 + 冷卻保護**：以 `MAX(raw_date)` 做真實水位，落後時採 `start_date = max_raw_date + 1 day` 增量抓取；並使用 `FINMIND_PROBE_COOLDOWN_HOURS` 避免空窗期重複探測。
-* **Gemini AI 分析快取**：以 `ai_cached_period=last_fin_qtr_last_rev_ym` 做快取鍵，資料未變且未強制刷新時可 0 token 秒回。
+* **Google Sheets 固定 Tabs 快取（共 8 張）**：自動建立/補齊以下分頁（不做每股一張表）：
+  * `00_Watchlist_Master`
+  * `01_Monthly_Revenue`
+  * `02_Income_Statement`
+  * `03_Balance_Sheet`
+  * `04_Cash_Flow`
+  * `05_AI_Metrics_Wide`
+  * `06_Dividend_Policy`
+  * `07_Chip_Summary`
+  
+  > 註：目前程式內 **沒有**使用 `08_*` 工作表（若你在 Sheet 看到 08 分頁，屬於未使用/保留）。
+* **FinMind 水位檢查 + 增量同步（含回補 1 期）**：以各表 `MAX(raw_date)` 判斷是否落後預期水位；需要同步時採增量抓取，並回頭重抓最近 **1 期**（上月/上季）以吸收更正公告或資料源回補；另使用 `FINMIND_PROBE_COOLDOWN_HOURS` 避免空窗期重複探測。
+* **Gemini AI（單股每次必呼叫）**：單股模式下每次 `/stock_ai` 都會重新呼叫 Gemini 產生最新診斷文字（不使用摘要快取）。
 * **Plotly 戰情室頁面**：產生 `{stock_id}_fund.html` 並發布到 GitHub Pages `charts/{stock_id}_fund.html`。
 
 ### 6. 伺服器實用工具指令

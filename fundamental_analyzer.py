@@ -2,28 +2,27 @@
 
 Responsibilities:
 - Slice sliding windows for AI and charts
-- Build markdown context from cached Sheets data
+- Build markdown context from cached Sheets data (using in-memory cache)
 - Call Gemini via ai_weather.ask_gemini
 - Render Plotly war-room HTML and publish to GitHub Pages under /charts
-
-This module assumes fundamentals are already synced by FundamentalCacheManager.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import json
 import os
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import requests
 
 from ai_weather import ask_gemini
 from github_uploader import upload_to_github
-from fundamental_cache import FundamentalCacheManager, SyncResult
+from fundamental_cache import FundamentalCacheManager
 from fundamental_config import PROMPT_TEMPLATES
 
 
@@ -49,6 +48,9 @@ class FundamentalAnalyzer:
         self.chart_window_quarters = int(os.getenv("CHART_WINDOW_QUARTERS", "16") or "16")
         self.chart_window_months = int(os.getenv("CHART_WINDOW_MONTHS", "36") or "36")
 
+        self.news_timeout_seconds = float(os.getenv("NEWS_TIMEOUT_SECONDS", "8") or "8")
+        self.news_max_items = int(os.getenv("NEWS_MAX_ITEMS", "8") or "8")
+
     def slice_sliding_window(self, df_full: pd.DataFrame, window_size: int) -> pd.DataFrame:
         if df_full.empty:
             return df_full
@@ -56,71 +58,247 @@ class FundamentalAnalyzer:
             df_full = df_full.sort_values("raw_date")
         return df_full.tail(window_size).reset_index(drop=True)
 
+    def _fetch_google_news_rss(self, query: str) -> list[dict[str, str]]:
+        url = "https://news.google.com/rss/search"
+        params = {
+            "q": query,
+            "hl": "zh-TW",
+            "gl": "TW",
+            "ceid": "TW:zh-Hant",
+        }
+        response = requests.get(url, params=params, timeout=self.news_timeout_seconds)
+        response.raise_for_status()
+
+        root = ET.fromstring(response.text)
+        items = []
+        for item in root.findall("./channel/item"):
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub_date = (item.findtext("pubDate") or "").strip()
+            source = (item.findtext("source") or "").strip()
+            if not title or not link:
+                continue
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "pubDate": pub_date,
+                    "source": source,
+                }
+            )
+            if len(items) >= self.news_max_items:
+                break
+        return items
+
+    def fetch_free_stock_news_and_search(self, stock_id: str, stock_name: str) -> str:
+        query = f"{stock_id} {stock_name} 台股".strip()
+        try:
+            items = self._fetch_google_news_rss(query)
+        except Exception:
+            return "（本次新聞抓取失敗）"
+
+        if not items:
+            return "（本次沒有抓到相關新聞）"
+
+        lines = ["\n■ 即時新聞 (Google News RSS)"]
+        for it in items:
+            meta = ""
+            if it.get("source") or it.get("pubDate"):
+                meta = f" — {it.get('source', '').strip()} {it.get('pubDate', '').strip()}".strip()
+            lines.append(f"- [{it['title']}]({it['link']}){meta}")
+        return "\n".join(lines)
+
     def build_markdown_context(self, stock_id: str) -> str:
-        # Read from Sheets each time (simple v1). Optimization: pass dfs from cache.
-        ss = self.cache._spreadsheet  # noqa: SLF001
-        df_wide = self.cache._read_stock_rows(ss.worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
-        df_cf = self.cache._read_stock_rows(ss.worksheet("04_Cash_Flow"), stock_id)  # noqa: SLF001
-        df_rev = self.cache._read_stock_rows(ss.worksheet("01_Monthly_Revenue"), stock_id)  # noqa: SLF001
+        df_wide = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
+        df_is = self.cache._read_stock_rows(self.cache._get_worksheet("02_Income_Statement"), stock_id)  # noqa: SLF001
+        df_bs = self.cache._read_stock_rows(self.cache._get_worksheet("03_Balance_Sheet"), stock_id)  # noqa: SLF001
+        df_cf = self.cache._read_stock_rows(self.cache._get_worksheet("04_Cash_Flow"), stock_id)  # noqa: SLF001
+        df_rev = self.cache._read_stock_rows(self.cache._get_worksheet("01_Monthly_Revenue"), stock_id)  # noqa: SLF001
+        df_div = self.cache._read_stock_rows(self.cache._get_worksheet("06_Dividend_Policy"), stock_id)  # noqa: SLF001
+        df_chip = self.cache._read_stock_rows(self.cache._get_worksheet("07_Chip_Summary"), stock_id)  # noqa: SLF001
 
         df_wide = self.slice_sliding_window(df_wide, self.ai_window_quarters)
+        df_is = self.slice_sliding_window(df_is, self.ai_window_quarters)
+        df_bs = self.slice_sliding_window(df_bs, self.ai_window_quarters)
         df_cf = self.slice_sliding_window(df_cf, self.ai_window_quarters)
         df_rev = self.slice_sliding_window(df_rev, self.ai_window_months)
+        df_div = self.slice_sliding_window(df_div, 5)
+        df_chip = self.slice_sliding_window(df_chip, 8)
 
         parts: list[str] = []
         parts.append(PROMPT_TEMPLATES["system_rules"])
         parts.append("\n==================================================")
-        parts.append(f"【標的：{stock_id} — Google Sheets 快取財報數據包】")
+        parts.append(f"【標的：{stock_id} — Google Sheets 法人級深度財報與籌碼數據包】")
 
-        if not df_wide.empty:
-            cols = [
+        # Table 1: IS structure + expense ratio + attribution
+        if not df_wide.empty or not df_is.empty:
+            cols_wide = [
                 "year_qtr",
-                "revenue_亿元",
-                "qtr_rev_yoy_pct",
+                "rev_亿元",
                 "gross_margin_pct",
+                "op_expense_pct",
                 "op_margin_pct",
-                "net_margin_pct",
+                "non_op_share_pct",
+                "parent_net_margin_pct",
                 "eps",
                 "ttm_eps",
-                "roe_pct",
-                "debt_ratio_pct",
+                "qtr_rev_yoy_pct",
             ]
-            df_show = df_wide[[c for c in cols if c in df_wide.columns]].copy()
-            parts.append("\n■ 表 1：近 8 季損益與核心財務比率 (資料來源：05_AI_Metrics_Wide)")
-            parts.append(df_show.to_markdown(index=False))
+            show = df_wide[[c for c in cols_wide if c in df_wide.columns]].copy() if not df_wide.empty else pd.DataFrame()
+            parts.append("\n■ 表 1：損益結構、營業費用率與本業/業外歸因 (近 8 季)")
+            if not show.empty:
+                parts.append(show.to_markdown(index=False))
 
+        # Table 2: CCC + contract liabilities + financial assets
+        if not df_wide.empty or not df_bs.empty:
+            cols = [
+                "year_qtr",
+                "inventory",
+                "accounts_receivable",
+                "accounts_payable",
+                "contract_liab_current",
+                "dio_days",
+                "dso_days",
+                "dpo_days",
+                "ccc_days",
+                "fvpl_financial_assets",
+                "fvoci_financial_assets",
+                "ac_financial_assets",
+            ]
+
+            base = pd.DataFrame()
+            if not df_wide.empty and "year_qtr" in df_wide.columns:
+                base = df_wide[[c for c in cols if c in df_wide.columns]].copy()
+
+            if not df_bs.empty and "year_qtr" in df_bs.columns:
+                bs_part = df_bs[[c for c in cols if c in df_bs.columns]].copy()
+                base = bs_part if base.empty else base.merge(bs_part, on="year_qtr", how="left")
+
+            show = base[[c for c in cols if c in base.columns]].copy() if not base.empty else pd.DataFrame()
+            parts.append("\n■ 表 2：營運週轉效率 (CCC)、合約負債與金融資產配置 (近 8 季)")
+            if not show.empty:
+                parts.append(show.to_markdown(index=False))
+
+        # Table 3: cash flow breakdown
         if not df_cf.empty:
             cols = [
                 "year_qtr",
                 "operating_cf",
                 "capex",
                 "free_cf",
+                "cf_change_inv",
+                "cf_change_ar",
+                "cf_change_ap",
+                "depreciation",
+                "amortization",
+                "interest_income",
+                "interest_expense",
                 "investing_cf",
                 "financing_cf",
             ]
-            df_show = df_cf[[c for c in cols if c in df_cf.columns]].copy()
-            parts.append("\n■ 表 2：近 8 季現金流量與資本支出結構 (資料來源：04_Cash_Flow)")
-            parts.append(df_show.to_markdown(index=False))
+            show = df_cf[[c for c in cols if c in df_cf.columns]].copy()
+            parts.append("\n■ 表 3：單季現金流量拆解、營運資金變動與含金量 (近 8 季)")
+            parts.append(show.to_markdown(index=False))
 
-        if not df_rev.empty:
-            cols = [
-                "rev_ym",
-                "revenue",
-                "mom_pct",
-                "yoy_pct",
-                "raw_date",
+        # Table 4: leverage and solvency
+        if not df_wide.empty or not df_bs.empty:
+            cols_bs = [
+                "year_qtr",
+                "cash_and_equiv",
+                "short_term_debt",
+                "bonds_payable",
+                "long_term_debt",
+                "total_liabilities",
+                "total_equity",
             ]
-            df_show = df_rev[[c for c in cols if c in df_rev.columns]].copy()
-            parts.append("\n■ 表 3：近 12 個月營收趨勢 (資料來源：01_Monthly_Revenue)")
-            parts.append(df_show.to_markdown(index=False))
+            cols_wide = [
+                "year_qtr",
+                "total_debt_亿元",
+                "net_debt_ratio_pct",
+                "current_ratio_pct",
+                "quick_ratio_pct",
+                "interest_coverage",
+                "parent_roe_pct",
+                "ocf_to_ni_pct",
+                "ebitda_亿元",
+            ]
+
+            base = pd.DataFrame()
+            if not df_wide.empty and "year_qtr" in df_wide.columns:
+                base = df_wide[[c for c in cols_wide if c in df_wide.columns]].copy()
+
+            if not df_bs.empty and "year_qtr" in df_bs.columns:
+                bs_part = df_bs[[c for c in cols_bs if c in df_bs.columns]].copy()
+                base = bs_part if base.empty else base.merge(bs_part, on="year_qtr", how="left")
+
+            show_cols = [c for c in (cols_bs + cols_wide[1:]) if c in base.columns]
+            show = base[show_cols].copy() if not base.empty else pd.DataFrame()
+            parts.append("\n■ 表 4：財務槓桿、有息負債結構與償債能力 (近 8 季)")
+            if not show.empty:
+                parts.append(show.to_markdown(index=False))
+
+        # Table 5: monthly revenue momentum
+        if not df_rev.empty:
+            cols = ["rev_ym", "revenue", "mom_pct", "yoy_pct", "raw_date"]
+            show = df_rev[[c for c in cols if c in df_rev.columns]].copy()
+            parts.append("\n■ 表 5：近期月營收動能 (近 12 個月)")
+            parts.append(show.to_markdown(index=False))
+
+        # Table 6: dividend + chip summary
+        parts.append("\n■ 表 6：歷年股利政策與近期外資/投信/自營商法人籌碼動向")
+        if not df_div.empty:
+            cols = [
+                "div_year",
+                "cash_dividend",
+                "stock_dividend",
+                "total_dividend",
+                "total_cash_dividend_亿元",
+                "annual_eps",
+                "payout_ratio_pct",
+                "ex_dividend_date",
+                "payment_date",
+            ]
+            show = df_div[[c for c in cols if c in df_div.columns]].copy()
+            parts.append("\n- 【股利政策 (近 5 年)】")
+            parts.append(show.to_markdown(index=False))
+        if not df_chip.empty:
+            cols = [
+                "trade_week",
+                "raw_date",
+                "foreign_holding_pct",
+                "foreign_holding_chg_20d",
+                "foreign_net_buy_5d_lots",
+                "foreign_net_buy_20d_lots",
+                "trust_net_buy_5d_lots",
+                "trust_net_buy_20d_lots",
+                "dealer_net_buy_5d_lots",
+                "dealer_net_buy_20d_lots",
+                "three_inst_net_5d_lots",
+                "three_inst_net_20d_lots",
+            ]
+            show = df_chip[[c for c in cols if c in df_chip.columns]].copy()
+            parts.append("\n- 【法人籌碼 (最新週)】")
+            parts.append(show.to_markdown(index=False))
+
+        # News injection (using cached Watchlist_Master)
+        stock_name = ""
+        try:
+            watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
+            records = self.cache._get_records_cached(watchlist)  # noqa: SLF001
+            row = next((r for r in records if str(r.get("stock_id", "")).strip() == stock_id), None)
+            if row:
+                stock_name = str(row.get("stock_name", "")).strip()
+        except Exception:
+            stock_name = ""
+
+        if stock_name:
+            parts.append(self.fetch_free_stock_news_and_search(stock_id, stock_name))
 
         return "\n".join(parts)
 
     async def run_full_diagnosis(self, stock_id: str, *, force_ai: bool = False) -> DiagnosisReport:
-        # AI cache hit: reuse Watchlist_Master.ai_cached_period and ai_summary_json.
-        ss = self.cache._spreadsheet  # noqa: SLF001
-        watchlist = ss.worksheet("00_Watchlist_Master")
-        records = watchlist.get_all_records()
+        watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
+        records = self.cache._get_records_cached(watchlist)  # noqa: SLF001
         row = next(
             (r for r in records if str(r.get("stock_id", "")).strip() == stock_id),
             None,
@@ -130,8 +308,11 @@ class FundamentalAnalyzer:
         if row:
             last_fin = str(row.get("last_fin_qtr", "")).strip()
             last_rev = str(row.get("last_rev_ym", "")).strip()
+            max_div = str(row.get("max_div_raw_date", "")).strip()
+            max_chip = str(row.get("max_chip_raw_date", "")).strip()
+            ai_cache_day = str(row.get("ai_cache_day", "")).strip() or datetime.now(TAIPEI_TIMEZONE).date().isoformat()
             if last_fin and last_rev:
-                cache_period = f"{last_fin}_{last_rev}"
+                cache_period = f"{last_fin}_{last_rev}_{max_div}_{max_chip}_{ai_cache_day}"
 
         if row and not force_ai and cache_period and str(row.get("ai_cached_period", "")).strip() == cache_period:
             ai_summary = str(row.get("ai_summary_json", "")).strip()
@@ -153,15 +334,14 @@ class FundamentalAnalyzer:
         )
         ai_text = await ask_gemini(prompt)
 
-        # Render and publish war room.
         war_room_url = await self.render_and_publish_war_room_html(stock_id, ai_text)
 
-        # Save cache summary back to Watchlist_Master.
         summary = self._summarize_ai(ai_text)
         self.cache._update_watchlist_master(  # noqa: SLF001
             watchlist,
             stock_id,
             {
+                "ai_cache_day": datetime.now(TAIPEI_TIMEZONE).date().isoformat(),
                 "ai_cached_period": cache_period or "",
                 "ai_summary_json": summary,
                 "war_room_url": war_room_url,
@@ -189,25 +369,26 @@ class FundamentalAnalyzer:
         return await ask_gemini(prompt)
 
     async def render_and_publish_war_room_html(self, stock_id: str, ai_text: str) -> str:
-        ss = self.cache._spreadsheet  # noqa: SLF001
-        df_wide = self.cache._read_stock_rows(ss.worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
-        df_rev = self.cache._read_stock_rows(ss.worksheet("01_Monthly_Revenue"), stock_id)  # noqa: SLF001
-        df_cf = self.cache._read_stock_rows(ss.worksheet("04_Cash_Flow"), stock_id)  # noqa: SLF001
+        df_wide = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
+        df_rev = self.cache._read_stock_rows(self.cache._get_worksheet("01_Monthly_Revenue"), stock_id)  # noqa: SLF001
+        df_cf = self.cache._read_stock_rows(self.cache._get_worksheet("04_Cash_Flow"), stock_id)  # noqa: SLF001
 
         df_wide = self.slice_sliding_window(df_wide, self.chart_window_quarters)
         df_rev = self.slice_sliding_window(df_rev, self.chart_window_months)
         df_cf = self.slice_sliding_window(df_cf, self.chart_window_quarters)
 
         fig = make_subplots(
-            rows=4,
+            rows=6,
             cols=1,
             shared_xaxes=False,
-            vertical_spacing=0.08,
+            vertical_spacing=0.07,
             subplot_titles=(
                 "月營收與 YoY",
-                "三率走勢",
-                "EPS 與 TTM EPS",
-                "OCF / CapEx / FCF",
+                "三率走勢 (毛利率/營益率/母公司淨利率)",
+                "營業費用率與業外佔稅前淨利比",
+                "CCC 現金轉換週期 (DIO/DSO/DPO/CCC)",
+                "單季 EPS 與 TTM EPS",
+                "OCF / CapEx / FCF + 獲利含金量(OCF/NI)",
             ),
         )
 
@@ -224,7 +405,7 @@ class FundamentalAnalyzer:
             for col, name in (
                 ("gross_margin_pct", "毛利率(%)"),
                 ("op_margin_pct", "營益率(%)"),
-                ("net_margin_pct", "淨利率(%)"),
+                ("parent_net_margin_pct", "母公司淨利率(%)"),
             ):
                 if col in df_wide.columns:
                     fig.add_trace(
@@ -233,10 +414,43 @@ class FundamentalAnalyzer:
                         col=1,
                     )
 
+            for col, name in (
+                ("op_expense_pct", "營業費用率(%)"),
+                ("non_op_share_pct", "業外佔稅前比(%)"),
+                ("parent_roe_pct", "母公司ROE(%)"),
+            ):
+                if col in df_wide.columns:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x,
+                            y=pd.to_numeric(df_wide[col], errors="coerce"),
+                            name=name,
+                        ),
+                        row=3,
+                        col=1,
+                    )
+
+            for col, name in (
+                ("ccc_days", "CCC(天)"),
+                ("dio_days", "DIO"),
+                ("dso_days", "DSO"),
+                ("dpo_days", "DPO"),
+            ):
+                if col in df_wide.columns:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x,
+                            y=pd.to_numeric(df_wide[col], errors="coerce"),
+                            name=name,
+                        ),
+                        row=4,
+                        col=1,
+                    )
+
             if "eps" in df_wide.columns:
                 fig.add_trace(
                     go.Bar(x=x, y=pd.to_numeric(df_wide["eps"], errors="coerce"), name="EPS"),
-                    row=3,
+                    row=5,
                     col=1,
                 )
             if "ttm_eps" in df_wide.columns:
@@ -246,7 +460,18 @@ class FundamentalAnalyzer:
                         y=pd.to_numeric(df_wide["ttm_eps"], errors="coerce"),
                         name="TTM EPS",
                     ),
-                    row=3,
+                    row=5,
+                    col=1,
+                )
+
+            if "ocf_to_ni_pct" in df_wide.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=pd.to_numeric(df_wide["ocf_to_ni_pct"], errors="coerce"),
+                        name="OCF/NI(%)",
+                    ),
+                    row=6,
                     col=1,
                 )
 
@@ -259,16 +484,21 @@ class FundamentalAnalyzer:
             ):
                 if col in df_cf.columns:
                     fig.add_trace(
-                        go.Bar(x=x, y=pd.to_numeric(df_cf[col], errors="coerce") / 1e8, name=f"{name}(億)"),
-                        row=4,
+                        go.Bar(
+                            x=x,
+                            y=pd.to_numeric(df_cf[col], errors="coerce") / 1e8,
+                            name=f"{name}(億)",
+                        ),
+                        row=6,
                         col=1,
                     )
 
         fig.update_layout(
             template="plotly_dark",
-            height=1100,
+            height=1500,
             title=f"{stock_id} 基本面 AI 戰情室",
-            margin={"l": 40, "r": 30, "t": 80, "b": 40},
+            legend={"orientation": "h", "y": -0.08},
+            margin={"l": 40, "r": 30, "t": 80, "b": 80},
         )
 
         generated_at = datetime.now(TAIPEI_TIMEZONE).strftime("%Y-%m-%d %H:%M")
@@ -292,12 +522,10 @@ class FundamentalAnalyzer:
         file_path = _OUTPUT_DIR / f"{stock_id}_fund.html"
         file_path.write_text("\n".join(html_parts), encoding="utf-8")
 
-        # Publish to GitHub Pages under charts/.
         pages_url = upload_to_github(str(file_path), stock_id, filename_suffix="_fund")
         return pages_url
 
     def _summarize_ai(self, ai_text: str) -> str:
-        # v1: store as plain text; keep within a reasonable size for Sheets cell.
         cleaned = ai_text.strip()
         return cleaned[:1500]
 

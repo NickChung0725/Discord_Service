@@ -136,11 +136,19 @@ def _generate_ai_response(prompt: str) -> str:
         raise MissingGeminiApiKeyError("GEMINI_API_KEY is not configured.")
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
+
+    # response = client.models.generate_content(
+    #     model=os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"),
+    #     contents=prompt,
+    #     # config={"store": True}  # 強制要求紀錄此筆 Request
+    # )
+    
+    # answer = response.text
+    response = client.interactions.create(
         model=os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"),
-        contents=prompt,
+        input=prompt,
     )
-    answer = response.text
+    answer = response.output_text
     if not answer:
         raise RuntimeError("Google AI Studio returned an empty response.")
     return answer

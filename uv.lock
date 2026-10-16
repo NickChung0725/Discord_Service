@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -731,7 +731,7 @@ requires-dist = [
     { name = "discord-py", specifier = ">=2.3.0" },
     { name = "finmind", specifier = ">=1.6.0" },
     { name = "google-auth", specifier = ">=2.25.0" },
-    { name = "google-genai", specifier = ">=1.0.0" },
+    { name = "google-genai", specifier = ">=2.3.0" },
     { name = "gspread", specifier = ">=6.0.0" },
     { name = "pandas", specifier = ">=2.1.0" },
     { name = "plotly", specifier = ">=5.18.0" },

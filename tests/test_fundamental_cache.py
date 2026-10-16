@@ -30,6 +30,18 @@ class FundamentalConfigTests(unittest.TestCase):
         self.assertTrue(result.isna().all())
         self.assertEqual(result.index.tolist(), [3, 7])
 
+    def test_anchor_pick_supports_dual_track_spec(self) -> None:
+        pivot_type = pd.DataFrame({"A": [1.0, None]}, index=[0, 1])
+        pivot_origin = pd.DataFrame({"中文": [None, 2.0]}, index=[0, 1])
+
+        result = _anchor_pick(
+            pivot_type,
+            {"types": ["A"], "origins": ["中文"]},
+            pivot_origin,
+        )
+
+        self.assertEqual(result.tolist(), [1.0, 2.0])
+
 
 if __name__ == "__main__":
     unittest.main()

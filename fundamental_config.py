@@ -1,12 +1,18 @@
-"""Configuration and schema definitions for /stock_ai fundamental caching (v3.1 FinMind Verified).
+"""Configuration and schema definitions for /stock_ai fundamental caching.
 
-Aligned 100% with actual FinMind TaiwanStockFinancialStatements, TaiwanStockBalanceSheet,
-and TaiwanStockCashFlowsStatement schemas.
+SASD v3.1.0 (100% Verified against FinMind Real-Machine Schema for 2357/2330)
 """
 
 from __future__ import annotations
 
 from datetime import date
+from typing import TypedDict
+
+
+class AnchorSpec(TypedDict):
+    types: list[str]
+    origins: list[str]
+
 
 SHEET_SCHEMAS: dict[str, list[str]] = {
     "00_Watchlist_Master": [
@@ -17,7 +23,10 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "last_rev_ym",
         "max_fin_raw_date",
         "last_fin_qtr",
+        "max_div_raw_date",
+        "max_chip_raw_date",
         "last_probe_at",
+        "ai_cache_day",
         "ai_cached_period",
         "ai_summary_json",
         "war_room_url",
@@ -48,10 +57,9 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "non_op_income_total",
         "pretax_income",
         "income_tax_expense",
-        "net_income",
+        "net_income_total",
         "net_income_parent",
         "net_income_nci",
-        "other_comprehensive_income",
         "eps",
         "updated_at",
     ],
@@ -60,45 +68,49 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "stock_id",
         "raw_date",
         "year_qtr",
-        "total_assets",
-        "current_assets",
         "cash_and_equiv",
-        "fvpl_assets",
-        "fvoci_assets",
-        "ac_assets",
-        "equity_method_investments",
+        "fvpl_financial_assets",
+        "fvoci_financial_assets",
+        "ac_financial_assets",
         "accounts_receivable",
         "inventory",
         "prepayments",
-        "total_liabilities",
-        "current_liabilities",
+        "current_assets",
+        "ppe_assets",
+        "intangible_assets",
+        "total_assets",
+        "short_term_debt",
+        "contract_liab_current",
         "accounts_payable",
         "other_payables",
-        "contract_liabilities",
-        "short_term_debt",
+        "current_liabilities",
+        "bonds_payable",
         "long_term_debt",
+        "total_liabilities",
+        "capital_stock",
+        "retained_earnings",
         "parent_equity",
         "total_equity",
         "updated_at",
     ],
-    # 在 SHEET_SCHEMAS 中，將 "04_Cash_Flow" 精簡為 100% 有值的 16 個欄位：
     "04_Cash_Flow": [
         "pk_key",
         "stock_id",
         "raw_date",
         "year_qtr",
-        "operating_cf",
-        "investing_cf",
-        "financing_cf",
-        "capex",
-        "free_cf",
         "depreciation",
         "amortization",
-        "interest_expense_cf",
-        "interest_income_cf",
+        "interest_income",
+        "interest_expense",
         "cf_change_ar",
         "cf_change_inv",
         "cf_change_ap",
+        "operating_cf",
+        "capex",
+        "investing_cf",
+        "cf_debt_net_change",
+        "financing_cf",
+        "free_cf",
         "updated_at",
     ],
     "05_AI_Metrics_Wide": [
@@ -106,150 +118,323 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "stock_id",
         "raw_date",
         "year_qtr",
-        "revenue_亿元",
+        "rev_亿元",
         "gross_margin_pct",
         "op_expense_pct",
         "op_margin_pct",
         "non_op_share_pct",
-        "net_margin_pct",
         "parent_net_margin_pct",
-        "roe_pct",
-        "roa_pct",
-        "debt_ratio_pct",
-        "net_debt_ratio_pct",
-        "current_ratio_pct",
-        "quick_ratio_pct",
-        "interest_coverage",
+        "eps",
+        "ttm_eps",
+        "parent_roe_pct",
         "dio_days",
         "dso_days",
         "dpo_days",
         "ccc_days",
-        "eps",
-        "ttm_eps",
+        "contract_liab_亿元",
         "ocf_亿元",
         "capex_亿元",
         "fcf_亿元",
-        "ebitda_亿元",
         "ocf_to_ni_pct",
+        "ebitda_亿元",
+        "total_debt_亿元",
+        "net_debt_ratio_pct",
+        "current_ratio_pct",
+        "quick_ratio_pct",
+        "interest_coverage",
         "qtr_rev_yoy_pct",
+        "updated_at",
+    ],
+    "06_Dividend_Policy": [
+        "pk_key",
+        "stock_id",
+        "raw_date",
+        "div_year",
+        "cash_dividend",
+        "stock_dividend",
+        "total_dividend",
+        "total_cash_dividend_亿元",
+        "annual_eps",
+        "payout_ratio_pct",
+        "ex_dividend_date",
+        "payment_date",
+        "updated_at",
+    ],
+    "07_Chip_Summary": [
+        "pk_key",
+        "stock_id",
+        "raw_date",
+        "trade_week",
+        "foreign_holding_pct",
+        "foreign_holding_chg_20d",
+        "foreign_net_buy_5d_lots",
+        "foreign_net_buy_20d_lots",
+        "trust_net_buy_5d_lots",
+        "trust_net_buy_20d_lots",
+        "dealer_net_buy_5d_lots",
+        "dealer_net_buy_20d_lots",
+        "three_inst_net_5d_lots",
+        "three_inst_net_20d_lots",
         "updated_at",
     ],
 }
 
 
-# 100% 對齊 FinMind 真實 type 與中文 origin_name
-ACCOUNT_ANCHOR_MAP: dict[str, list[str]] = {
-    # ================= 02_綜合損益表 (IS - 共17項全覆蓋) =================
-    "revenue": ["Revenue", "OperatingRevenue", "NetRevenue", "營業收入", "營業收入合計"],
-    "cost_of_goods_sold": ["CostOfGoodsSold", "OperatingCosts", "營業成本", "營業成本合計"],
-    "gross_profit": ["GrossProfit", "營業毛利（毛損）", "營業毛利（毛損）淨額"],
-    "operating_expenses": ["OperatingExpenses", "營業費用", "營業費用合計"],
-    "operating_income": ["OperatingIncome", "營業利益（損失）", "營業淨利（淨損）"],
-    "non_op_income_total": ["TotalNonoperatingIncomeAndExpense", "營業外收入及支出", "營業外收入及支出合計"],
-    "pretax_income": ["PreTaxIncome", "稅前淨利（淨損）", "繼續營業單位稅前淨利（淨損）"],
-    "income_tax_expense": ["TAX", "IncomeTaxExpense", "所得稅費用（利益）", "所得稅費用（利益）合計"],
-    "net_income": ["IncomeAfterTaxes", "ProfitLoss", "本期淨利（淨損）"],
-    "net_income_parent": [
-        "EquityAttributableToOwnersOfParent",
-        "淨利（淨損）歸屬於母公司業主",
-        "母公司業主（淨利／損）",
-    ],
-    "net_income_nci": [
-        "NoncontrollingInterests",
-        "淨利（淨損）歸屬於非控制權益",
-        "非控制權益（淨利／損）",
-    ],
-    "other_comprehensive_income": ["OtherComprehensiveIncome", "其他綜合損益（淨額）"],
-    "eps": ["EPS", "BasicEarningsPerShare", "基本每股盈餘"],
+def _a(*, types: list[str], origins: list[str]) -> AnchorSpec:
+    return {"types": types, "origins": origins}
 
-    # ================= 03_資產負債表 (BS - 對齊 FinMind 實際大小寫) =================
-    "total_assets": ["TotalAssets", "Assets", "資產總額", "資產總計"],
-    "current_assets": ["CurrentAssets", "流動資產合計"],
-    "cash_and_equiv": ["CashAndCashEquivalents", "現金及約當現金"],
-    # 金融資產 (支援流動+非流動加總於 _anchor_sum)
-    "fvpl_assets_curr": ["CurrentFinancialAssetsAtFairvalueThroughProfitOrLoss", "透過損益按公允價值衡量之金融資產－流動"],
-    "fvpl_assets_noncurr": ["NonCurrentFinancialAssetsAtFairvalueThroughProfitOrLoss", "透過損益按公允價值衡量之金融資產－非流動"],
-    "fvoci_assets_curr": ["FinancialAssetsAtFairvalueThroughOtherComprehensiveIncome", "透過其他綜合損益按公允價值衡量之金融資產－流動"],
-    "fvoci_assets_noncurr": ["FinancialAssetsAtFairvalueThroughOtherComprehensiveIncomeNonCurrent", "透過其他綜合損益按公允價值衡量之金融資產－非流動"],
-    "ac_assets_curr": ["FinancialAssetsAtAmortizedCost", "按攤銷後成本衡量之金融資產－流動"],
-    "ac_assets_noncurr": ["FinancialAssetsAtAmortizedCostNonCurrent", "按攤銷後成本衡量之金融資產－非流動"],
-    "equity_method_investments": ["InvestmentAccountedForUsingEquityMethod", "採用權益法之投資"],
-    "bills_receivable": ["BillsReceivableNet", "應收票據淨額"],
-    "accounts_receivable_only": ["AccountsReceivableNet", "應收帳款淨額"],
-    "inventory": ["Inventories", "Inventory", "存貨"],
-    "prepayments": ["Prepayments", "預付款項"],
-    "total_liabilities": ["Liabilities", "TotalLiabilities", "負債總額", "負債總計"],
-    "current_liabilities": ["CurrentLiabilities", "流動負債合計"],
-    "accounts_payable": ["AccountsPayable", "NotesAndAccountsPayable", "應付帳款"],
-    "other_payables": ["OtherPayables", "其他應付款"],
-    "contract_liabilities": ["CurrentContractLiabilities", "合約負債", "合約負債－流動"],
-    "short_term_debt": ["ShorttermBorrowings", "ShortTermBorrowings", "短期借款"],
-    "long_term_debt": ["LongtermBorrowings", "LongTermBorrowings", "長期借款"],
-    "parent_equity": ["EquityAttributableToOwnersOfParent", "歸屬於母公司業主之權益合計"],
-    "total_equity": ["Equity", "TotalEquity", "權益總額", "權益總計"],
 
-    # ================= 04_現金流量表 (CF - 含業外細項與營運資金變動) =================
-    "operating_cf": [
-        "CashFlowsFromOperatingActivities",
-        "CashProvidedByOperatingActivities",
-        "NetCashInflowFromOperatingActivities",
-        "營業活動之淨現金流入（流出）",
-    ],
-    "investing_cf": [
-        "CashProvidedByInvestingActivities",
-        "CashFlowsProvidedFromInvestingActivities",
-        "CashFlowsFromInvestingActivities",
-        "NetCashUsedInInvestingActivities",
-        "投資活動之淨現金流入（流出）",
-    ],
-    "financing_cf": [
-        "CashFlowsProvidedFromFinancingActivities",
-        "CashProvidedByFinancingActivities",
-        "CashFlowsFromFinancingActivities",
-        "NetCashUsedInFinancingActivities",
-        "籌資活動之淨現金流入（流出）",
-        "融資活動之淨現金流入（流出）",
-    ],
-    "capex": [
-        "PropertyAndPlantAndEquipment",
-        "AcquisitionOfPropertyPlantAndEquipment",
-        "PayTheCashOfPropertyPlantAndEquipment",
-        "取得不動產、廠房及設備",
-        "固定資產(增加)減少",
-    ],
-    "depreciation": ["Depreciation", "DepreciationExpense", "折舊費用"],
-    "amortization": ["Amortization", "AmortizationExpense", "攤銷費用"],
-    "interest_expense_cf": ["InterestExpense", "利息費用", "利息費用提列(迴轉)數"],
-    "interest_income_cf": ["InterestIncome", "利息收入"],
-    "dividend_income_cf": ["DividendIncome", "股利收入", "收取之股利"],
-    "equity_method_cf": [
-        "InvestmentLossIncomeRecognizedUnderEquityMethod",
-        "ShareOfProfitLossOfAssociatesAndJointVenturesAccountedForUsingEquityMethod",
-        "採用權益法認列之關聯企業及合資損失（利益）之份額",
-        "採用權益法認列之關聯企業及合資損失(利益)之份額",
-    ],
-    "cf_change_ar": [
-        "ReceivableIncrease",
-        "AccountsReceivable",
-        "DecreaseIncreaseInAccountsReceivable",
-        "應收帳款（增加）減少",
-        "應收帳款(增加)減少",
-    ],
-    "cf_change_inv": [
-        "InventoryIncrease",
-        "InventoryIncreaseDecrease",
-        "DecreaseIncreaseInInventories",
-        "存貨（增加）減少",
-        "存貨(增加)減少",
-    ],
-    "cf_change_ap": [
-        "AccountsPayable",
-        "IncreaseDecreaseInAccountsPayable",
-        "應付帳款增加（減少）",
-        "應付帳款增加(減少)",
-        "應付帳款",
-    ],
-    "cash_dividends_paid": ["CashDividendsPaid", "發放現金股利"],
+# ACCOUNT_ANCHOR_MAP: 100% aligned with FinMind real output
+ACCOUNT_ANCHOR_MAP: dict[str, AnchorSpec] = {
+    # ================= 02_綜合損益表 (IS) =================
+    "revenue": _a(
+        types=["Revenue", "OperatingRevenue", "NetRevenue"],
+        origins=["營業收入", "營業收入合計", "淨收益"],
+    ),
+    "cost_of_goods_sold": _a(
+        types=["CostOfGoodsSold", "OperatingCosts"],
+        origins=["營業成本", "營業成本合計"],
+    ),
+    "gross_profit": _a(
+        types=["GrossProfit", "NetOperatingMargin"],
+        origins=["營業毛利（毛損）", "營業毛利（毛損）淨額"],
+    ),
+    "operating_expenses": _a(
+        types=["OperatingExpenses", "TotalOperatingExpenses"],
+        origins=["營業費用", "營業費用合計"],
+    ),
+    "operating_income": _a(
+        types=["OperatingIncome", "OperatingProfit"],
+        origins=["營業利益（損失）", "營業淨利（淨損）"],
+    ),
+    "non_op_income_total": _a(
+        types=["TotalNonoperatingIncomeAndExpense", "NonOperatingIncomeAndExpenses"],
+        origins=["營業外收入及支出", "營業外收入及支出合計"],
+    ),
+    "pretax_income": _a(
+        types=["PreTaxIncome", "IncomeBeforeTax"],
+        origins=["稅前淨利（淨損）", "繼續營業單位稅前淨利（淨損）"],
+    ),
+    "income_tax_expense": _a(
+        types=["TAX", "IncomeTaxExpense", "IncomeTaxExpenseContinuingOperations"],
+        origins=["所得稅費用（利益）", "所得稅費用（利益）合計"],
+    ),
+    "net_income_total": _a(
+        types=["IncomeAfterTaxes", "ProfitLoss", "IncomeFromContinuingOperations"],
+        origins=["本期淨利（淨損）", "繼續營業單位本期淨利（淨損）"],
+    ),
+    "net_income_parent": _a(
+        types=["EquityAttributableToOwnersOfParent", "ProfitLossAttributableToOwnersOfParent"],
+        origins=["淨利（淨損）歸屬於母公司業主", "母公司業主（淨利／損）", "歸屬於母公司業主之淨利（損）"],
+    ),
+    "net_income_nci": _a(
+        types=["NoncontrollingInterests"],
+        origins=["淨利（淨損）歸屬於非控制權益", "非控制權益（淨利／損）"],
+    ),
+    "eps": _a(
+        types=["EPS", "BasicEarningsPerShare"],
+        origins=["基本每股盈餘", "基本每股盈餘合計"],
+    ),
+
+    # ================= 03_資產負債表 (BS) =================
+    "cash_and_equiv": _a(
+        types=["CashAndCashEquivalents"],
+        origins=["現金及約當現金", "現金及約當現金合計"],
+    ),
+    "current_assets": _a(
+        types=["CurrentAssets", "TotalCurrentAssets"],
+        origins=["流動資產合計"],
+    ),
+    "ppe_assets": _a(
+        types=["PropertyPlantAndEquipment"],
+        origins=["不動產、廠房及設備"],
+    ),
+    "intangible_assets": _a(
+        types=["IntangibleAssets"],
+        origins=["無形資產"],
+    ),
+    "total_assets": _a(
+        types=["TotalAssets", "Assets"],
+        origins=["資產總額", "資產總計"],
+    ),
+    "total_liabilities": _a(
+        types=["Liabilities", "TotalLiabilities"],
+        origins=["負債總額", "負債總計"],
+    ),
+    "current_liabilities": _a(
+        types=["CurrentLiabilities", "TotalCurrentLiabilities"],
+        origins=["流動負債合計"],
+    ),
+    "capital_stock": _a(
+        types=["CapitalStock", "OrdinaryShare"],
+        origins=["股本合計", "普通股股本"],
+    ),
+    "retained_earnings": _a(
+        types=["RetainedEarnings"],
+        origins=["保留盈餘合計"],
+    ),
+    "parent_equity": _a(
+        types=["EquityAttributableToOwnersOfParent"],
+        origins=["歸屬於母公司業主之權益合計"],
+    ),
+    "total_equity": _a(
+        types=["Equity", "TotalEquity"],
+        origins=["權益總額", "權益總計"],
+    ),
+    "inventory": _a(types=["Inventories", "Inventory"], origins=["存貨", "存貨合計"]),
+    "prepayments": _a(types=["Prepayments", "OtherPrepayments"], origins=["預付款項", "預付款項合計"]),
+
+    # financial assets: current + noncurrent (summed in cache)
+    "fvpl_financial_assets_curr": _a(
+        types=[
+            "CurrentFinancialAssetsAtFairvalueThroughProfitOrLoss",
+            "CurrentFinancialAssetsAtFairValueThroughProfitOrLoss",
+        ],
+        origins=["透過損益按公允價值衡量之金融資產－流動"],
+    ),
+    "fvpl_financial_assets_noncurr": _a(
+        types=[
+            "NonCurrentFinancialAssetsAtFairvalueThroughProfitOrLoss",
+            "NoncurrentFinancialAssetsAtFairValueThroughProfitOrLoss",
+        ],
+        origins=["透過損益按公允價值衡量之金融資產－非流動"],
+    ),
+    "fvoci_financial_assets_curr": _a(
+        types=[
+            "FinancialAssetsAtFairvalueThroughOtherComprehensiveIncome",
+            "CurrentFinancialAssetsAtFairValueThroughOtherComprehensiveIncome",
+        ],
+        origins=["透過其他綜合損益按公允價值衡量之金融資產－流動"],
+    ),
+    "fvoci_financial_assets_noncurr": _a(
+        types=[
+            "FinancialAssetsAtFairvalueThroughOtherComprehensiveIncomeNonCurrent",
+            "NoncurrentFinancialAssetsAtFairValueThroughOtherComprehensiveIncome",
+        ],
+        origins=["透過其他綜合損益按公允價值衡量之金融資產－非流動"],
+    ),
+    "ac_financial_assets_curr": _a(
+        types=[
+            "FinancialAssetsAtAmortizedCost",
+            "CurrentFinancialAssetsAtAmortisedCost",
+            "CurrentFinancialAssetsAtAmortizedCost",
+        ],
+        origins=["按攤銷後成本衡量之金融資產－流動"],
+    ),
+    "ac_financial_assets_noncurr": _a(
+        types=[
+            "FinancialAssetsAtAmortizedCostNonCurrent",
+            "NoncurrentFinancialAssetsAtAmortisedCost",
+            "NoncurrentFinancialAssetsAtAmortizedCost",
+        ],
+        origins=["按攤銷後成本衡量之金融資產－非流動"],
+    ),
+
+    # accounts receivable: notes/bills + accounts (summed in cache)
+    "accounts_receivable_only": _a(
+        types=["AccountsReceivableNet", "NotesAndAccountsReceivableNet"],
+        origins=["應收帳款淨額", "應收帳款"],
+    ),
+    "notes_receivable": _a(
+        types=["BillsReceivableNet", "NotesReceivableNet", "NotesReceivable"],
+        origins=["應收票據淨額", "應收票據"],
+    ),
+
+    # payables
+    "accounts_payable": _a(
+        types=["AccountsPayable", "NotesAndAccountsPayable"],
+        origins=["應付帳款", "應付票據"],
+    ),
+    "other_payables": _a(
+        types=["OtherPayables"],
+        origins=["其他應付款"],
+    ),
+
+    # contract liabilities: current + noncurrent (summed in cache)
+    "contract_liab_curr": _a(
+        types=["CurrentContractLiabilities", "ContractLiabilities_Current"],
+        origins=["合約負債", "合約負債－流動"],
+    ),
+    "contract_liab_noncurr": _a(
+        types=["NoncurrentContractLiabilities"],
+        origins=["合約負債－非流動"],
+    ),
+
+    # interest-bearing debt components
+    "short_term_debt": _a(
+        types=["ShorttermBorrowings", "ShortTermBorrowings", "ShortTermLoans"],
+        origins=["短期借款", "短期借款合計"],
+    ),
+    "bonds_payable": _a(types=["BondsPayable"], origins=["應付公司債", "應付公司債合計"]),
+    "long_term_debt": _a(
+        types=["LongtermBorrowings", "LongTermBorrowings", "LongTermDebt"],
+        origins=["長期借款", "長期借款合計"],
+    ),
+
+    # ================= 04_現金流量表 (CF) =================
+    "depreciation": _a(types=["Depreciation", "DepreciationExpense"], origins=["折舊費用"]),
+    "amortization": _a(types=["AmortizationExpense", "Amortization"], origins=["攤銷費用"]),
+    "interest_income": _a(types=["InterestIncome"], origins=["利息收入"]),
+    "interest_expense": _a(types=["InterestExpense", "PayTheInterest"], origins=["利息費用", "支付之利息"]),
+    "cf_change_ar": _a(
+        types=[
+            "ReceivableIncrease",
+            "DecreaseIncreaseInAccountsReceivable",
+            "DecreaseIncreaseInNotesAndAccountsReceivable",
+        ],
+        origins=["應收帳款（增加）減少", "應收帳款(增加)減少"],
+    ),
+    "cf_change_inv": _a(
+        types=[
+            "InventoryIncrease",
+            "DecreaseIncreaseInInventories",
+            "DecreaseIncreaseInInventory",
+        ],
+        origins=["存貨（增加）減少", "存貨(增加)減少"],
+    ),
+    "cf_change_ap": _a(
+        types=["AccountsPayable", "IncreaseDecreaseInAccountsPayable"],
+        origins=["應付帳款", "應付帳款增加（減少）", "應付帳款增加(減少)"],
+    ),
+    "operating_cf": _a(
+        types=[
+            "CashFlowsFromOperatingActivities",
+            "NetCashInflowFromOperatingActivities",
+            "CashProvidedByOperatingActivities",
+        ],
+        origins=["營業活動之淨現金流入（流出）", "營業活動之淨現金流入"],
+    ),
+    "capex": _a(
+        types=["PropertyAndPlantAndEquipment", "AcquisitionOfPropertyPlantAndEquipment"],
+        origins=["取得不動產、廠房及設備"],
+    ),
+    "investing_cf": _a(
+        types=[
+            "CashProvidedByInvestingActivities",
+            "CashFlowsProvidedFromInvestingActivities",
+            "CashFlowsFromInvestingActivities",
+        ],
+        origins=["投資活動之淨現金流入（流出）"],
+    ),
+    "financing_cf": _a(
+        types=[
+            "CashFlowsProvidedFromFinancingActivities",
+            "CashProvidedByFinancingActivities",
+            "CashFlowsFromFinancingActivities",
+        ],
+        origins=["籌資活動之淨現金流入（流出）", "融資活動之淨現金流入（流出）"],
+    ),
+
+    # debt change components (summed in cache)
+    "cf_debt_st_increase": _a(
+        types=["IncreaseInShortTermLoans", "DecreaseInShortTermLoans"],
+        origins=["短期借款增加", "短期借款減少"],
+    ),
+    "cf_debt_lt_proceeds": _a(types=["ProceedsFromLongTermDebt"], origins=["舉借長期借款"]),
+    "cf_debt_lt_repayments": _a(
+        types=["RepaymentOfLongTermDebt", "RepaymentsOfLongTermDebt"],
+        origins=["償還長期借款"],
+    ),
 }
 
 
@@ -301,6 +486,8 @@ PROMPT_TEMPLATES: dict[str, str] = {
         "- 3 大亮點（含期別與數字）\n"
         "- 2 大風險（含期別與數字）\n"
         "- 深度財務拆解（含本業vs業外歸因、營運資金存貨/應收/應付變化、ROE與自由現金流含金量）\n"
+        "- 股利政策與近期籌碼（外資/投信/自營商）變化重點\n"
+        "- 若有重大新聞，請結合新聞標題作風險/催化劑推論\n"
     ),
     "targeted_qa": (
         "請只針對使用者問題作答，並引用表格內的期別與數字作為佐證。"
