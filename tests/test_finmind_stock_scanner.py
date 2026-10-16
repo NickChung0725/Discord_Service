@@ -137,7 +137,9 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertEqual(config["markets"], ["上市", "上櫃"])
         self.assertEqual(config["max_requests_per_hour"], 540)
         self.assertEqual(config["min_request_interval_seconds"], 6.7)
-        self.assertEqual(len(config["excluded_stocks"]), 19)
+        excluded_ids = {item["stock_id"] for item in config["excluded_stocks"]}
+        self.assertIn("3702A", excluded_ids)
+        self.assertIn("3036A", excluded_ids)
 
     def test_request_limiter_enforces_rolling_hour_across_calls(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

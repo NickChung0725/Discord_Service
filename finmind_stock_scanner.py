@@ -638,7 +638,8 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
     if not isinstance(excluded_stocks, list) or not all(
         isinstance(item, dict)
         and isinstance(item.get("stock_id"), str)
-        and item["stock_id"].isdigit()
+        and item["stock_id"].isascii()
+        and item["stock_id"].isalnum()
         and isinstance(item.get("stock_name"), str)
         and isinstance(item.get("reason"), str)
         for item in excluded_stocks
