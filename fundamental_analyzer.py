@@ -11,8 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import html
+import json
 import os
 from pathlib import Path
+import re
 import xml.etree.ElementTree as ET
 
 import pandas as pd
@@ -43,6 +46,7 @@ class DiagnosisReport:
     war_room_url: str | None
     cached: bool
     cache_period: str | None
+    summary_json: str = ""
 
 
 class FundamentalAnalyzer:
@@ -93,6 +97,8 @@ class FundamentalAnalyzer:
             link = (item.findtext("link") or "").strip()
             pub_date = (item.findtext("pubDate") or "").strip()
             source = (item.findtext("source") or "").strip()
+            description = html.unescape(re.sub(r"<[^>]+>", " ", item.findtext("description") or ""))
+            description = re.sub(r"\s+", " ", description).strip()
             if not title or not link:
                 continue
             items.append(
@@ -101,6 +107,7 @@ class FundamentalAnalyzer:
                     "link": link,
                     "pubDate": pub_date,
                     "source": source,
+                    "description": description,
                 }
             )
             if len(items) >= self.news_max_items:
@@ -125,7 +132,37 @@ class FundamentalAnalyzer:
             lines.append(f"- [{it['title']}]({it['link']}){meta}")
         return "\n".join(lines)
 
-    def build_markdown_context(self, stock_id: str) -> str:
+    _OUTLOOK_KEYWORDS = ("法說", "展望", "訂單", "產能", "資本支出", "毛利率", "營運", "財測", "指引", "能見度")
+
+    def fetch_earnings_call_and_outlook(self, stock_id: str, stock_name: str) -> str:
+        """定向檢索近期法說會/管理層展望報導（純 Python、不耗 AI 額度）。"""
+        title_block = "\n■ 近期法說會與管理層未來展望檢索 (Google News RSS，近 180 天)"
+        query = (
+            f"{stock_name} {stock_id} (法說 OR 展望 OR 訂單 OR 產能 OR 資本支出 OR 毛利率 OR 財測) when:180d"
+        ).strip()
+        try:
+            items = self._fetch_google_news_rss(query)
+        except Exception:
+            return title_block + "\n（近期無公開法說展望：檢索失敗）"
+
+        relevant = [
+            it
+            for it in items
+            if any(k in f"{it.get('title', '')}{it.get('description', '')}" for k in self._OUTLOOK_KEYWORDS)
+        ]
+        if not relevant:
+            return title_block + "\n（近期無公開法說展望：沒有找到相關報導）"
+
+        lines = [title_block, "以下為媒體對管理層說法的報導摘要；請只引用本區內容，不得自行補充展望。"]
+        for it in relevant:
+            meta = f" — {it.get('source', '').strip()} {it.get('pubDate', '').strip()}".rstrip()
+            lines.append(f"- {it['title']}{meta}")
+            description = it.get("description", "").strip()
+            if description and description != it["title"]:
+                lines.append(f"  摘要：{description[:200]}")
+        return "\n".join(lines)
+
+    def build_markdown_context(self, stock_id: str, include_outlook: bool = False) -> str:
         df_wide = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
         df_is = self.cache._read_stock_rows(self.cache._get_worksheet("02_Income_Statement"), stock_id)  # noqa: SLF001
         df_bs = self.cache._read_stock_rows(self.cache._get_worksheet("03_Balance_Sheet"), stock_id)  # noqa: SLF001
@@ -315,6 +352,8 @@ class FundamentalAnalyzer:
 
         if stock_name:
             parts.append(self.fetch_free_stock_news_and_search(stock_id, stock_name))
+            if include_outlook:
+                parts.append(self.fetch_earnings_call_and_outlook(stock_id, stock_name))
 
         return "\n".join(parts)
 
@@ -452,7 +491,13 @@ class FundamentalAnalyzer:
         except Exception:
             return ""
 
-    async def run_full_diagnosis(self, stock_id: str, *, force_ai: bool = False) -> DiagnosisReport:
+    async def run_full_diagnosis(
+        self,
+        stock_id: str,
+        *,
+        force_ai: bool = False,
+        publish_war_room: bool = True,
+    ) -> DiagnosisReport:
         watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
         records = self.cache._get_records_cached(watchlist)  # noqa: SLF001
         row = next(
@@ -460,39 +505,46 @@ class FundamentalAnalyzer:
             None,
         )
 
+        # cache_period 僅由資料水位組成：財報/月營收/股利/籌碼都沒更新時才算同一期。
         cache_period = None
         if row:
             last_fin = str(row.get("last_fin_qtr", "")).strip()
             last_rev = str(row.get("last_rev_ym", "")).strip()
             max_div = str(row.get("max_div_raw_date", "")).strip()
             max_chip = str(row.get("max_chip_raw_date", "")).strip()
-            ai_cache_day = str(row.get("ai_cache_day", "")).strip() or datetime.now(TAIPEI_TIMEZONE).date().isoformat()
             if last_fin and last_rev:
-                cache_period = f"{last_fin}_{last_rev}_{max_div}_{max_chip}_{ai_cache_day}"
+                cache_period = f"{last_fin}_{last_rev}_{max_div}_{max_chip}"
 
-        if row and not force_ai and cache_period and str(row.get("ai_cached_period", "")).strip() == cache_period:
-            ai_summary = str(row.get("ai_summary_json", "")).strip()
+        cached_summary = str(row.get("ai_summary_json", "")).strip() if row else ""
+        cached_period = str(row.get("ai_cached_period", "")).strip() if row else ""
+        if row and not force_ai and cache_period and cached_summary and cached_period == cache_period:
             war_room_url = str(row.get("war_room_url", "")).strip() or None
             return DiagnosisReport(
                 stock_id=stock_id,
-                ai_text=ai_summary or "（已快取但無摘要內容）",
+                ai_text=self._render_summary_text(cached_summary),
                 war_room_url=war_room_url,
                 cached=True,
                 cache_period=cache_period,
+                summary_json=cached_summary,
             )
 
-        context = self.build_markdown_context(stock_id)
+        context = self.build_markdown_context(stock_id, include_outlook=True)
         prompt = (
             context
             + "\n\n==================================================\n"
             + "【任務】\n"
             + PROMPT_TEMPLATES["full_diagnosis"]
         )
-        ai_text = await ask_gemini(prompt)
+        raw_ai_text = await ask_gemini(prompt)
+        human_text, _parsed = self._split_ai_output(raw_ai_text)
 
-        war_room_url = await self.render_and_publish_war_room_html(stock_id, ai_text)
+        war_room_url = None
+        if publish_war_room:
+            war_room_url = await self.render_and_publish_war_room_html(stock_id, human_text)
+        elif row:
+            war_room_url = str(row.get("war_room_url", "")).strip() or None
 
-        summary = self._summarize_ai(ai_text)
+        summary = self._summarize_ai(raw_ai_text)
         self.cache._update_watchlist_master(  # noqa: SLF001
             watchlist,
             stock_id,
@@ -500,16 +552,17 @@ class FundamentalAnalyzer:
                 "ai_cache_day": datetime.now(TAIPEI_TIMEZONE).date().isoformat(),
                 "ai_cached_period": cache_period or "",
                 "ai_summary_json": summary,
-                "war_room_url": war_room_url,
+                "war_room_url": war_room_url or "",
             },
         )
 
         return DiagnosisReport(
             stock_id=stock_id,
-            ai_text=summary,
+            ai_text=human_text[:3800] or self._render_summary_text(summary),
             war_room_url=war_room_url,
             cached=False,
             cache_period=cache_period,
+            summary_json=summary,
         )
 
     async def run_targeted_qa(self, stock_id: str, user_prompt: str) -> str:
@@ -681,9 +734,116 @@ class FundamentalAnalyzer:
         pages_url = upload_to_github(str(file_path), stock_id, filename_suffix="_fund")
         return pages_url
 
-    def _summarize_ai(self, ai_text: str) -> str:
+    _SUMMARY_MARKER = "===SUMMARY_JSON==="
+    _SUMMARY_TEXT_FALLBACK_LIMIT = 2500
+
+    def _split_ai_output(self, ai_text: str) -> tuple[str, dict | None]:
+        """拆出 (人類可讀分析文字, 結構化摘要 dict)；解析失敗時 dict 為 None。"""
         cleaned = ai_text.strip()
-        return cleaned[:1500]
+        if self._SUMMARY_MARKER not in cleaned:
+            return cleaned, None
+        human, _, tail = cleaned.partition(self._SUMMARY_MARKER)
+        match = re.search(r"\{.*\}", tail, flags=re.DOTALL)
+        if match is None:
+            return human.strip(), None
+        try:
+            parsed = json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            return human.strip(), None
+        return human.strip(), parsed if isinstance(parsed, dict) else None
+
+    def _summarize_ai(self, ai_text: str) -> str:
+        """產生寫入 00_Watchlist_Master.ai_summary_json 的內容：優先為結構化 JSON，否則退回較長的純文字。"""
+        human, parsed = self._split_ai_output(ai_text)
+        if parsed is not None:
+            return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        return human[: self._SUMMARY_TEXT_FALLBACK_LIMIT]
+
+    def _parse_summary(self, summary: str) -> dict | None:
+        try:
+            parsed = json.loads(summary)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _render_summary_text(self, summary: str) -> str:
+        """將 ai_summary_json 轉為 Discord 可讀文字；非 JSON（舊格式純文字）則原樣回傳。"""
+        data = self._parse_summary(summary)
+        if data is None:
+            return summary
+        guidance = data.get("guidance") if isinstance(data.get("guidance"), dict) else {}
+        lines = [f"**{data.get('verdict', '')}**（體質評分 {data.get('score', 'N/A')}）"]
+        for label, key in (("亮點", "highlights"), ("風險", "risks")):
+            items = data.get(key) or []
+            if isinstance(items, list) and items:
+                lines.append(f"{label}：")
+                lines.extend(f"- {item}" for item in items)
+        for label, key in (
+            ("ROE/FCF", "fcf_and_roe"),
+            ("股利與籌碼", "chip_and_dividend"),
+            ("技術面", "technical_view"),
+        ):
+            if data.get(key):
+                lines.append(f"{label}：{data[key]}")
+        if guidance:
+            lines.append(
+                f"法說展望【{guidance.get('verdict', '無資料')}】：{guidance.get('claims', '')}"
+                f"｜佐證：{guidance.get('reality_check', '')}"
+            )
+        return "\n".join(lines)
+
+    def build_quant_snapshot(self, stock_id: str) -> str:
+        """由 Google Sheets 快取精確取出最新一期財務/領先指標/籌碼，供跨股決策資料卡 [B] 區使用（不經 AI）。"""
+
+        def _latest(sheet_name: str) -> dict:
+            frame = self.cache._read_stock_rows(self.cache._get_worksheet(sheet_name), stock_id)  # noqa: SLF001
+            if frame.empty:
+                return {}
+            if "raw_date" in frame.columns:
+                frame = frame.sort_values("raw_date")
+            return frame.iloc[-1].to_dict()
+
+        def _fmt(value: object, suffix: str = "") -> str:
+            if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
+                return "N/A"
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return str(value)
+            return f"{number:,.2f}{suffix}"
+
+        wide = _latest("05_AI_Metrics_Wide")
+        revenue = _latest("01_Monthly_Revenue")
+        chip = _latest("07_Chip_Summary")
+
+        lines = [
+            (
+                f"  - 最新財報期別：{wide.get('year_qtr', 'N/A')}｜毛利率：{_fmt(wide.get('gross_margin_pct'), '%')}"
+                f"｜營益率：{_fmt(wide.get('op_margin_pct'), '%')}｜TTM EPS：{_fmt(wide.get('ttm_eps'))}"
+                f"｜ROE：{_fmt(wide.get('parent_roe_pct'), '%')}"
+            ),
+            (
+                f"  - 領先與現金流：合約負債：{_fmt(wide.get('contract_liab_亿元'), ' 億')}"
+                f"｜CapEx：{_fmt(wide.get('capex_亿元'), ' 億')}｜CCC：{_fmt(wide.get('ccc_days'), ' 天')}"
+                f"（DIO {_fmt(wide.get('dio_days'), ' 天')}）｜單季 FCF：{_fmt(wide.get('fcf_亿元'), ' 億')}"
+                f"｜OCF/NI：{_fmt(wide.get('ocf_to_ni_pct'), '%')}"
+            ),
+            (
+                f"  - 償債：淨負債比 {_fmt(wide.get('net_debt_ratio_pct'), '%')}｜速動比 {_fmt(wide.get('quick_ratio_pct'), '%')}"
+                f"｜利息保障倍數 {_fmt(wide.get('interest_coverage'))}"
+            ),
+            (
+                f"  - 最新月營收（{revenue.get('rev_ym', 'N/A')}）：MoM {_fmt(revenue.get('mom_pct'), '%')}"
+                f"｜YoY {_fmt(revenue.get('yoy_pct'), '%')}"
+            ),
+            (
+                f"  - 法人籌碼（{chip.get('trade_week', 'N/A')}）：外資持股 {_fmt(chip.get('foreign_holding_pct'), '%')}"
+                f"（20日 {_fmt(chip.get('foreign_holding_chg_20d'), '%')}）｜外資 5日/20日 {_fmt(chip.get('foreign_net_buy_5d_lots'))}"
+                f"/{_fmt(chip.get('foreign_net_buy_20d_lots'))} 張｜投信 5日/20日 {_fmt(chip.get('trust_net_buy_5d_lots'))}"
+                f"/{_fmt(chip.get('trust_net_buy_20d_lots'))} 張｜三大法人 5日 {_fmt(chip.get('three_inst_net_5d_lots'))} 張"
+            ),
+        ]
+        return "\n".join(lines)
 
     def _escape_html(self, text: str) -> str:
         return (

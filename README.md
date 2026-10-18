@@ -1,143 +1,109 @@
 # Discord_Service — 個人智慧生活與台股量化分析助理
 
-這是一個部署於 **Google Cloud Platform (GCP) Compute Engine** 的全方位 Discord 機器人與台股自動化掃描服務。系統整合了 **FinMind 台股數據分析**、**Plotly 互動式看盤圖表自動發布 (GitHub Pages)**、**Google Gemini AI 智慧問答** 以及 **Open-Meteo 每日氣象推播**，透過 `systemd` 實現 24 小時常駐與每日自動化排程。
+這是一個部署於 **Google Cloud Platform (GCP) Compute Engine** 的全方位 Discord 機器人與台股自動化量化分析服務。系統整合了 **FinMind 台股技術面與基本面數據**、**Google Sheets 10 分頁智慧快取資料庫**、**Plotly 互動式看盤與財報戰情室自動發布 (GitHub Pages)**、**Google Gemini AI 雙層模型智慧診斷** 以及 **Open-Meteo 每日氣象推播**，透過 `systemd` 實現 24 小時常駐與每日雙階段選股排程。
 
 ---
 
-## 核心功能一覽（目前已實作現況）
+## ⏰ 助理的一天：自動化排程時間軸 (Asia/Taipei)
 
-### 1. 台股互動式技術分析圖表 (`/stock`)
-* **即時指標運算**：輸入台股代號（如 `2330`），自動透過 FinMind API 抓取歷史日 K 資料，計算以下核心技術指標：
-  * **均線系統 (MA)**：`17MA`、`45MA`、`117MA`、`189MA`
-  * **動能指標 (KD)**：9 日 RSV，K=3、D=3 平滑移動平均
-  * **趨勢指標 (MACD)**：12 日與 26 日 EMA，9 日訊號線 (Signal) 與柱狀圖 (Histogram)
-  * **量能分析**：成交量與 5 日均量比、漲跌幅與振幅統計
-* **自動發布 GitHub Pages**：使用 Plotly 繪製可縮放、懸停查價的 HTML 互動式 K 線圖，透過 **GitHub Contents API** 自動上傳至指定的 GitHub Pages 分支。
-* **Discord 視覺化圖卡**：於頻道回傳結構化 Embed 摘要（含收盤價、漲跌、各期均線乖離、KD/MACD 狀態）及專屬互動式網頁連結。
-
-### 2. 台股產業均線多頭自動掃描 (`finmind_stock_scanner.py`)
-* **目標產業過濾**：預設鎖定台股五大重點產業進行批次掃描：
-  * `半導體業`、`電子通路業`、`綠能環保`、`航運業`、`電腦及週邊設備業`
-* **多頭排列與糾結篩選**：自動檢視個股是否符合 `17 / 45 / 117 / 189` 均線多頭排列與量價突破訊號。
-* **本地 CSV 報表與 Discord 推播**：
-  * 每次執行自動於本地 `./finmind_reports/` 產出 4 份結構化 CSV 檔案（價格快照 `prices`、技術訊號 `signals`、均線多頭 `alignment_signals`、異常紀錄 `failures`）。
-  * 支援透過 `--post-to-discord` 參數將當日強勢股清單直接推播至指定的 Discord 股票頻道 (`STOCK_CHANNEL_ID`)。
-
-### 3. Gemini AI 智慧助理 (`/ai`)
-* 串接 Google `google-genai` SDK，支援於 Discord 頻道內直接呼叫 Gemini 模型（可由環境變數指定模型版本，如 `gemini-2.5-flash`）進行程式解答、數據分析與日常問答。
-
-### 4. 即時氣象查詢與每日早安推播 (`/weather`)
-* **手動查詢**：透過 `/weather` 串接 Open-Meteo API，即時回傳當前溫度、體感溫度、降雨機率與天氣狀況。
-* **每日定時推播**：於 `bot_server.py` 內建 `discord.ext.tasks` 排程，每日上午 **08:00 (Asia/Taipei)** 自動發送台北地區早安天氣預報至公告頻道 (`ANNOUNCE_CHANNEL_ID`)。
-
-### 5. 台股基本面財報快取 + AI 戰情室 (`/stock_ai`)
-* **Google Sheets 固定 Tabs 快取（共 8 張）**：自動建立/補齊以下分頁（不做每股一張表）：
-  * `00_Watchlist_Master`
-  * `01_Monthly_Revenue`
-  * `02_Income_Statement`
-  * `03_Balance_Sheet`
-  * `04_Cash_Flow`
-  * `05_AI_Metrics_Wide`
-  * `06_Dividend_Policy`
-  * `07_Chip_Summary`
-  
-  > 註：目前程式內 **沒有**使用 `08_*` 工作表（若你在 Sheet 看到 08 分頁，屬於未使用/保留）。
-* **FinMind 水位檢查 + 增量同步（含回補 1 期）**：以各表 `MAX(raw_date)` 判斷是否落後預期水位；需要同步時採增量抓取，並回頭重抓最近 **1 期**（上月/上季）以吸收更正公告或資料源回補；另使用 `FINMIND_PROBE_COOLDOWN_HOURS` 避免空窗期重複探測。
-* **Gemini AI（單股每次必呼叫）**：單股模式下每次 `/stock_ai` 都會重新呼叫 Gemini 產生最新診斷文字（不使用摘要快取）。
-* **Plotly 戰情室頁面**：產生 `{stock_id}_fund.html` 並發布到 GitHub Pages `charts/{stock_id}_fund.html`。
-
-### 6. 伺服器實用工具指令
-* `/ping`：檢測機器人與 Discord 伺服器的連線延遲 (Latency)。
-* `/say`：讓機器人代為發送指定文字訊息。
-* `/roll`：隨機擲骰小工具。
+| 時間 / 頻率 | 任務名稱 | 觸發機制 | 執行內容與產出 |
+| :--- | :--- | :--- | :--- |
+| **每 6 小時** | **伺服器存活心跳** | `bot_server.py` (`scheduled_task`) | 向 `GCP_VM_SERVER_CHANNEL_ID` 發送系統時間心跳通知，確認 GCP VM 與 Bot 正常運作。 |
+| **每日 08:00** | **台北早安氣象報** | `bot_server.py` (`daily_weather_task`) | 串接 Open-Meteo API，自動推播當日台北即時溫度、體感、高低溫、降雨機率與紫外線指數至 `ANNOUNCE_CHANNEL_ID`。 |
+| **週一至週五 19:00** | **第一階段：台股五線均線強勢掃描** | `systemd` (`finmind-scan.timer`) | 掃描五大重點產業日 K 線，篩選符合 `MA3 >= 各線`、`MA45 > MA117 > MA189` 且 `MA45` 已超過或接近 `MA17` (`<=1%`) 之強勢股：<br>1. 產出本地 `daily/{date}_alignment_signals.csv` 等 4 份報表<br>2. 同步至 Google Sheets `MA_Signal_Tracker`（自動計算「🆕當日新進」、「連續天數」、「17MA近期走勢」並自動條件上色）<br>3. 推播均線強勢股清單至 `STOCK_CHANNEL_ID`。 |
+| **週一至週五 22:00** | **第二階段：強勢股財報＋法說會驗證＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **增量同步財報與籌碼**：自動補齊月營收、三大財報、衍生財務比率、股利與法人買賣超<br>2. **法說展望擷取與吹牛檢測 (`gemini-flash-lite-latest`)**：定向檢索近 180 天法說會報導，並以合約負債、CapEx、存貨週轉、月營收與法人籌碼交叉佐證真實性，產出結構化 `ai_summary_json`<br>3. **跨股總決策嚴選 (`gemini-3.8-flash`)**：綜合基本面(40%)＋均線位階(35%)＋籌碼(25%)評選出 Top 進場標的、觀察名單與排雷名單<br>4. 寫入 `08_AI_Daily_Picks`、本地 JSON/MD，並為入選股發布財報戰情室網頁後推播至 `STOCK_CHANNEL_ID`。 |
 
 ---
 
-## 專案目錄結構
+## 💬 Discord 互動斜線指令一覽 (Slash Commands)
+
+| 指令 | 參數說明 | 功能與產出說明 |
+| :--- | :--- | :--- |
+| **`/stock`** | `stock_id` (如 `2330`) | **【技術面互動 K 線圖】**<br>抓取 FinMind 日 K 與 Yahoo Finance 成交量，計算 `MA(17,45,117,189)`、`KD(9,3,3)`、`MACD(12,26,9)`，繪製 Plotly 互動式 HTML 圖表 (`charts/{stock_id}.html`) 自動上傳 GitHub Pages，並於 Discord 回傳看盤摘要卡片。 |
+| **`/stock_ai`** | `symbol` (單股如 `2357` 或多股如 `2357,2330`，最多 4 檔)<br>`prompt` (選填，特定問題)<br>`force_refresh` (選填，預設 `False`) | **【基本面財報＋籌碼＋法說展望 AI 戰情室】**<br>• **單股無 prompt**：執行完整體質診斷（0~100 評分、3 大亮點、2 大風險、三率/CCC/FCF 拆解、股利與法人籌碼、表 7 均線觀察、法說展望佐證），發布互動式財報戰情室 (`charts/{stock_id}_fund.html`)，並附帶 **「📊 開啟 AI 財報圖文戰情室」、「📈 開啟技術面互動 K 線圖」、「🔄 重新呼叫 AI 分析」** 三顆互動按鈕。<br>• **單股有 prompt**：針對使用者問題引用財報表格期別與數字進行專題解答。<br>• **多股模式 (`2357,2330`)**：自動提取多檔股票財報表格進行跨股橫向比較與優劣排序。 |
+| **`/ai`** | `prompt` (問題內容) | **【Gemini AI 萬用問答】**<br>呼叫 Google Gemini 模型回答各式投資、程式或日常問題（超過 2,000 字自動分段回覆）。 |
+| **`/weather`** | 無 | **【台北即時天氣查詢】**<br>即時查詢 Open-Meteo 台北地區氣溫、體感、天氣狀況、風速、降雨機率與今日紫外線。 |
+| **`/card`** | 無 | **【系統狀態卡片】** 顯示機器人名稱、API 延遲 (ms) 與伺服器成員數。 |
+| **`/ping`** | 無 | **【連線延遲測試】** 回應 `Pong! 🏓` 與毫秒延遲（或在頻道直接輸入文字 `ping`）。 |
+| **`/say`** | `message` | **【文字複誦】** 讓機器人代為發送指定訊息。 |
+| **`/roll`** | `max_number` (預設 100) | **【隨機擲骰】** 擲出 `1 ~ max_number` 之間的隨機數字。 |
+| **`/buttons`** | 無 | **【互動按鈕測試】** 發送包含按讚與警告按鈕之互動元件。 |
+
+---
+
+## 🗄️ Google Sheets 智慧快取資料庫架構 (共 10 張工作表)
+
+系統採用 Google Sheets 作為雲端結構化資料庫（定義於 [`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py) 的 `SHEET_SCHEMAS`），自動建立並維護以下 10 張分頁：
+
+| 分頁名稱 | 定位與儲存內容 | 更新時機與快取策略 |
+| :--- | :--- | :--- |
+| **`00_Watchlist_Master`** | **主控索引與 AI 快取表**：記錄股名、產業、各表最新資料水位 (`last_rev_ym`, `last_fin_qtr`, `max_div_raw_date`, `max_chip_raw_date`)、探測冷卻時間 (`last_probe_at`)、結構化 `ai_summary_json` 與 `war_room_url`。 | 每次 `/stock_ai` 或 22:00 批次分析時自動維護。 |
+| **`01_Monthly_Revenue`** | **月營收動能表**：單月營收、`mom_pct` (月增率)、`yoy_pct` (年增率)。 | 依每月 10 日法定水位增量抓取（自動回頭重抓 1 期以吸收更正公告）。 |
+| **`02_Income_Statement`** | **綜合損益表 (單季)**：營收、成本、毛利、營業費用、營業利益、業外收支、稅前/稅後淨利、母公司淨利、EPS。 | 依法定財報截止日（5/15、8/14、11/14、3/31）增量抓取（回補 1 季）。 |
+| **`03_Balance_Sheet`** | **資產負債表 (季底)**：現金、金融資產、應收帳款、存貨、不動產廠房設備(PPE)、短長期借款、合約負債、應付帳款、股本、保留盈餘、權益總額（含資產=負債+權益自動驗算）。 | 同季報水位增量同步。 |
+| **`04_Cash_Flow`** | **現金流量表 (自動累季轉單季)**：自動將 FinMind Q2/Q3/Q4 累計值拆解為**單季真實流量**（含折舊攤銷、AR/存貨/AP 營運資金變動、營業現金流 OCF、資本支出 CapEx、自由現金流 FCF）。 | 同季報水位增量同步。 |
+| **`05_AI_Metrics_Wide`** | **AI 衍生財務比率寬表**：後端 Pandas 精確算妥之毛利率、費用率、營益率、業外佔比、淨利率、TTM EPS、年化 ROE、DIO/DSO/DPO/CCC 週轉天數、OCF/NI 含金量、EBITDA、淨負債比、流動/速動比、利息保障倍數。 | 每次季報更新時由系統後端自動重算寫入（嚴禁 AI 自行心算）。 |
+| **`06_Dividend_Policy`** | **歷年股利政策表**：民國年自動轉西元年、現金股利、股票股利、總股利、現金股利總額(億)、年度 EPS、配息率 (`payout_ratio_pct`)、除息日。 | 30 天 TTL 增量更新。 |
+| **`07_Chip_Summary`** | **三大法人與外資籌碼表**：外資持股比例、20 日持股變化、外資/投信/自營商及三大法人合計之近 5 日與近 20 日買賣超（張）。 | 每日 TTL（>= 1 天）增量更新。 |
+| **`MA_Signal_Tracker`** | **19:00 均線強勢股追蹤表**：記錄每日符合五線排列之個股、標註「🆕 是（新進榜）/ 🔄 否（持續符合）」、「連續天數」、「每日執行狀況（如 🔥 轉強突破）」、「17MA 近期走勢」並自動套用條件格式底色。 | 每日 19:00 `scan-all` 自動同步。 |
+| **`08_AI_Daily_Picks`** | **22:00 AI 嚴選進場歷史追蹤表**：記錄每日 AI 評選之 `TOP_PICK`、`WATCHLIST`、`AVOID` 清單、推薦當下收盤價、17MA/45MA 支撐價、單股財報分、總決策推薦分、法說展望評級與進場理由，供長期回測勝率。 | 每日 22:00 `analyze-alignment` 自動寫入。 |
+
+---
+
+## 📁 專案目錄結構
 
 ```text
 Discord_Service/
-├── bot_server.py               # [主程式] 綁定特定伺服器 (Guild) 之完整版機器人（含 Slash 指令與每日 08:00 天氣排程）
-├── finmind_stock_scanner.py    # [掃描器] 台股五大產業均線與技術指標批次掃描腳本（支援 CLI 與 Discord 推播）
-├── bot.py                      # [備用入口] 全域 (Global) Slash 指令版機器人入口
-├── stock_bot.py                # [開發測試] 獨立測試股票圖表生成與 GitHub Pages 上傳之腳本
-├── TEST.PY                     # [連線測試] 驗證 Gemini API Key 與模型回應之最小化測試腳本
-├── .env                        # [環境變數] 存放 API Keys、Tokens 與頻道 ID（不納入版控）
-├── requirements.txt            # [相依套件] Python 執行環境套件清單
-├── deploy/                     # [部署設定] Linux systemd 常駐與定時任務設定檔範本
-│   ├── finmind-scan.service    # 產業掃描單次執行服務定義檔
-│   └── finmind-scan.timer      # 每日 00:00 定時觸發掃描之 Timer 設定檔
-└── finmind_reports/            # [輸出目錄] 存放每日掃描產出的 CSV 報表檔案
+├── bot_server.py               # [Bot 主程式] 綁定伺服器 (Guild) 之機器人入口（含 Slash 指令、08:00 天氣與 6h 心跳排程）
+├── bot.py                      # [技術面指令] /stock 指令註冊與獨立啟動入口
+├── stock_ai_command.py         # [基本面指令] /stock_ai 指令註冊（支援單股診斷、專題問答、多股比較與戰情室互動按鈕）
+├── chart_generator.py          # [技術面圖表] FinMind 日 K + Yahoo 成交量 + MA/KD/MACD Plotly 互動圖表生成器
+├── fundamental_config.py       # [結構與Prompt] SASD v3.2.0 10 張 Google Sheets Schema、會計科目錨點與 AI Prompt 模板
+├── fundamental_cache.py        # [財報快取引擎] Google Sheets 增量同步、累季轉單季、衍生指標計算与批次記憶體快取管理
+├── fundamental_analyzer.py     # [單股分析引擎] 滑動視窗切片、7 大財報表+新聞+法說展望檢索、結構化 ai_summary_json 與戰情室發布
+├── finmind_stock_scanner.py    # [19:00 掃描器] 五線均線 (MA3/17/45/117/189) 批次掃描、SQLite 限流器、MA_Signal_Tracker 同步與 CLI 入口
+├── alignment_ai_picker.py      # [22:00 選股器] 訊號股預篩、批次財報同步、雙層模型 (Flash-Lite + 3.8-Flash) 跨股決策與推播
+├── ai_weather.py               # [AI 與氣象] Gemini API 呼叫封裝（含雙層模型指定與 429 自動降級 Fallback）與 Open-Meteo 天氣報表
+├── github_uploader.py          # [網頁發布器] 透過 GitHub Contents API 將 HTML 圖表與戰情室上傳至 GitHub Pages
+├── finmind_scanner.json        # [掃描設定檔] 掃描市場/產業、排除清單、API 速率限制、19:00 與 22:00 排程開關設定
+├── deploy/                     # [systemd 部署] Linux 常駐與定時排程設定檔
+│   ├── finmind-scan.service    # 19:00 均線掃描服務
+│   ├── finmind-scan.timer      # 週一至週五 19:00 定時器
+│   ├── finmind-ai-pick.service # 22:00 AI 財報分析與選股服務
+│   └── finmind-ai-pick.timer   # 週一至週五 22:00 定時器
+├── tests/                      # [單元測試] 涵蓋氣象/AI、均線掃描、財報快取、單股分析與 22:00 AI 選股之自動化測試
+├── CHANGELOG.md                # [變更日誌] 記錄每次功能迭代與架構演進歷史
+└── agent.md                    # [AI 開發守則] 記錄本地 uv 環境路徑與文件自動同步規範
 ```
 
 ---
 
-## 環境需求與安裝步驟
-
-### 1. 系統與 Python 環境
-* **作業系統**：Debian / Ubuntu Linux（推薦部署於 GCP Compute Engine e2-micro 免費方案）或 Windows/macOS 本地開發環境
-* **Python 版本**：Python 3.10 以上
-
-### 2. 建立虛擬環境並安裝套件
-
-```bash
-# 進入專案目錄
-cd ~/Discord_Service
-
-# 建立 Python 虛擬環境
-python3 -m venv .venv
-
-# 啟用虛擬環境 (Linux / macOS)
-source .venv/bin/activate
-
-# 安裝相依套件
-pip install -r requirements.txt
-```
-
-*(若尚未建立 `requirements.txt`，核心依賴包含：`discord.py`、`python-dotenv`、`requests`、`pandas`、`plotly`、`google-genai`、`FinMind`。)*
-
----
-
-## 環境變數設定 (`.env`)
-
-請於專案根目錄建立 `.env` 檔案，並填入以下設定值：
+## ⚙️ 環境變數設定 (`.env`)
 
 ```ini
-# ==========================================
-# 1. Discord Bot 設定
-# ==========================================
+# 1. Discord Bot 與頻道設定
+BOT_TOKEN=你的_Discord_Bot_Token
 DISCORD_TOKEN=你的_Discord_Bot_Token
+GUILD_ID=你的_Discord_伺服器_ID
+ANNOUNCE_CHANNEL_ID=每日08:00天氣推播頻道ID
+STOCK_CHANNEL_ID=每日19:00與22:00股票推播頻道ID
+GCP_VM_SERVER_CHANNEL_ID=每6小時心跳通知頻道ID
 
-# 每日 08:00 早安天氣推播目標頻道 ID
-ANNOUNCE_CHANNEL_ID=123456789012345678
-
-# 每日 00:00 FinMind 產業掃描報告推播頻道 ID
-STOCK_CHANNEL_ID=123456789012345678
-
-# ==========================================
-# 2. Google Gemini AI 設定
-# ==========================================
+# 2. Google Gemini AI 設定（雙層模型分工）
 GEMINI_API_KEY=你的_Gemini_API_Key
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-flash-lite-latest
 
-# ==========================================
 # 3. FinMind 台股數據 API 設定
-# ==========================================
 FINMIND_API_TOKEN=你的_FinMind_API_Token
 
-# ==========================================
 # 4. GitHub Pages 圖表自動發布設定
-# ==========================================
-GITHUB_TOKEN=你的_GitHub_Fine_Grained_PAT
+GITHUB_TOKEN=你的_GitHub_PAT
 GITHUB_REPO=你的帳號/你的儲存庫名稱
-GITHUB_BRANCH=gh-pages
+GITHUB_BRANCH=main
 
-# ==========================================
-# 5. Google Sheets 財報快取資料庫設定 (/stock_ai)
-# ==========================================
-GOOGLE_APPLICATION_CREDENTIALS=/home/你的帳號/Discord_Service/service_account.json
+# 5. Google Sheets 財報快取資料庫設定
+GOOGLE_APPLICATION_CREDENTIALS=sheetbot.json
 GSHEET_SPREADSHEET_ID=你的_Google_Sheet_ID
-
 FINMIND_PROBE_COOLDOWN_HOURS=6
 AI_WINDOW_QUARTERS=8
 AI_WINDOW_MONTHS=12
@@ -145,95 +111,47 @@ CHART_WINDOW_QUARTERS=16
 CHART_WINDOW_MONTHS=36
 ```
 
-> **注意**：`bot_server.py` 頂端設有 `GUILD_ID` 常數，部署至新 Discord 伺服器時，請確認將其修改為你的 Discord 伺服器 ID，以確保 Slash 指令能立即同步生效。
-
 ---
 
-## 執行與使用方式
+## 🚀 常用執行與測試指令
 
-### 1. 啟動 Discord 機器人主服務
+### 1. 本機 Windows PowerShell 開發與測試
 
-```bash
-source .venv/bin/activate
-python bot_server.py
+```powershell
+# 設定此專案的 uv 虛擬環境與 UTF-8 輸出編碼
+$env:UV_PROJECT_ENVIRONMENT = "C:\Users\Hung-PC\.venvs\Discord_Service"
+$env:PYTHONIOENCODING = "utf-8"
+
+# 執行完整單元測試
+uv run python -m unittest discover -s tests
+
+# 手動執行 19:00 全產業均線掃描
+uv run python finmind_stock_scanner.py scan-all --config finmind_scanner.json
+
+# 手動預覽 22:00 AI 財報選股（--dry-run 不寫入 08 表、不推播 Discord，僅印在終端機）
+uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD --dry-run
+
+# 正式執行 22:00 AI 財報選股並推播至 Discord 與 Google Sheets
+uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD
 ```
 
-啟動成功後，即可在 Discord 頻道內使用以下 Slash 指令：
-* `/stock stock_id:2330` — 產生台積電 (2330) 互動式技術分析 K 線圖並取得 GitHub Pages 網址
-* `/stock_ai symbol:2330` — 產生台積電 (2330) 基本面財報快取 + AI 診斷（並發布基本面戰情室到 GitHub Pages）
-* `/stock_ai symbol:2330 prompt:為什麼最新一季自由現金流減少？` — 針對該股做財報專題追問
-* `/ai prompt:請幫我解釋 KD 指標鈍化的意義` — 呼叫 Gemini AI 進行解答
-* `/weather` — 查詢台北即時天氣狀況
-* `/ping`、`/say`、`/roll` — 基礎互動指令
-
-### 2. 手動執行 FinMind 台股產業掃描
+### 2. GCP Linux VM 部署與 `systemd` 排程管理
 
 ```bash
-source .venv/bin/activate
-
-# 執行預設五大產業掃描，並將結果推播至 Discord STOCK_CHANNEL_ID
-python finmind_stock_scanner.py --post-to-discord
-
-# 指定特定市場或單一產業進行掃描（不推播至 Discord，僅輸出本地 CSV）
-python finmind_stock_scanner.py --market twse --industry 半導體業
-```
-
-掃描完成後，會在 `./finmind_reports/` 目錄下生成當日 CSV 報表：
-* `finmind_prices_YYYYMMDD.csv`（個股收盤與量價快照）
-* `finmind_signals_YYYYMMDD.csv`（全市場技術指標訊號）
-* `finmind_alignment_signals_YYYYMMDD.csv`（符合 17/45/117/189 均線多頭排列之標的）
-* `finmind_failures_YYYYMMDD.csv`（API 抓取失敗或資料不足之紀錄）
-
----
-
-## GCP VM 自動化部署與 `systemd` 維運
-
-在 GCP Linux VM 上，本專案透過 `systemd` 實現「機器人 24 小時背景常駐」與「每日 00:00 自動化選股掃描」。
-
-### 1. 部署每日 00:00 產業掃描排程 (`finmind-scan`)
-
-將 `deploy/` 目錄下的設定檔複製至系統目錄並啟用 Timer：
-
-```bash
+# 1. 部署 19:00 均線掃描與 22:00 AI 選股排程
 sudo cp ~/Discord_Service/deploy/finmind-scan.service /etc/systemd/system/
 sudo cp ~/Discord_Service/deploy/finmind-scan.timer /etc/systemd/system/
+sudo cp ~/Discord_Service/deploy/finmind-ai-pick.service /etc/systemd/system/
+sudo cp ~/Discord_Service/deploy/finmind-ai-pick.timer /etc/systemd/system/
 
-# 重新載入 systemd 並啟用每日排程
 sudo systemctl daemon-reload
 sudo systemctl enable --now finmind-scan.timer
+sudo systemctl enable --now finmind-ai-pick.timer
 
-# 檢查排程下次觸發時間
-systemctl list-timers --all | grep finmind-scan
+# 2. 檢查所有排程下次觸發時間
+systemctl list-timers --all | grep finmind
 
-# 手動測試觸發一次掃描任務並查看即時 Log
-sudo systemctl start finmind-scan.service
+# 3. 查看排程執行日誌
 journalctl -u finmind-scan.service -n 50 -f
+journalctl -u finmind-ai-pick.service -n 50 -f
 ```
-
-### 2. 常用 Discord Bot 常駐服務管理指令
-
-若已將 `bot_server.py` 配置為系統常駐服務（如 `discordbot.service`），可使用以下指令維護：
-
-```bash
-# 查看機器人運行狀態
-sudo systemctl status discordbot.service
-
-# 修改程式碼或 .env 後重啟機器人
-sudo systemctl restart discordbot.service
-
-# 查看即時執行日誌
-journalctl -u discordbot.service -f
-
-# 一鍵更新改版部署
-cd ~/Discord_Service && git pull && uv sync && sudo systemctl restart discordbot
-
-# 停止機器人服務
-sudo systemctl stop discordbot
-```
-
----
-
-## 未來架構演進規劃 (Roadmap)
-
-* **專案入口與模組重構**
-  * 整合 `bot.py`、`stock_bot.py` 與 `bot_server.py`，將共用看盤圖表邏輯抽離為獨立模組，保留單一主程式入口以降低維護成本。

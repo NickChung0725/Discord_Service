@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -130,7 +131,26 @@ async def get_weather_report() -> str:
     return format_weather_report(data)
 
 
-def _generate_ai_response(prompt: str) -> str:
+DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+_RETRYABLE_ERROR_MARKERS = (
+    "429",
+    "503",
+    "500",
+    "resource_exhausted",
+    "unavailable",
+    "overloaded",
+    "quota",
+    "rate limit",
+)
+_TRANSIENT_RETRY_DELAYS_SECONDS = (3.0, 6.0, 12.0)
+
+
+def _is_retryable_gemini_error(error: BaseException) -> bool:
+    text = f"{type(error).__name__} {error}".lower()
+    return any(marker in text for marker in _RETRYABLE_ERROR_MARKERS)
+
+
+def _generate_ai_response(prompt: str, model: str | None = None) -> str:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise MissingGeminiApiKeyError("GEMINI_API_KEY is not configured.")
@@ -145,7 +165,7 @@ def _generate_ai_response(prompt: str) -> str:
     
     # answer = response.text
     response = client.interactions.create(
-        model=os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest"),
+        model=model or os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
         input=prompt,
     )
     answer = response.output_text
@@ -154,8 +174,46 @@ def _generate_ai_response(prompt: str) -> str:
     return answer
 
 
-async def ask_gemini(prompt: str) -> str:
-    return await asyncio.to_thread(_generate_ai_response, prompt)
+def _generate_with_fallback(
+    prompt: str, model: str | None, fallback_model: str | None
+) -> str:
+    """Call `model`; on quota/overload errors degrade to `fallback_model` (with backoff)."""
+    try:
+        return _generate_ai_response(prompt, model)
+    except MissingGeminiApiKeyError:
+        raise
+    except Exception as error:  # noqa: BLE001
+        if not fallback_model or not _is_retryable_gemini_error(error):
+            raise
+        logger.warning(
+            "Gemini model %s unavailable (%s); falling back to %s.",
+            model,
+            error,
+            fallback_model,
+        )
+
+    for delay in (*_TRANSIENT_RETRY_DELAYS_SECONDS, None):
+        try:
+            return _generate_ai_response(prompt, fallback_model)
+        except MissingGeminiApiKeyError:
+            raise
+        except Exception as error:  # noqa: BLE001
+            if delay is None or not _is_retryable_gemini_error(error):
+                raise
+            time.sleep(delay)
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+async def ask_gemini(
+    prompt: str,
+    *,
+    model: str | None = None,
+    fallback_model: str | None = None,
+) -> str:
+    """Ask Gemini. `model` overrides GEMINI_MODEL; `fallback_model` enables quota fallback."""
+    if model is None and fallback_model is None:
+        return await asyncio.to_thread(_generate_ai_response, prompt)
+    return await asyncio.to_thread(_generate_with_fallback, prompt, model, fallback_model)
 
 
 def _discord_messages(text: str) -> list[str]:
