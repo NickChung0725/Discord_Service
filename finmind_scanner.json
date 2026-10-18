@@ -252,5 +252,12 @@
   "sync_signals_to_gsheet": true,
   "gsheet_tab_name": "MA_Signal_Tracker",
   "output_directory": "finmind_reports",
-  "local_retention_days": 30
+  "local_retention_days": 30,
+  "ai_picker_max_candidates": 25,
+  "ai_picker_max_top_picks": 5,
+  "ai_picker_portfolio_model": "gemini-3.8-flash",
+  "ai_picker_call_interval_seconds": 4.5,
+  "publish_war_room_for_all_candidates": false,
+  "post_ai_picks_to_discord": true,
+  "save_ai_picks_to_gsheet": true
 }

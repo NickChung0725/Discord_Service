@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -9,9 +10,8 @@ from fundamental_analyzer import FundamentalAnalyzer
 class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_diagnosis_uses_cached_summary_when_period_matches(self) -> None:
         cache = Mock()
-        cache._spreadsheet = Mock()  # noqa: SLF001
-        watchlist = Mock()
-        watchlist.get_all_records.return_value = [
+        cache._get_worksheet.return_value = Mock()  # noqa: SLF001
+        cache._get_records_cached.return_value = [  # noqa: SLF001
             {
                 "stock_id": "2330",
                 "last_fin_qtr": "2026Q2",
@@ -19,12 +19,11 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
                 "max_div_raw_date": "2026-08-01",
                 "max_chip_raw_date": "2026-10-14",
                 "ai_cache_day": "2026-10-16",
-                "ai_cached_period": "2026Q2_2026-09_2026-08-01_2026-10-14_2026-10-16",
+                "ai_cached_period": "2026Q2_2026-09_2026-08-01_2026-10-14",
                 "ai_summary_json": "cached summary",
                 "war_room_url": "https://example.invalid/2330_fund.html",
             }
         ]
-        cache._spreadsheet.worksheet.return_value = watchlist
 
         analyzer = FundamentalAnalyzer(cache)
         with patch("fundamental_analyzer.ask_gemini", new_callable=AsyncMock) as mock_ask:
@@ -34,6 +33,34 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report.cached)
         self.assertEqual(report.ai_text, "cached summary")
         self.assertEqual(report.war_room_url, "https://example.invalid/2330_fund.html")
+
+    async def test_full_diagnosis_reruns_when_cached_summary_is_empty(self) -> None:
+        cache = Mock()
+        cache._get_worksheet.return_value = Mock()  # noqa: SLF001
+        cache._get_records_cached.return_value = [  # noqa: SLF001
+            {
+                "stock_id": "2330",
+                "last_fin_qtr": "2026Q2",
+                "last_rev_ym": "2026-09",
+                "max_div_raw_date": "2026-08-01",
+                "max_chip_raw_date": "2026-10-14",
+                "ai_cached_period": "2026Q2_2026-09_2026-08-01_2026-10-14",
+                "ai_summary_json": "",
+            }
+        ]
+        analyzer = FundamentalAnalyzer(cache)
+        raw = 'text\n===SUMMARY_JSON===\n{"verdict":"v","score":70}'
+        with patch.object(analyzer, "build_markdown_context", return_value="ctx"), patch(
+            "fundamental_analyzer.ask_gemini", new_callable=AsyncMock, return_value=raw
+        ) as mock_ask:
+            report = await analyzer.run_full_diagnosis("2330", publish_war_room=False)
+
+        mock_ask.assert_awaited_once()
+        self.assertFalse(report.cached)
+        self.assertEqual(report.ai_text, "text")
+        self.assertEqual(json.loads(report.summary_json)["score"], 70)
+        updates = cache._update_watchlist_master.call_args.args[2]  # noqa: SLF001
+        self.assertEqual(updates["ai_cached_period"], "2026Q2_2026-09_2026-08-01_2026-10-14")
 
     def test_build_latest_ma_context_reads_local_prices_csv_or_skips_when_missing(self) -> None:
         import tempfile

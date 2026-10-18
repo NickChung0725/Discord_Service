@@ -134,7 +134,11 @@ class FinMindRequestLimiter:
 
 
 @contextmanager
-def _rate_limit_finmind_http_requests(limiter: FinMindRequestLimiter):
+def _rate_limit_finmind_http_requests(
+    limiter: FinMindRequestLimiter,
+    only_hosts: tuple[str, ...] | None = None,
+):
+    """Throttle HTTP requests. If `only_hosts` is given, only matching URLs consume the budget."""
     original_send = requests.adapters.HTTPAdapter.send
 
     def rate_limited_send(
@@ -143,7 +147,8 @@ def _rate_limit_finmind_http_requests(limiter: FinMindRequestLimiter):
         *args: object,
         **kwargs: object,
     ) -> requests.Response:
-        limiter.wait_for_slot()
+        if only_hosts is None or any(host in (request.url or "") for host in only_hosts):
+            limiter.wait_for_slot()
         return original_send(adapter, request, *args, **kwargs)
 
     requests.adapters.HTTPAdapter.send = rate_limited_send
@@ -1529,7 +1534,7 @@ def _cleanup_old_daily_reports(
 ) -> None:
     cutoff = as_of - timedelta(days=retention_days)
     filename_pattern = re.compile(
-        r"^\d{4}-\d{2}-\d{2}_(prices|signals|alignment_signals|failures)\.csv$"
+        r"^\d{4}-\d{2}-\d{2}_((prices|signals|alignment_signals|failures)\.csv|ai_recommendations\.(json|md))$"
     )
     for path in daily_directory.iterdir():
         match = filename_pattern.fullmatch(path.name)
@@ -1742,6 +1747,20 @@ def _make_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="停用將 signals.csv 同步寫入 Google Sheets MA_Signal_Tracker",
     )
+
+    analyze_parser = subparsers.add_parser(
+        "analyze-alignment",
+        help="22:00 流程：對當日 alignment_signals 做財報/法說分析並由 AI 嚴選進場標的",
+    )
+    analyze_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("finmind_scanner.json"),
+        help="JSON 設定檔路徑（預設：finmind_scanner.json）",
+    )
+    analyze_parser.add_argument("--date", help="指定分析日期 YYYY-MM-DD（預設今日）")
+    analyze_parser.add_argument("--force-ai", action="store_true", help="忽略單股 AI 快取，強制重新診斷")
+    analyze_parser.add_argument("--dry-run", action="store_true", help="不寫入 Sheets、不推播 Discord，只輸出結果")
     return parser
 
 
@@ -1752,6 +1771,16 @@ def main(argv: list[str] | None = None) -> int:
     api_token = os.getenv("FINMIND_API_TOKEN", "").strip()
 
     try:
+        if args.command == "analyze-alignment":
+            from alignment_ai_picker import run_from_cli
+
+            return run_from_cli(
+                config_path=args.config,
+                target_date=args.date,
+                force_ai=args.force_ai,
+                dry_run=args.dry_run,
+            )
+
         if args.command == "scan-all":
             config = load_scan_config(args.config)
             output_dir = args.output_dir or Path(config["output_directory"])

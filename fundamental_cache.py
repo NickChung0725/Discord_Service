@@ -254,6 +254,7 @@ class FundamentalCacheManager:
         self._records_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._headers_cache: dict[str, list[str]] = {}
         self._cache_ttl: float = 90.0
+        self.batch_mode: bool = False
 
     def _gspread_call(self, func, *args, **kwargs):
         """包裝所有 gspread API 呼叫，遇到 429 / 5xx 自動指數退避重試。"""
@@ -603,7 +604,6 @@ class FundamentalCacheManager:
                 "last_fin_qtr": last_fin_qtr or "",
                 "max_div_raw_date": max_div_raw_date_str or "",
                 "max_chip_raw_date": max_chip_raw_date_str or "",
-                "ai_cache_day": today.isoformat(),
                 "last_probe_at": now.isoformat(timespec="seconds"),
                 "last_accessed_at": now.isoformat(timespec="seconds"),
             },
@@ -634,7 +634,10 @@ class FundamentalCacheManager:
         row = [""] * len(headers)
         row[0] = stock_id
         self._gspread_call(watchlist.append_row, row)
-        self._invalidate_cache(watchlist.title)
+        if self.batch_mode and watchlist.title in self._records_cache:
+            self._patch_records_cache(watchlist.title, list(headers), {}, [row])
+        else:
+            self._invalidate_cache(watchlist.title)
         return {"stock_id": stock_id}
 
     def _get_stock_basic_info(self, stock_id: str) -> tuple[str, str]:
@@ -933,7 +936,10 @@ class FundamentalCacheManager:
             range_name=row_range,
             values=[row_values],
         )
-        self._invalidate_cache(watchlist.title)
+        if self.batch_mode and watchlist.title in self._records_cache:
+            self._patch_records_cache(watchlist.title, headers, {found_row: row_values}, [])
+        else:
+            self._invalidate_cache(watchlist.title)
 
     def _read_stock_rows(self, worksheet: gspread.Worksheet, stock_id: str) -> pd.DataFrame:
         records = self._get_records_cached(worksheet)
@@ -1460,4 +1466,36 @@ class FundamentalCacheManager:
         if append_rows:
             self._gspread_call(worksheet.append_rows, append_rows, value_input_option="USER_ENTERED")
 
-        self._invalidate_cache(title)
+        if self.batch_mode:
+            self._patch_records_cache(title, headers, batch_updates_by_row, append_rows)
+        else:
+            self._invalidate_cache(title)
+
+    def enable_batch_mode(self) -> None:
+        """批次模式：寫入後就地更新記憶體快取，避免每檔股票重讀整張工作表（Sheets Read Quota）。"""
+        self.batch_mode = True
+        self._cache_ttl = max(self._cache_ttl, 3600.0)
+
+    def _patch_records_cache(
+        self,
+        title: str,
+        headers: list[str],
+        updated_rows: dict[int, list[Any]],
+        appended_rows: list[list[Any]],
+    ) -> None:
+        cached = self._records_cache.get(title)
+        if cached is None:
+            return
+        _, records = cached
+        for row_index, values in updated_rows.items():
+            record = {headers[i]: values[i] for i in range(min(len(headers), len(values))) if headers[i]}
+            position = row_index - 2
+            if 0 <= position < len(records):
+                records[position] = record
+            else:
+                records.append(record)
+        for values in appended_rows:
+            records.append(
+                {headers[i]: values[i] for i in range(min(len(headers), len(values))) if headers[i]}
+            )
+        self._records_cache[title] = (time.time(), records)
