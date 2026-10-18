@@ -155,3 +155,29 @@ systemctl list-timers --all | grep finmind
 journalctl -u finmind-scan.service -n 50 -f
 journalctl -u finmind-ai-pick.service -n 50 -f
 ```
+
+### 手動測試觸發一次掃描任務
+sudo systemctl start finmind-scan.service
+sudo systemctl start finmind-ai-pick.service
+
+
+### 2. 常用 Discord Bot 常駐服務管理指令
+
+若已將 `bot_server.py` 配置為系統常駐服務（如 `discordbot.service`），可使用以下指令維護：
+
+```bash
+# 查看機器人運行狀態
+sudo systemctl status discordbot.service
+
+# 修改程式碼或 .env 後重啟機器人
+sudo systemctl restart discordbot.service
+
+# 查看即時執行日誌
+journalctl -u discordbot.service -f
+
+# 一鍵更新改版部署
+cd ~/Discord_Service && git pull && uv sync && sudo systemctl restart discordbot
+
+# 停止機器人服務
+sudo systemctl stop discordbot
+```
