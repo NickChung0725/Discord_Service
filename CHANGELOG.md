@@ -4,6 +4,31 @@
 
 ---
 
+## [v3.2.1] - 2026-10-18
+### ✨ 新增功能與介面大升級 (Added & Improved)
+* **全方位投資戰情室（基本面財報 ＋ 技術面 K 線）二合一整合 ([`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py), [`chart_generator.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/chart_generator.py))**：
+  * 在 [`chart_generator.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/chart_generator.py) 新增 `build_stock_technical_chart_html`，將「近半年日 K 線、17MA/45MA/117MA/189MA 四線均線、成交量、KD(9,3,3)、MACD 與拖曳框選高低均價計算器」無縫嵌入戰情室 HTML。
+  * 戰情室頁首新增**懸浮快速導覽列 (Sticky Navbar)**，方便手機與電腦快速跳轉：`[🤖 AI 深度診斷]` ➔ `[📈 技術面 K 線與均線]` ➔ `[📊 基本面六大指標圖表]`。
+* **解決「圖例擠在最底部」痛點：改為 6 大獨立互動卡片，每張圖頂部配置專屬圖例**：
+  * 將原本 1500px 單一超長 Subplot 畫布重構為 6 張獨立的 Plotly 互動卡片。
+  * **每張圖右上角皆有獨立 Legend 圖例**，點擊即可即時開關線條；並啟用 `hovermode="x unified"`（垂直十字對齊懸浮窗），同一月份/季度的所有指標一次對比。
+  * 針對雙單位圖表（月營收 vs YoY%、單季 EPS vs TTM EPS、現金流億元 vs 獲利含金量%）配置**獨立左右雙 Y 軸**，徹底解決折線被壓扁問題。
+* **貼心「💡 財報與技術專有名詞白話小抄」（琥珀金提示框）**：
+  * 在每張圖表頂部直接內嵌白話教學（YoY、三率三升、ROE 資金效率、營業費用率、DIO/DSO/DPO/CCC 存貨與收現天數、單季與近四季 TTM EPS 創高意義、OCF 營業現金流、CapEx 資本支出、FCF 自由現金流、獲利含金量 OCF/NI）。
+* **手機好讀與一鍵複製轉傳優化 ([`stock_ai_command.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/stock_ai_command.py))**：
+  * `/stock_ai` 回傳格式由不可選取複製的 Discord Embed 改為純文字 Markdown（超過 2,000 字自動智慧分段），手機版長按 1 秒即可「複製文字」轉傳他人。
+  * 移除易超時失效的「🔄 重新呼叫 AI 分析」互動按鈕，統一收斂為乾淨直覺的 **`[📊 全方位戰情室（含財報+K線）]`** 連結按鈕。
+* **整頓清理舊指令**：
+  * 正式從主機器人 [`bot_server.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/bot_server.py) 中卸載舊版單一功能 `/stock` 指令，所有查股需求由功能完整 10 倍的 `/stock_ai` 統一服務。
+
+### 🔧 錯誤修正 (Fixed)
+* **修正 Discord 訊息 Markdown 超連結語法 ([`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：
+  * 移除網址外層多餘的 `<>`（`[文字](<url>)` ➔ `[文字](url)`），解決 Discord Markdown 無法辨識導致變成純文字的問題；並在 Webhook 帶入 `"flags": 4` (`SUPPRESS_EMBEDS`)，避免超連結產生巨型預覽卡片洗版。
+* **修正 `fundamental_analyzer.py` 缺失 `asyncio` 與 `logger` 模組宣告**。
+* **修正 `discord.py` 2.7+ `view=None` 造成的 `TypeError`**。
+
+---
+
 ## [v3.2.0] - 2026-10-18
 ### ✨ 新增功能 (Added)
 * **每日 22:00 強勢股財報批次分析與 AI 嚴選進場決策系統 ([`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：

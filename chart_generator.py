@@ -534,3 +534,209 @@ def generate_stock_html(stock_id: str) -> str:
 def generate_stock_html_with_summary(stock_id: str) -> tuple[str, float, str]:
     """Generate the chart once and return its path, latest close, and trading date."""
     return _generate_stock_chart(stock_id)
+
+
+def build_stock_technical_chart_html(
+    stock_id: str,
+    *,
+    include_plotlyjs: str | bool = False,
+) -> str:
+    """Return an embeddable HTML fragment of the 4-panel technical K-line chart."""
+    normalized_id = _validate_stock_id(stock_id)
+    frame = _add_indicators(_fetch_stock_data(normalized_id))
+    chart_start_date = pd.Timestamp(date.today()) - pd.DateOffset(
+        months=_CHART_HISTORY_MONTHS
+    )
+    frame = frame.loc[frame["date"] >= chart_start_date].reset_index(drop=True)
+    if frame.empty:
+        raise StockNotFoundError(
+            f"股票 {normalized_id} 近半年沒有可顯示的日線資料。"
+        )
+    generated_at = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
+
+    figure = make_subplots(
+        rows=4,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.50, 0.16, 0.17, 0.17],
+        subplot_titles=(
+            "股價與均線（17MA 短線支撐 / 45MA 波段防守 / 117MA 半年趨勢 / 189MA 年線趨勢）",
+            "Yahoo Finance 成交量（張）",
+            "KD 隨機指標（9, 3, 3）｜>80 超買高檔區、<20 超賣低檔區",
+            "MACD 趨勢動能（12, 26, 9）｜DIF 快線、Signal 慢線、紅綠柱狀動能差",
+        ),
+    )
+    figure.add_trace(
+        go.Candlestick(
+            x=frame["date"],
+            open=frame["open"],
+            high=frame["max"],
+            low=frame["min"],
+            close=frame["close"],
+            name="日 K 線",
+            increasing_line_color="#ef5350",
+            decreasing_line_color="#26a69a",
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=frame["date"],
+            y=frame["MA17"],
+            name="17MA（短線支撐）",
+            line={"color": "#ffca28"},
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=frame["date"],
+            y=frame["MA45"],
+            name="45MA（波段防守）",
+            line={"color": "#0abab5"},
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=frame["date"],
+            y=frame["MA117"],
+            name="117MA（中期趨勢）",
+            line={"color": "#ab47bc"},
+        ),
+        row=1,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=frame["date"],
+            y=frame["MA189"],
+            name="189MA（長期多空）",
+            line={"color": "#ffffff"},
+        ),
+        row=1,
+        col=1,
+    )
+
+    volume_colors = [
+        "#ef5350" if close >= opening else "#26a69a"
+        for close, opening in zip(frame["close"], frame["open"])
+    ]
+    figure.add_trace(
+        go.Bar(
+            x=frame["date"],
+            y=frame["VolumeLots"],
+            name="成交量（張）",
+            marker_color=volume_colors,
+        ),
+        row=2,
+        col=1,
+    )
+
+    figure.add_trace(
+        go.Scatter(x=frame["date"], y=frame["K"], name="K 值（快線）", line={"color": "#ffca28"}),
+        row=3,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(x=frame["date"], y=frame["D"], name="D 值（慢線）", line={"color": "#42a5f5"}),
+        row=3,
+        col=1,
+    )
+    figure.add_hline(y=80, line_dash="dot", line_color="#777", row=3, col=1)
+    figure.add_hline(y=20, line_dash="dot", line_color="#777", row=3, col=1)
+
+    histogram_colors = [
+        "#ef5350" if value >= 0 else "#26a69a"
+        for value in frame["MACDHistogram"].fillna(0)
+    ]
+    figure.add_trace(
+        go.Bar(
+            x=frame["date"],
+            y=frame["MACDHistogram"],
+            name="MACD 柱狀差 (DIF-Signal)",
+            marker_color=histogram_colors,
+        ),
+        row=4,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(x=frame["date"], y=frame["MACD"], name="DIF（快線）", line={"color": "#ffca28"}),
+        row=4,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=frame["date"], y=frame["MACDSignal"], name="Signal（慢線）", line={"color": "#42a5f5"}
+        ),
+        row=4,
+        col=1,
+    )
+
+    figure.update_layout(
+        title={
+            "text": (
+                f"📈 {normalized_id} 技術面 K 線與動能指標（近半年）"
+                f"<br><sup>更新時間：{generated_at}｜拖曳 K 線可框選區間計算最高/最低/高低均價</sup>"
+            ),
+            "x": 0.01,
+            "xanchor": "left",
+            "y": 0.99,
+            "yanchor": "top",
+        },
+        template="plotly_dark",
+        height=960,
+        autosize=True,
+        dragmode="zoom",
+        hovermode="x unified",
+        margin={"l": 48, "r": 24, "t": 150, "b": 40},
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0},
+        xaxis_rangeslider_visible=False,
+    )
+    figure.update_yaxes(title_text="價格（元）", row=1, col=1)
+    figure.update_yaxes(title_text="張", row=2, col=1)
+    figure.update_yaxes(title_text="KD", range=[0, 100], row=3, col=1)
+    figure.update_yaxes(title_text="MACD", row=4, col=1)
+    trading_dates = pd.DatetimeIndex(frame["date"].dt.normalize().unique())
+    calendar_dates = pd.date_range(
+        start=trading_dates.min(),
+        end=trading_dates.max(),
+        freq="D",
+    )
+    non_trading_dates = calendar_dates.difference(trading_dates).strftime("%Y-%m-%d")
+    figure.update_xaxes(
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikecolor="#ffca28",
+        spikethickness=1,
+        rangebreaks=[{"values": non_trading_dates.tolist()}],
+    )
+    figure.update_yaxes(
+        showspikes=True,
+        spikemode="across",
+        spikesnap="cursor",
+        spikecolor="#ffca28",
+        spikethickness=1,
+    )
+
+    range_data = [
+        {
+            "date": trading_date.strftime("%Y-%m-%d"),
+            "high": float(high),
+            "low": float(low),
+        }
+        for trading_date, high, low in zip(frame["date"], frame["max"], frame["min"])
+    ]
+    return figure.to_html(
+        include_plotlyjs=include_plotlyjs,
+        full_html=False,
+        config={"responsive": True, "displaylogo": False},
+        post_script=_RANGE_SUMMARY_SCRIPT.replace(
+            "__PRICE_RANGE_DATA__", json.dumps(range_data)
+        ),
+    )

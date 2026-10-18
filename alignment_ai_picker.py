@@ -276,13 +276,12 @@ def chart_url(stock_id: str) -> str | None:
 
 
 def _links(stock_id: str, war_room_url: str | None) -> str:
-    parts = []
     if war_room_url:
-        parts.append(f"[📊 財報戰情室]({war_room_url})")
+        return f"[📊 全方位戰情室（含財報+K線）]({war_room_url})"
     chart = chart_url(stock_id)
     if chart:
-        parts.append(f"[📈 K 線圖]({chart})")
-    return " ｜ ".join(parts)
+        return f"[📈 K 線圖]({chart})"
+    return ""
 
 
 def _row_lookup(frame: pd.DataFrame) -> dict[str, dict[str, object]]:

@@ -9,10 +9,12 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import html
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -22,6 +24,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
+
+logger = logging.getLogger(__name__)
 
 from ai_weather import ask_gemini
 from finmind_stock_scanner import (
@@ -586,145 +590,305 @@ class FundamentalAnalyzer:
         df_rev = self.slice_sliding_window(df_rev, self.chart_window_months)
         df_cf = self.slice_sliding_window(df_cf, self.chart_window_quarters)
 
-        fig = make_subplots(
-            rows=6,
-            cols=1,
-            shared_xaxes=False,
-            vertical_spacing=0.07,
-            subplot_titles=(
-                "月營收與 YoY",
-                "三率走勢 (毛利率/營益率/母公司淨利率)",
-                "營業費用率與業外佔稅前淨利比",
-                "CCC 現金轉換週期 (DIO/DSO/DPO/CCC)",
-                "單季 EPS 與 TTM EPS",
-                "OCF / CapEx / FCF + 獲利含金量(OCF/NI)",
-            ),
-        )
+        def _make_card_fig(title: str, height: int = 340, secondary_y: bool = False) -> go.Figure:
+            card_fig = make_subplots(specs=[[{"secondary_y": secondary_y}]])
+            card_fig.update_layout(
+                template="plotly_dark",
+                height=height,
+                title={"text": title, "x": 0.01, "xanchor": "left", "y": 0.96, "yanchor": "top"},
+                legend={
+                    "orientation": "h",
+                    "yanchor": "bottom",
+                    "y": 1.02,
+                    "xanchor": "right",
+                    "x": 1.0,
+                    "bgcolor": "rgba(17,24,39,0.7)",
+                },
+                hovermode="x unified",
+                margin={"l": 50, "r": 50 if secondary_y else 28, "t": 72, "b": 38},
+                paper_bgcolor="#111827",
+                plot_bgcolor="#0b0f14",
+            )
+            return card_fig
 
+        chart_blocks: list[tuple[str, str, go.Figure]] = []
+
+        # 1. 月營收與 YoY
+        fig_rev = _make_card_fig("① 月營收與年增率 YoY", secondary_y=True)
         if not df_rev.empty and {"rev_ym", "revenue"}.issubset(df_rev.columns):
             x = df_rev["rev_ym"].astype(str)
             y = pd.to_numeric(df_rev["revenue"], errors="coerce") / 1e8
             yoy = pd.to_numeric(df_rev.get("yoy_pct"), errors="coerce")
-            fig.add_trace(go.Bar(x=x, y=y, name="月營收(億)"), row=1, col=1)
+            fig_rev.add_trace(
+                go.Bar(x=x, y=y, name="月營收 (億元)", marker_color="#3b82f6", opacity=0.85),
+                secondary_y=False,
+            )
             if yoy is not None:
-                fig.add_trace(go.Scatter(x=x, y=yoy, name="YoY(%)", yaxis="y2"), row=1, col=1)
-
-        if not df_wide.empty:
-            x = df_wide["year_qtr"].astype(str)
-            for col, name in (
-                ("gross_margin_pct", "毛利率(%)"),
-                ("op_margin_pct", "營益率(%)"),
-                ("parent_net_margin_pct", "母公司淨利率(%)"),
-            ):
-                if col in df_wide.columns:
-                    fig.add_trace(
-                        go.Scatter(x=x, y=pd.to_numeric(df_wide[col], errors="coerce"), name=name),
-                        row=2,
-                        col=1,
-                    )
-
-            for col, name in (
-                ("op_expense_pct", "營業費用率(%)"),
-                ("non_op_share_pct", "業外佔稅前比(%)"),
-                ("parent_roe_pct", "母公司ROE(%)"),
-            ):
-                if col in df_wide.columns:
-                    fig.add_trace(
-                        go.Scatter(
-                            x=x,
-                            y=pd.to_numeric(df_wide[col], errors="coerce"),
-                            name=name,
-                        ),
-                        row=3,
-                        col=1,
-                    )
-
-            for col, name in (
-                ("ccc_days", "CCC(天)"),
-                ("dio_days", "DIO"),
-                ("dso_days", "DSO"),
-                ("dpo_days", "DPO"),
-            ):
-                if col in df_wide.columns:
-                    fig.add_trace(
-                        go.Scatter(
-                            x=x,
-                            y=pd.to_numeric(df_wide[col], errors="coerce"),
-                            name=name,
-                        ),
-                        row=4,
-                        col=1,
-                    )
-
-            if "eps" in df_wide.columns:
-                fig.add_trace(
-                    go.Bar(x=x, y=pd.to_numeric(df_wide["eps"], errors="coerce"), name="EPS"),
-                    row=5,
-                    col=1,
-                )
-            if "ttm_eps" in df_wide.columns:
-                fig.add_trace(
+                fig_rev.add_trace(
                     go.Scatter(
                         x=x,
-                        y=pd.to_numeric(df_wide["ttm_eps"], errors="coerce"),
-                        name="TTM EPS",
+                        y=yoy,
+                        name="YoY 年增率 (%)",
+                        mode="lines+markers",
+                        line={"color": "#f97316", "width": 2.5},
                     ),
-                    row=5,
-                    col=1,
+                    secondary_y=True,
                 )
-
-            if "ocf_to_ni_pct" in df_wide.columns:
-                fig.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=pd.to_numeric(df_wide["ocf_to_ni_pct"], errors="coerce"),
-                        name="OCF/NI(%)",
-                    ),
-                    row=6,
-                    col=1,
-                )
-
-        if not df_cf.empty and "year_qtr" in df_cf.columns:
-            x = df_cf["year_qtr"].astype(str)
-            for col, name in (
-                ("operating_cf", "OCF"),
-                ("capex", "CapEx"),
-                ("free_cf", "FCF"),
-            ):
-                if col in df_cf.columns:
-                    fig.add_trace(
-                        go.Bar(
-                            x=x,
-                            y=pd.to_numeric(df_cf[col], errors="coerce") / 1e8,
-                            name=f"{name}(億)",
-                        ),
-                        row=6,
-                        col=1,
-                    )
-
-        fig.update_layout(
-            template="plotly_dark",
-            height=1500,
-            title=f"{stock_id} 基本面 AI 戰情室",
-            legend={"orientation": "h", "y": -0.08},
-            margin={"l": 40, "r": 30, "t": 80, "b": 80},
+        fig_rev.update_yaxes(title_text="億元", secondary_y=False)
+        fig_rev.update_yaxes(title_text="YoY (%)", secondary_y=True, showgrid=False)
+        chart_blocks.append(
+            (
+                "月營收與 YoY 年增率",
+                "💡 <b>名詞說明</b>：<b>YoY (Year-over-Year，年增率)</b> 為與去年同月相比之成長率，可排除淡旺季干擾。柱狀持續墊高且 YoY > 0% 代表營收動能擴張。",
+                fig_rev,
+            )
         )
 
+        x_qtr = df_wide["year_qtr"].astype(str) if not df_wide.empty and "year_qtr" in df_wide.columns else pd.Series(dtype=str)
+
+        # 2. 三率走勢
+        fig_margins = _make_card_fig("② 獲利三率走勢（毛利率 / 營益率 / 母公司淨利率）")
+        if not df_wide.empty:
+            for col, name, color in (
+                ("gross_margin_pct", "毛利率 (%)｜產品定價與成本競爭力", "#10b981"),
+                ("op_margin_pct", "營益率 (%)｜本業真實獲利能力", "#a855f7"),
+                ("parent_net_margin_pct", "母公司淨利率 (%)｜最終歸屬股東稅後獲利", "#f59e0b"),
+            ):
+                if col in df_wide.columns:
+                    fig_margins.add_trace(
+                        go.Scatter(
+                            x=x_qtr,
+                            y=pd.to_numeric(df_wide[col], errors="coerce"),
+                            name=name,
+                            mode="lines+markers",
+                            line={"color": color, "width": 2.5},
+                        )
+                    )
+        fig_margins.update_yaxes(title_text="%")
+        chart_blocks.append(
+            (
+                "三率走勢",
+                "💡 <b>名詞說明</b>：<b>毛利率</b>（扣除直接生產成本）看產品競爭力；<b>營益率</b>（再扣除研發/推銷/管理費用）看本業賺錢實力；<b>淨利率</b>（加計業外與扣稅後）看最終入袋獲利。「三率三升」為極佳基本面訊號。",
+                fig_margins,
+            )
+        )
+
+        # 3. 營業費用率、業外佔比與 ROE
+        fig_roe = _make_card_fig("③ 股東權益報酬率 ROE、費用率與業外佔比")
+        if not df_wide.empty:
+            for col, name, color in (
+                ("parent_roe_pct", "母公司 ROE (%)｜股東資金獲利效率", "#84cc16"),
+                ("op_expense_pct", "營業費用率 (%)｜管銷研費用佔營收比", "#06b6d4"),
+                ("non_op_share_pct", "業外佔稅前比 (%)｜非本業獲利依賴度", "#ec4899"),
+            ):
+                if col in df_wide.columns:
+                    fig_roe.add_trace(
+                        go.Scatter(
+                            x=x_qtr,
+                            y=pd.to_numeric(df_wide[col], errors="coerce"),
+                            name=name,
+                            mode="lines+markers",
+                            line={"color": color, "width": 2.5},
+                        )
+                    )
+        fig_roe.update_yaxes(title_text="%")
+        chart_blocks.append(
+            (
+                "ROE、營業費用率與業外佔比",
+                "💡 <b>名詞說明</b>：<b>ROE (股東權益報酬率)</b> 衡量公司替股東賺錢的效率（越穩定高檔越好）；<b>營業費用率</b>下降代表規模經濟顯現；<b>業外佔稅前淨利比</b>若過高（如 >30%），需留意獲利是否靠匯兌或一次性處分撐起。",
+                fig_roe,
+            )
+        )
+
+        # 4. CCC 現金轉換週期
+        fig_ccc = _make_card_fig("④ 營運週轉天數（CCC / DIO 存貨 / DSO 應收 / DPO 應付）")
+        if not df_wide.empty:
+            for col, name, color in (
+                ("ccc_days", "CCC 現金轉換週期 (天)", "#e879f9"),
+                ("dio_days", "DIO 存貨銷售天數 (天)", "#eab308"),
+                ("dso_days", "DSO 應收帳款收現天數 (天)", "#6366f1"),
+                ("dpo_days", "DPO 應付帳款付現天數 (天)", "#ef4444"),
+            ):
+                if col in df_wide.columns:
+                    fig_ccc.add_trace(
+                        go.Scatter(
+                            x=x_qtr,
+                            y=pd.to_numeric(df_wide[col], errors="coerce"),
+                            name=name,
+                            mode="lines+markers",
+                            line={"color": color, "width": 2.5},
+                        )
+                    )
+        fig_ccc.update_yaxes(title_text="天數")
+        chart_blocks.append(
+            (
+                "CCC 現金轉換週期",
+                "💡 <b>名詞說明</b>：<b>DIO (存貨週轉天數)</b> 越低代表去化越快、不塞貨；<b>DSO (應收帳款天數)</b> 越短代表客戶越快付款；<b>DPO (應付帳款天數)</b> 代表對供應商議價力；<b>CCC = DIO + DSO - DPO</b>（公司投入現金到收回現金的天數，越短代表資金週轉越靈活）。",
+                fig_ccc,
+            )
+        )
+
+        # 5. 單季 EPS 與 TTM EPS
+        fig_eps = _make_card_fig("⑤ 每股盈餘（單季 EPS 與近四季累積 TTM EPS）", secondary_y=True)
+        if not df_wide.empty:
+            if "eps" in df_wide.columns:
+                fig_eps.add_trace(
+                    go.Bar(
+                        x=x_qtr,
+                        y=pd.to_numeric(df_wide["eps"], errors="coerce"),
+                        name="單季 EPS (元)",
+                        marker_color="#10b981",
+                        opacity=0.85,
+                    ),
+                    secondary_y=False,
+                )
+            if "ttm_eps" in df_wide.columns:
+                fig_eps.add_trace(
+                    go.Scatter(
+                        x=x_qtr,
+                        y=pd.to_numeric(df_wide["ttm_eps"], errors="coerce"),
+                        name="TTM EPS 近四季合計 (元)",
+                        mode="lines+markers",
+                        line={"color": "#a855f7", "width": 3},
+                    ),
+                    secondary_y=True,
+                )
+        fig_eps.update_yaxes(title_text="單季 EPS (元)", secondary_y=False)
+        fig_eps.update_yaxes(title_text="TTM EPS (元)", secondary_y=True, showgrid=False)
+        chart_blocks.append(
+            (
+                "單季 EPS 與 TTM EPS",
+                "💡 <b>名詞說明</b>：<b>EPS (每股稅後盈餘)</b> 為每 1 股賺多少錢；<b>TTM EPS (Trailing Twelve Months，近四季滾動累計 EPS)</b> 能撫平單季淡旺季波動，紫色線趨勢往上代表公司長期獲利能力持續創高。",
+                fig_eps,
+            )
+        )
+
+        # 6. 現金流量與獲利含金量
+        fig_cf = _make_card_fig("⑥ 現金流量（OCF / CapEx / FCF）與獲利含金量（OCF/NI）", secondary_y=True)
+        if not df_cf.empty and "year_qtr" in df_cf.columns:
+            x_cf = df_cf["year_qtr"].astype(str)
+            for col, name, color in (
+                ("operating_cf", "OCF 營業現金流 (億)", "#06b6d4"),
+                ("capex", "CapEx 資本支出 (億)", "#f43f5e"),
+                ("free_cf", "FCF 自由現金流 (億)", "#a3e635"),
+            ):
+                if col in df_cf.columns:
+                    fig_cf.add_trace(
+                        go.Bar(
+                            x=x_cf,
+                            y=pd.to_numeric(df_cf[col], errors="coerce") / 1e8,
+                            name=name,
+                            marker_color=color,
+                        ),
+                        secondary_y=False,
+                    )
+        if not df_wide.empty and "ocf_to_ni_pct" in df_wide.columns:
+            fig_cf.add_trace(
+                go.Scatter(
+                    x=x_qtr,
+                    y=pd.to_numeric(df_wide["ocf_to_ni_pct"], errors="coerce"),
+                    name="OCF/NI 獲利含金量 (%)",
+                    mode="lines+markers",
+                    line={"color": "#fb923c", "width": 2.5},
+                ),
+                secondary_y=True,
+            )
+        fig_cf.update_yaxes(title_text="億元", secondary_y=False)
+        fig_cf.update_yaxes(title_text="獲利含金量 (%)", secondary_y=True, showgrid=False)
+        chart_blocks.append(
+            (
+                "現金流與獲利含金量",
+                "💡 <b>名詞說明</b>：<b>OCF (營業現金流)</b> 為本業實際收進來的現金；<b>CapEx (資本支出)</b> 為擴廠買設備支出；<b>FCF (自由現金流 = OCF - CapEx)</b> 為可自由配息或還債的真錢；<b>獲利含金量 (OCF/NI)</b> = 營業現金流 ÷ 稅後淨利（大於 80%~100% 代表帳面獲利有真正變成現金入袋，非紙上富貴）。",
+                fig_cf,
+            )
+        )
+
+        # 技術面 K 線圖嵌入（若外部日線查詢失敗不阻斷財報戰情室發布）
+        tech_html_section = ""
+        try:
+            from chart_generator import build_stock_technical_chart_html
+
+            tech_fragment = await asyncio.to_thread(
+                build_stock_technical_chart_html, stock_id, include_plotlyjs=False
+            )
+            tech_html_section = (
+                "<section id='sec-tech' class='section-card'>"
+                "<div class='section-header'>"
+                "<h3>📈 技術面 K 線與動能指標（近半年日線）</h3>"
+                "<div class='glossary-box'>"
+                "💡 <b>技術指標速查</b>："
+                "<b>17MA</b> 短線強弱支撐線 ｜ <b>45MA</b> 波段生命防守線 ｜ <b>117MA / 189MA</b> 中長期多空趨勢線 ｜ "
+                "<b>KD (隨機指標)</b>：K 向上突破 D 為黃金交叉轉強（>80 高檔鈍化或超買、<20 超賣區）｜ "
+                "<b>MACD</b>：DIF 快線突破 Signal 慢線且柱狀翻紅代表波段多頭動能啟動。可直接在 K 線圖上<b>拖曳滑鼠框選區間</b>自動計算區間最高/最低與高低均價。"
+                "</div>"
+                "</div>"
+                f"{tech_fragment}"
+                "</section>"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Skipping embedded technical chart for %s: %s", stock_id, exc)
+
         generated_at = datetime.now(TAIPEI_TIMEZONE).strftime("%Y-%m-%d %H:%M")
+        clean_ai_text, _ = self._split_ai_output(ai_text)
+
+        fund_cards_html: list[str] = []
+        for idx, (_, glossary_html, card_fig) in enumerate(chart_blocks):
+            fig_html = card_fig.to_html(
+                full_html=False,
+                include_plotlyjs=False,
+                config={"responsive": True, "displaylogo": False},
+            )
+            fund_cards_html.append(
+                "<div class='chart-card'>"
+                f"<div class='glossary-box'>{glossary_html}</div>"
+                f"{fig_html}"
+                "</div>"
+            )
+
         html_parts = [
             "<!doctype html>",
-            "<html><head><meta charset='utf-8' />",
+            "<html lang='zh-Hant'><head><meta charset='utf-8' />",
             "<meta name='viewport' content='width=device-width, initial-scale=1' />",
-            f"<title>{stock_id} Fundamental War Room</title>",
-            "</head><body style='background:#0b0f14;color:#e6edf3;font-family:Arial,sans-serif'>",
-            f"<h2 style='margin:16px'> {stock_id} 基本面 AI 戰情室 <small style='color:#9aa4ad'>({generated_at})</small></h2>",
-            "<div style='margin:16px'>",
-            "<h3>AI 摘要</h3>",
-            "<pre style='white-space:pre-wrap;background:#111827;border:1px solid #243042;border-radius:8px;padding:12px'>",
-            self._escape_html(ai_text),
-            "</pre>",
+            f"<title>{stock_id} 全方位投資戰情室（財報＋K線）</title>",
+            "<script src='https://cdn.plot.ly/plotly-2.35.2.min.js' charset='utf-8'></script>",
+            "<style>",
+            "body{background:#0b0f14;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Microsoft JhengHei',sans-serif;margin:0;padding:0;line-height:1.6}",
+            ".topbar{position:sticky;top:0;z-index:999;background:rgba(11,15,20,0.94);backdrop-filter:blur(8px);border-bottom:1px solid #243042;padding:12px 20px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}",
+            ".topbar h2{margin:0;font-size:20px;color:#f8fafc}",
+            ".topbar small{color:#94a3b8;font-size:13px;font-weight:normal;margin-left:8px}",
+            ".nav-links{display:flex;gap:8px;flex-wrap:wrap}",
+            ".nav-btn{color:#e2e8f0;background:#1e293b;border:1px solid #334155;padding:6px 12px;border-radius:6px;text-decoration:none;font-size:13px;transition:all .15s}",
+            ".nav-btn:hover{background:#3b82f6;border-color:#60a5fa;color:#fff}",
+            ".container{max-width:1400px;margin:0 auto;padding:16px}",
+            ".section-card{background:#111827;border:1px solid #243042;border-radius:10px;padding:16px;margin-bottom:20px;box-shadow:0 4px 12px rgba(0,0,0,0.25)}",
+            ".section-card h3{margin:0 0 12px 0;color:#60a5fa;font-size:18px;border-left:4px solid #3b82f6;padding-left:10px}",
+            ".ai-pre{white-space:pre-wrap;word-break:break-word;background:#0d131f;border:1px solid #1e293b;border-radius:8px;padding:14px;font-size:14.5px;color:#e2e8f0;margin:0;font-family:inherit}",
+            ".chart-card{background:#111827;border:1px solid #243042;border-radius:10px;padding:14px;margin-bottom:18px}",
+            ".glossary-box{background:rgba(30,41,59,0.65);border-left:3px solid #f59e0b;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:13px;color:#cbd5e1}",
+            ".glossary-box b{color:#fbbf24}",
+            "</style>",
+            "</head><body>",
+            "<div class='topbar'>",
+            f"<h2>📊 {stock_id} 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）<small>更新：{generated_at}</small></h2>",
+            "<div class='nav-links'>",
+            "<a class='nav-btn' href='#sec-ai'>🤖 AI 深度診斷</a>",
+            "<a class='nav-btn' href='#sec-tech'>📈 技術面 K 線與均線</a>",
+            "<a class='nav-btn' href='#sec-fund'>📊 基本面六大指標圖表</a>",
             "</div>",
-            fig.to_html(full_html=False, include_plotlyjs="cdn"),
+            "</div>",
+            "<div class='container'>",
+            "<section id='sec-ai' class='section-card'>",
+            "<h3>🤖 AI 基本面與法說展望深度診斷</h3>",
+            "<pre class='ai-pre'>",
+            self._escape_html(clean_ai_text),
+            "</pre>",
+            "</section>",
+            tech_html_section,
+            "<section id='sec-fund'>",
+            "<h3 style='color:#60a5fa;font-size:18px;border-left:4px solid #3b82f6;padding-left:10px;margin:24px 0 14px 0'>📊 基本面六大核心趨勢圖（每張圖表上方皆可點擊圖例開關線條）</h3>",
+            *fund_cards_html,
+            "</section>",
+            "</div>",
             "</body></html>",
         ]
         _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

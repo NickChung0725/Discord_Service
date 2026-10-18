@@ -60,18 +60,18 @@ class StockWarRoomView(discord.ui.View):
         self,
         *,
         war_room_url: str | None,
-        chart_url: str | None,
+        chart_url: str | None = None,
     ) -> None:
         super().__init__(timeout=None)
         if war_room_url:
             self.add_item(
                 discord.ui.Button(
-                    label="📊 開啟 AI 財報圖文戰情室",
+                    label="📊 全方位戰情室（含財報+K線）",
                     style=discord.ButtonStyle.link,
                     url=war_room_url,
                 )
             )
-        if chart_url:
+        elif chart_url:
             self.add_item(
                 discord.ui.Button(
                     label="📈 開啟技術面互動 K 線圖",
@@ -220,5 +220,7 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
         chunks = _split_discord_chunks(full_text)
         for i, chunk in enumerate(chunks):
             # 互動按鈕掛載在最後一則訊息底下
-            current_view = view if i == len(chunks) - 1 else None
-            await interaction.followup.send(chunk, view=current_view)
+            if i == len(chunks) - 1 and view is not None:
+                await interaction.followup.send(chunk, view=view)
+            else:
+                await interaction.followup.send(chunk)

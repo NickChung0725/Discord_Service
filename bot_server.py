@@ -7,7 +7,6 @@ import logging
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from dotenv import load_dotenv
 from ai_weather import get_weather_report, register_ai_command, register_weather_command
-from bot import register_stock_command
 from stock_ai_command import register_stock_ai_command
 
 logger = logging.getLogger(__name__)
@@ -61,7 +60,6 @@ class MyClient(discord.Client):
         print("✅ 斜線指令同步完成！")
 
 client = MyClient()
-register_stock_command(client.tree)
 register_stock_ai_command(client.tree)
 register_ai_command(client.tree)
 register_weather_command(client.tree)

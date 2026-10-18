@@ -142,7 +142,7 @@ class ReportTests(unittest.TestCase):
         joined = "\n".join(messages)
         self.assertIn("🥇 #1 2330 台積電", joined)
         self.assertIn("🟢高度可信", joined)
-        self.assertIn("財報戰情室", joined)
+        self.assertIn("全方位戰情室（含財報+K線）", joined)
         self.assertIn("1234", joined)
         self.assertIn("5 檔因超過候選上限", joined)
 
