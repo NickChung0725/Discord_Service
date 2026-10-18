@@ -35,23 +35,34 @@ def _parse_symbols(raw_symbol: str) -> list[str]:
     return unique_tokens
 
 
+def _split_discord_chunks(text: str, max_len: int = 1900) -> list[str]:
+    """將過長文字安全切分成符合 Discord 單則限制 (<= 2000 字) 的文字塊，優先在換行處切割。"""
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in text.splitlines(keepends=True):
+        if current_len + len(line) > max_len and current:
+            chunks.append("".join(current))
+            current = [line]
+            current_len = len(line)
+        else:
+            current.append(line)
+            current_len += len(line)
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
 class StockWarRoomView(discord.ui.View):
     def __init__(
         self,
         *,
-        stock_id: str,
-        stock_title: str,
         war_room_url: str | None,
         chart_url: str | None,
-        analyzer: FundamentalAnalyzer,
     ) -> None:
-        super().__init__(timeout=300)
-        self.stock_id = stock_id
-        self.stock_title = stock_title
-        self.war_room_url = war_room_url
-        self.chart_url = chart_url
-        self.analyzer = analyzer
-
+        super().__init__(timeout=None)
         if war_room_url:
             self.add_item(
                 discord.ui.Button(
@@ -68,26 +79,6 @@ class StockWarRoomView(discord.ui.View):
                     url=chart_url,
                 )
             )
-
-    @discord.ui.button(label="🔄 重新呼叫 AI 分析", style=discord.ButtonStyle.primary)
-    async def rerun_ai(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.defer(thinking=True)
-        try:
-            report = await self.analyzer.run_full_diagnosis(self.stock_id, force_ai=True)
-        except Exception:
-            logger.exception("Failed to rerun AI analysis for %s", self.stock_id)
-            await interaction.followup.send("❌ AI 重新分析失敗，請稍後再試。", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title=f"📊 {self.stock_title}｜基本面 AI 診斷（已重新分析）",
-            description=report.ai_text[:3900],
-            color=discord.Color.orange(),
-            url=report.war_room_url,
-        )
-        if report.cache_period:
-            embed.set_footer(text=f"資料水位：{report.cache_period} | cached=False")
-        await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
@@ -140,7 +131,7 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
             sname, _ = cache._get_stock_basic_info(sid)  # noqa: SLF001
             return f"{sid} {sname}".strip() if sname else sid
 
-        # 2. 多股模式（不論有無填 prompt，皆切取各股 Markdown 表格進行跨股比較問答）
+        # 2. 多股模式（純文字發送，方便長按一鍵複製）
         if len(stock_ids) > 1:
             try:
                 contexts = [
@@ -167,12 +158,10 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                 return
 
             titles_str = " vs ".join(_get_display_title(sid) for sid in stock_ids)
-            embed = discord.Embed(
-                title=f"⚖️ {titles_str}｜財報跨股比較與解答",
-                description=answer[:3900],
-                color=discord.Color.purple(),
-            )
-            await interaction.followup.send(embed=embed)
+            header = f"⚖️ **{titles_str}｜財報跨股比較與解答**\n\n"
+            full_text = header + answer
+            for chunk in _split_discord_chunks(full_text):
+                await interaction.followup.send(chunk)
             return
 
         # 3. 單股模式
@@ -187,16 +176,13 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                 await interaction.followup.send("❌ AI 分析失敗，請稍後再試。")
                 return
 
-            embed = discord.Embed(
-                title=f"📌 {stock_title}｜財報專題解答",
-                description=answer[:3900],
-                color=discord.Color.blurple(),
-            )
-            await interaction.followup.send(embed=embed)
+            header = f"📌 **{stock_title}｜財報專題解答**\n\n"
+            full_text = header + answer
+            for chunk in _split_discord_chunks(full_text):
+                await interaction.followup.send(chunk)
             return
 
-        # 依需求：每次 /stock_ai 都重新呼叫 Gemini 產生最新診斷文字，
-        # 不使用 Watchlist_Master 的 AI 摘要快取（不論財報/營收資料是否變動）。
+        # 依需求：每次 /stock_ai 都重新呼叫 Gemini 產生最新診斷文字
         try:
             report = await analyzer.run_full_diagnosis(stock_id, force_ai=True)
         except Exception:
@@ -216,20 +202,23 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
         except Exception:
             chart_url = None
 
-        embed = discord.Embed(
-            title=f"📊 {stock_title}｜基本面 AI 診斷",
-            description=report.ai_text[:3900],
-            color=discord.Color.green() if report.cached else discord.Color.gold(),
-            url=report.war_room_url,
-        )
+        header = f"📊 **{stock_title}｜基本面 AI 診斷**\n\n"
+        full_text = header + report.ai_text
         if report.cache_period:
-            embed.set_footer(text=f"資料水位：{report.cache_period} | cached={report.cached}")
+            full_text += f"\n\n*(資料水位：{report.cache_period} | cached={report.cached})*"
 
-        view = StockWarRoomView(
-            stock_id=stock_id,
-            stock_title=stock_title,
-            war_room_url=report.war_room_url,
-            chart_url=chart_url,
-            analyzer=analyzer,
+        has_links = bool(report.war_room_url or chart_url)
+        view = (
+            StockWarRoomView(
+                war_room_url=report.war_room_url,
+                chart_url=chart_url,
+            )
+            if has_links
+            else None
         )
-        await interaction.followup.send(embed=embed, view=view)
+
+        chunks = _split_discord_chunks(full_text)
+        for i, chunk in enumerate(chunks):
+            # 互動按鈕掛載在最後一則訊息底下
+            current_view = view if i == len(chunks) - 1 else None
+            await interaction.followup.send(chunk, view=current_view)

@@ -278,10 +278,10 @@ def chart_url(stock_id: str) -> str | None:
 def _links(stock_id: str, war_room_url: str | None) -> str:
     parts = []
     if war_room_url:
-        parts.append(f"[📊 財報戰情室](<{war_room_url}>)")
+        parts.append(f"[📊 財報戰情室]({war_room_url})")
     chart = chart_url(stock_id)
     if chart:
-        parts.append(f"[📈 K 線圖](<{chart}>)")
+        parts.append(f"[📈 K 線圖]({chart})")
     return " ｜ ".join(parts)
 
 
@@ -382,7 +382,7 @@ def post_messages_to_discord(messages: list[str], channel_id: str, bot_token: st
     for index, content in enumerate(messages):
         request = Request(
             f"{DISCORD_API_BASE_URL}/channels/{channel_id}/messages",
-            data=json.dumps({"content": content}, ensure_ascii=False).encode("utf-8"),
+            data=json.dumps({"content": content, "flags": 4}, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bot {bot_token.strip()}",
                 "Content-Type": "application/json",
