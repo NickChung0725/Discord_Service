@@ -544,6 +544,18 @@ class FundamentalAnalyzer:
         cached_period = str(row.get("ai_cached_period", "")).strip() if row else ""
         if row and not force_ai and cache_period and cached_summary and cached_period == cache_period:
             war_room_url = str(row.get("war_room_url", "")).strip() or None
+            if publish_war_room and not war_room_url:
+                try:
+                    war_room_url = await self.render_and_publish_war_room_html(
+                        stock_id, self._render_summary_text(cached_summary)
+                    )
+                    self.cache._update_watchlist_master(  # noqa: SLF001
+                        watchlist,
+                        stock_id,
+                        {"war_room_url": war_room_url or ""},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed to render war room on cache hit for %s: %s", stock_id, exc)
             return DiagnosisReport(
                 stock_id=stock_id,
                 ai_text=self._render_summary_text(cached_summary),

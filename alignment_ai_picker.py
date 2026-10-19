@@ -610,18 +610,32 @@ async def run_pipeline(
     )
     decision = parse_portfolio_json(raw_text, set(results.keys()), max_top)
 
-    # Publish war-room pages only for final picks that do not have one yet.
+    # Publish war-room pages for final picks:
+    # 1. If newly analyzed today (not cached) or war_room_url is missing, generate and publish HTML.
+    # 2. Always persist war_room_url back into 00_Watchlist_Master.
     if decision and not publish_all:
+        watchlist_sheet = cache._get_worksheet("00_Watchlist_Master")
         for pick in decision["top_picks"]:
-            report = results[pick["stock_id"]]["report"]
+            sid = str(pick["stock_id"])
+            report = results[sid]["report"]
+            need_publish = not bool(report.war_room_url) or not getattr(report, "cached", True)
+            if need_publish:
+                try:
+                    report.war_room_url = await analyzer.render_and_publish_war_room_html(
+                        sid, report.ai_text
+                    )
+                except Exception as error:  # noqa: BLE001
+                    print(f"[warn] {sid} 戰情室發布失敗：{error}")
+
             if report.war_room_url:
-                continue
-            try:
-                report.war_room_url = await analyzer.render_and_publish_war_room_html(
-                    pick["stock_id"], report.ai_text
-                )
-            except Exception as error:  # noqa: BLE001
-                print(f"[warn] {pick['stock_id']} 戰情室發布失敗：{error}")
+                try:
+                    cache._update_watchlist_master(
+                        watchlist_sheet,
+                        sid,
+                        {"war_room_url": report.war_room_url},
+                    )
+                except Exception as error:  # noqa: BLE001
+                    print(f"[warn] 更新 {sid} war_room_url 到 00_Watchlist_Master 失敗：{error}")
 
     messages = format_pick_report(
         target_date,

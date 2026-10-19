@@ -23,6 +23,13 @@
     * **22:00 AI 嚴選 (`alignment_ai_picker.py`)**：Dossier 與 Discord 推播卡片同步納入量能結構，並升級 `portfolio_selection` Prompt，引導 AI 優先加分「帶量突破 (`1.5x ~ 3.5x`) 或強勢股量縮回測 17MA 支撐」，自動降評 `< 500 張` 殭屍股與 `> 4.5x` 天量爆量股。
     * **`/stock_ai` 單股診斷 (`fundamental_analyzer.py`)**：表 7 新增當日量能結構摘要與近 5 日成交量（張）明細，Prompt 第 6 節升級為「技術面與量價配合綜合結論」。
 
+### 🔧 錯誤修正 (Fixed)
+* **修正 22:00 AI 嚴選個股戰情室網址未回寫與過期網頁未覆蓋問題 ([`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py))**：
+  * **修正未寫回 `00_Watchlist_Master.war_room_url`**：過去 22:00 選出 `TOP_PICK` 時，在產生並上傳 HTML 後未呼叫 `cache._update_watchlist_master`，導致 Google Sheets 欄位維持空白（僅 Discord 與 `08_AI_Daily_Picks` 有網址）。已修正為發布成功後立即自動同步回寫。
+  * **修正「已曾分析過之個股」戰情室 HTML 停留在舊日期未更新**：過去因判斷 `if report.war_room_url: continue`，只要該股先前曾分析過，便會跳過發布，導致網頁停留在舊版。已修正為若當日重新執行 AI 診斷（`not report.cached`），一律強制重新渲染最新全方位戰情室 HTML 並推播至 GitHub Pages。
+  * **已立即手動回補**：將今日 22:00 嚴選出的長榮航 (2618)、樺漢 (6414)、宏正 (6277) 之 `war_room_url` 完整寫回 Google Sheets，並重新發布威鋒電子 (6756) 之全方位戰情室 HTML 至最新版本。
+
+
 ---
 
 ## [v3.2.1] - 2026-10-18
