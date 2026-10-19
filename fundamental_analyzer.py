@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 from ai_weather import ask_gemini
 from finmind_stock_scanner import (
     MOVING_AVERAGE_PERIODS,
+    _extract_latest_volume_metrics,
     classify_latest_signal,
     describe_ma17_trend,
 )
@@ -469,6 +470,16 @@ class FundamentalAnalyzer:
                 gap_str = f"{gap_pct:.2f}%"
 
             ma17_trend = describe_ma17_trend(stock_prices["MA17"])
+            vol_metrics = _extract_latest_volume_metrics(stock_prices)
+            vol_line = ""
+            if vol_metrics.get("vol_lots") != "":
+                vol_line = (
+                    f"- 量能結構：今日 {int(vol_metrics['vol_lots']):,} 張"
+                    f"｜5日均量 {int(vol_metrics['vol_ma5_lots']):,} 張"
+                    f"｜20日均量 {int(vol_metrics['vol_ma20_lots']):,} 張"
+                    f"｜量能狀態：{vol_metrics['vol_status']}"
+                )
+
             signal_info = classify_latest_signal(stock_prices)
             if signal_info is not None:
                 signal_status = f"✅ 符合強勢均線排列訊號（{signal_info['signal']}）"
@@ -477,7 +488,15 @@ class FundamentalAnalyzer:
 
             recent_5d = stock_prices.tail(5).copy()
             recent_5d["date"] = recent_5d["date"].dt.strftime("%Y-%m-%d")
-            display_cols = ["date", "close", *(f"MA{p}" for p in MOVING_AVERAGE_PERIODS)]
+            if "Trading_Volume" in recent_5d.columns and "vol_lots" not in recent_5d.columns:
+                recent_5d["vol_lots"] = (
+                    pd.to_numeric(recent_5d["Trading_Volume"], errors="coerce") / 1000.0
+                ).round(0)
+            display_cols = [
+                c
+                for c in ["date", "close", "vol_lots", *(f"MA{p}" for p in MOVING_AVERAGE_PERIODS)]
+                if c in recent_5d.columns
+            ]
             for c in display_cols[1:]:
                 if c in recent_5d.columns:
                     recent_5d[c] = pd.to_numeric(recent_5d[c], errors="coerce").round(2)
@@ -489,8 +508,10 @@ class FundamentalAnalyzer:
                     f"｜MA45：{_fmt_ma('MA45')}｜MA117：{_fmt_ma('MA117')}｜MA189：{_fmt_ma('MA189')}"
                 ),
                 f"- 17MA與45MA差距：{gap_str}｜17MA近期走勢：{ma17_trend}｜均線訊號：{signal_status}",
-                recent_5d[display_cols].to_markdown(index=False),
             ]
+            if vol_line:
+                lines.append(vol_line)
+            lines.append(recent_5d[display_cols].to_markdown(index=False))
             return "\n".join(lines)
         except Exception:
             return ""

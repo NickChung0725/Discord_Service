@@ -282,7 +282,45 @@ def add_moving_averages(prices: pd.DataFrame) -> pd.DataFrame:
         result[f"MA{period}"] = result["close"].rolling(
             window=period, min_periods=period
         ).mean()
+
+    if "Trading_Volume" in result.columns:
+        vol_shares = pd.to_numeric(result["Trading_Volume"], errors="coerce")
+        result["vol_lots"] = (vol_shares / 1000.0).round(0)
+        result["vol_ma5_lots"] = (
+            result["vol_lots"].rolling(window=5, min_periods=1).mean().round(0)
+        )
+        result["vol_ma20_lots"] = (
+            result["vol_lots"].rolling(window=20, min_periods=1).mean().round(0)
+        )
     return result
+
+
+def describe_volume_status(
+    vol_lots: float | None,
+    vol_ma5_lots: float | None,
+    vol_ma20_lots: float | None,
+) -> str:
+    """依操盤手實戰角度評估量比 (今日量/20日均量)、短中均量結構與低流動性警示。"""
+    if vol_lots is None or pd.isna(vol_lots):
+        return "-"
+    vol = float(vol_lots)
+    ma5 = float(vol_ma5_lots) if (vol_ma5_lots is not None and not pd.isna(vol_ma5_lots)) else vol
+    ma20 = float(vol_ma20_lots) if (vol_ma20_lots is not None and not pd.isna(vol_ma20_lots) and float(vol_ma20_lots) > 0) else 0.0
+
+    ratio = (vol / ma20) if ma20 > 0 else 1.0
+    trend_tag = "｜5MA>20MA" if (ma20 > 0 and ma5 > ma20) else ""
+
+    if vol < 500 and ma20 < 500:
+        return f"⚠️ 低量冷門 ({ratio:.2f}x｜<500張)"
+    if ratio > 4.5:
+        return f"⚠️ 天量過熱 ({ratio:.2f}x{trend_tag})"
+    if ratio >= 2.0:
+        return f"🔥 放量點火 ({ratio:.2f}x{trend_tag})"
+    if ratio >= 1.2:
+        return f"📈 溫和放量 ({ratio:.2f}x{trend_tag})"
+    if ratio >= 0.8:
+        return f"➡️ 量能平穩 ({ratio:.2f}x{trend_tag})"
+    return f"💧 量縮整理 ({ratio:.2f}x)"
 
 
 def describe_ma17_trend(ma17_series: pd.Series) -> str:
@@ -308,6 +346,41 @@ def describe_ma17_trend(ma17_series: pd.Series) -> str:
     if chg_1d_pct < 0 and chg_5d_pct > 0:
         return f"↘️ 漲勢收斂 (日 {chg_1d_pct:+.2f}%｜5日 {chg_5d_pct:+.2f}%)"
     return f"📉 持續下彎 (5日 {chg_5d_pct:+.2f}%)"
+
+
+def _extract_latest_volume_metrics(usable: pd.DataFrame) -> dict[str, object]:
+    """從已計算均線的日線 DataFrame 提取最新一筆的張數與量能狀態。"""
+    latest = usable.iloc[-1]
+    vol_lots: float | None = None
+    vol_ma5: float | None = None
+    vol_ma20: float | None = None
+
+    if "vol_lots" in usable.columns and pd.notna(latest.get("vol_lots")):
+        vol_lots = round(float(latest["vol_lots"]))
+        vol_ma5 = (
+            round(float(latest["vol_ma5_lots"]))
+            if "vol_ma5_lots" in usable.columns and pd.notna(latest.get("vol_ma5_lots"))
+            else vol_lots
+        )
+        vol_ma20 = (
+            round(float(latest["vol_ma20_lots"]))
+            if "vol_ma20_lots" in usable.columns and pd.notna(latest.get("vol_ma20_lots"))
+            else vol_lots
+        )
+    elif "Trading_Volume" in usable.columns:
+        vol_series = pd.to_numeric(usable["Trading_Volume"], errors="coerce") / 1000.0
+        if pd.notna(vol_series.iloc[-1]):
+            vol_lots = round(float(vol_series.iloc[-1]))
+            vol_ma5 = round(float(vol_series.tail(5).mean()))
+            vol_ma20 = round(float(vol_series.tail(20).mean()))
+
+    vol_status = describe_volume_status(vol_lots, vol_ma5, vol_ma20)
+    return {
+        "vol_lots": vol_lots if vol_lots is not None else "",
+        "vol_ma5_lots": vol_ma5 if vol_ma5 is not None else "",
+        "vol_ma20_lots": vol_ma20 if vol_ma20 is not None else "",
+        "vol_status": vol_status,
+    }
 
 
 def classify_latest_signal(
@@ -346,6 +419,7 @@ def classify_latest_signal(
         return None
 
     ma17_trend = describe_ma17_trend(usable["MA17"])
+    vol_metrics = _extract_latest_volume_metrics(usable)
 
     return {
         "date": latest["date"].strftime("%Y-%m-%d"),
@@ -358,6 +432,7 @@ def classify_latest_signal(
         "gap_percent": gap_percent,
         "signal": signal,
         "ma17_trend": ma17_trend,
+        **vol_metrics,
     }
 
 
@@ -379,6 +454,10 @@ def classify_latest_alignment_signal(
         "MA17_MA45_gap_percent": signal_data["gap_percent"],
         "signal": signal_data["signal"],
         "ma17_trend": signal_data["ma17_trend"],
+        "vol_lots": signal_data.get("vol_lots", ""),
+        "vol_ma5_lots": signal_data.get("vol_ma5_lots", ""),
+        "vol_ma20_lots": signal_data.get("vol_ma20_lots", ""),
+        "vol_status": signal_data.get("vol_status", "-"),
     }
 
 
@@ -416,8 +495,23 @@ def format_alignment_report(
         )
         trend_label = getattr(row, "ma17_trend", None)
         trend_part = f" | 17MA走勢 {trend_label}" if trend_label else ""
+
+        vol_lots = _parse_optional_float(getattr(row, "vol_lots", None))
+        vol_ma20 = _parse_optional_float(getattr(row, "vol_ma20_lots", None))
+        vol_status = getattr(row, "vol_status", None)
+        vol_part = ""
+        if vol_lots is not None:
+            ma20_str = f"｜20日均 {int(round(vol_ma20)):,}張" if vol_ma20 is not None else ""
+            status_str = (
+                f" ({vol_status}{ma20_str})"
+                if vol_status and str(vol_status) not in ("", "-", "nan")
+                else ""
+            )
+            vol_part = f" | 量 {int(round(vol_lots)):,}張{status_str}"
+
         line = (
             f"\n{row.stock_id} {row.stock_name}{signal_part} | 收盤 {float(row.close):,.2f}"
+            f"{vol_part}"
             f"{ma3_part}"
             f" | MA17 {float(row.MA17):,.2f}"
             f" | MA45 {float(row.MA45):,.2f}"
@@ -536,6 +630,21 @@ def _normalize_existing_tracker_record(raw: Mapping[str, object]) -> dict[str, o
     signal = str(raw.get("訊號類型") or raw.get("signal") or "").strip()
     ma17_trend = str(raw.get("17MA近期走勢") or raw.get("ma17_trend") or "-").strip()
 
+    vol_lots = _parse_optional_float(
+        raw.get("成交量(張)") if "成交量(張)" in raw else raw.get("vol_lots")
+    )
+    vol_ma5 = _parse_optional_float(
+        raw.get("5日均量(張)") if "5日均量(張)" in raw else raw.get("vol_ma5_lots")
+    )
+    vol_ma20 = _parse_optional_float(
+        raw.get("20日均量(張)") if "20日均量(張)" in raw else raw.get("vol_ma20_lots")
+    )
+    vol_status = str(
+        raw.get("量能狀態(量比)")
+        or raw.get("vol_status")
+        or (describe_volume_status(vol_lots, vol_ma5, vol_ma20) if vol_lots is not None else "-")
+    ).strip()
+
     close_val = _parse_optional_float(raw.get("收盤價") if "收盤價" in raw else raw.get("close"))
     ma3_val = _parse_optional_float(raw.get("3MA") if "3MA" in raw else raw.get("MA3"))
     ma17_val = _parse_optional_float(raw.get("17MA") if "17MA" in raw else raw.get("MA17"))
@@ -566,6 +675,10 @@ def _normalize_existing_tracker_record(raw: Mapping[str, object]) -> dict[str, o
         "每日執行狀況": daily_status,
         "訊號類型": signal,
         "17MA近期走勢": ma17_trend,
+        "成交量(張)": "" if vol_lots is None else int(round(vol_lots)),
+        "5日均量(張)": "" if vol_ma5 is None else int(round(vol_ma5)),
+        "20日均量(張)": "" if vol_ma20 is None else int(round(vol_ma20)),
+        "量能狀態(量比)": vol_status,
         "收盤價": "" if close_val is None else round(close_val, 2),
         "3MA": "" if ma3_val is None else round(ma3_val, 2),
         "17MA": "" if ma17_val is None else round(ma17_val, 2),
@@ -642,6 +755,10 @@ def build_signal_tracker_rows(
                         "gap_percent": rec["17與45MA差距(%)"],
                         "signal": rec["訊號類型"],
                         "ma17_trend": rec["17MA近期走勢"],
+                        "vol_lots": rec.get("成交量(張)", ""),
+                        "vol_ma5_lots": rec.get("5日均量(張)", ""),
+                        "vol_ma20_lots": rec.get("20日均量(張)", ""),
+                        "vol_status": rec.get("量能狀態(量比)", "-"),
                     }
                 )
         if retained_rows:
@@ -665,6 +782,24 @@ def build_signal_tracker_rows(
             data_date = str(row.get("date", scan_date_str)).strip()
             signal = str(row.get("signal", "")).strip()
             ma17_trend = str(row.get("ma17_trend", "") or "-").strip()
+
+            vol_lots_raw = _parse_optional_float(
+                row.get("vol_lots") if "vol_lots" in row else row.get("成交量(張)")
+            )
+            vol_ma5_raw = _parse_optional_float(
+                row.get("vol_ma5_lots") if "vol_ma5_lots" in row else row.get("5日均量(張)")
+            )
+            vol_ma20_raw = _parse_optional_float(
+                row.get("vol_ma20_lots") if "vol_ma20_lots" in row else row.get("20日均量(張)")
+            )
+            vol_lots_val: object = "" if vol_lots_raw is None else int(round(vol_lots_raw))
+            vol_ma5_val: object = "" if vol_ma5_raw is None else int(round(vol_ma5_raw))
+            vol_ma20_val: object = "" if vol_ma20_raw is None else int(round(vol_ma20_raw))
+            vol_status_raw = str(row.get("vol_status") or row.get("量能狀態(量比)") or "").strip()
+            if not vol_status_raw or vol_status_raw in ("-", "nan"):
+                vol_status_val = describe_volume_status(vol_lots_raw, vol_ma5_raw, vol_ma20_raw)
+            else:
+                vol_status_val = vol_status_raw
 
             close_val = round(float(row["close"]), 2)
             ma3_raw = _parse_optional_float(row.get("MA3"))
@@ -720,6 +855,10 @@ def build_signal_tracker_rows(
                     "每日執行狀況": daily_status,
                     "訊號類型": signal,
                     "17MA近期走勢": ma17_trend,
+                    "成交量(張)": vol_lots_val,
+                    "5日均量(張)": vol_ma5_val,
+                    "20日均量(張)": vol_ma20_val,
+                    "量能狀態(量比)": vol_status_val,
                     "收盤價": close_val,
                     "3MA": ma3_val,
                     "17MA": ma17_val,
@@ -745,6 +884,10 @@ def build_signal_tracker_rows(
                 "每日執行狀況": "✅ 每日掃描執行完成，今日無符合條件之個股",
                 "訊號類型": "-",
                 "17MA近期走勢": "-",
+                "成交量(張)": "",
+                "5日均量(張)": "",
+                "20日均量(張)": "",
+                "量能狀態(量比)": "-",
                 "收盤價": "",
                 "3MA": "",
                 "17MA": "",
@@ -851,15 +994,19 @@ def _format_signal_tracker_worksheet(
         320,  # 8: 每日執行狀況
         145,  # 9: 訊號類型
         215,  # 10: 17MA近期走勢
-        95,   # 11: 收盤價
-        95,   # 12: 3MA
-        95,   # 13: 17MA
-        95,   # 14: 45MA
-        95,   # 15: 117MA
-        95,   # 16: 189MA
-        130,  # 17: 17與45MA差距(%)
-        225,  # 18: 均線排列檢核
-        155,  # 19: 更新時間
+        105,  # 11: 成交量(張)
+        105,  # 12: 5日均量(張)
+        105,  # 13: 20日均量(張)
+        210,  # 14: 量能狀態(量比)
+        95,   # 15: 收盤價
+        95,   # 16: 3MA
+        95,   # 17: 17MA
+        95,   # 18: 45MA
+        95,   # 19: 117MA
+        95,   # 20: 189MA
+        130,  # 21: 17與45MA差距(%)
+        225,  # 22: 均線排列檢核
+        155,  # 23: 更新時間
     ]
 
     requests_payload: list[dict[str, object]] = [
@@ -936,7 +1083,7 @@ def _format_signal_tracker_worksheet(
                 "fields": "userEnteredFormat(backgroundColor,verticalAlignment,textFormat)",
             }
         },
-        # 5. 收盤價與各均線欄位 (index 11..17) 數值格式 #,##0.00
+        # 5. 成交量與均量欄位 (index 11..14) 整數千分位 #,##0
         {
             "repeatCell": {
                 "range": {
@@ -944,7 +1091,26 @@ def _format_signal_tracker_worksheet(
                     "startRowIndex": 1,
                     "endRowIndex": total_rows,
                     "startColumnIndex": 11,
-                    "endColumnIndex": 17,
+                    "endColumnIndex": 14,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+                        "horizontalAlignment": "RIGHT",
+                    }
+                },
+                "fields": "userEnteredFormat(numberFormat,horizontalAlignment)",
+            }
+        },
+        # 6. 收盤價與各均線欄位 (index 15..21) 數值格式 #,##0.00
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": 1,
+                    "endRowIndex": total_rows,
+                    "startColumnIndex": 15,
+                    "endColumnIndex": 21,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -955,15 +1121,15 @@ def _format_signal_tracker_worksheet(
                 "fields": "userEnteredFormat(numberFormat,horizontalAlignment)",
             }
         },
-        # 6. 差距百分比欄位 (index 17..18) 數值格式 0.00
+        # 7. 差距百分比欄位 (index 21..22) 數值格式 0.00
         {
             "repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
                     "startRowIndex": 1,
                     "endRowIndex": total_rows,
-                    "startColumnIndex": 17,
-                    "endColumnIndex": 18,
+                    "startColumnIndex": 21,
+                    "endColumnIndex": 22,
                 },
                 "cell": {
                     "userEnteredFormat": {
@@ -993,10 +1159,11 @@ def _format_signal_tracker_worksheet(
             }
         )
 
-    # 依每列狀態套用醒目視覺標記（當日新進整列淺綠底＋綠字粗體；已超過暖橘底；接近淺藍底）
+    # 依每列狀態套用醒目視覺標記（當日新進整列淺綠底＋綠字粗體；已超過暖橘底；接近淺藍底；放量點火亮橘紅字）
     for idx, rec in enumerate(records, start=1):
         is_new_str = str(rec.get("當日新進", ""))
         signal_str = str(rec.get("訊號類型", ""))
+        vol_status_str = str(rec.get("量能狀態(量比)", ""))
         if "🆕" in is_new_str:
             # 整列柔和薄荷綠底色，一眼看出是當日新產生的股票
             requests_payload.append(
@@ -1090,6 +1257,52 @@ def _format_signal_tracker_worksheet(
                             }
                         },
                         "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)",
+                    }
+                }
+            )
+        if "🔥" in vol_status_str or "📈" in vol_status_str:
+            requests_payload.append(
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": idx,
+                            "endRowIndex": idx + 1,
+                            "startColumnIndex": 14,
+                            "endColumnIndex": 15,
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "textFormat": {
+                                    "foregroundColor": {"red": 0.80, "green": 0.22, "blue": 0.08},
+                                    "bold": True,
+                                },
+                            }
+                        },
+                        "fields": "userEnteredFormat.textFormat",
+                    }
+                }
+            )
+        elif "低量冷門" in vol_status_str:
+            requests_payload.append(
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": idx,
+                            "endRowIndex": idx + 1,
+                            "startColumnIndex": 14,
+                            "endColumnIndex": 15,
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "textFormat": {
+                                    "foregroundColor": {"red": 0.55, "green": 0.55, "blue": 0.55},
+                                    "bold": False,
+                                },
+                            }
+                        },
+                        "fields": "userEnteredFormat.textFormat",
                     }
                 }
             )
@@ -1355,6 +1568,10 @@ def scan_industry(
             "gap_percent",
             "signal",
             "ma17_trend",
+            "vol_lots",
+            "vol_ma5_lots",
+            "vol_ma20_lots",
+            "vol_status",
         ],
     )
     alignment_frame = pd.DataFrame(
@@ -1374,6 +1591,10 @@ def scan_industry(
             "MA17_MA45_gap_percent",
             "signal",
             "ma17_trend",
+            "vol_lots",
+            "vol_ma5_lots",
+            "vol_ma20_lots",
+            "vol_status",
         ],
     )
     _atomic_write_csv(price_frame, price_path)
@@ -1627,6 +1848,10 @@ def scan_configured_universe(
                     "gap_percent",
                     "signal",
                     "ma17_trend",
+                    "vol_lots",
+                    "vol_ma5_lots",
+                    "vol_ma20_lots",
+                    "vol_status",
                 ],
             ),
             "alignment_signals": _combine_csvs(
@@ -1646,6 +1871,10 @@ def scan_configured_universe(
                     "MA17_MA45_gap_percent",
                     "signal",
                     "ma17_trend",
+                    "vol_lots",
+                    "vol_ma5_lots",
+                    "vol_ma20_lots",
+                    "vol_status",
                 ],
             ),
             "failures": _combine_csvs(

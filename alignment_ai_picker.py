@@ -32,9 +32,11 @@ from finmind_stock_scanner import (
     REQUEST_TIMEOUT_SECONDS,
     FinMindRequestLimiter,
     _cleanup_old_daily_reports,
+    _extract_latest_volume_metrics,
     _load_local_prior_signals,
     _rate_limit_finmind_http_requests,
     _today_in_taipei,
+    add_moving_averages,
     build_signal_tracker_rows,
     load_scan_config,
 )
@@ -71,9 +73,54 @@ def load_alignment_candidates(daily_dir: Path, target_date: date) -> pd.DataFram
     return frame.drop_duplicates(subset=["stock_id"], keep="last").reset_index(drop=True)
 
 
-def enrich_with_tracker(frame: pd.DataFrame, daily_dir: Path, target_date: date) -> pd.DataFrame:
-    """Add is_new / streak / daily_status using the same tracker logic as MA_Signal_Tracker."""
+def _backfill_volume_from_prices(
+    frame: pd.DataFrame, daily_dir: Path, target_date: date
+) -> pd.DataFrame:
+    """若舊版 alignment_signals.csv 尚未帶入 vol_lots，自動從同日 prices.csv 回補成交量與均量。"""
     result = frame.copy()
+    for col, default in (
+        ("vol_lots", ""),
+        ("vol_ma5_lots", ""),
+        ("vol_ma20_lots", ""),
+        ("vol_status", "-"),
+    ):
+        if col not in result.columns:
+            result[col] = default
+
+    has_vol = result["vol_lots"].astype(str).str.strip().replace({"nan": "", "None": ""}) != ""
+    if has_vol.all():
+        return result
+
+    prices_path = daily_dir / f"{target_date.isoformat()}_prices.csv"
+    if not prices_path.is_file():
+        return result
+    try:
+        prices_df = pd.read_csv(prices_path, dtype={"stock_id": str})
+    except Exception:  # noqa: BLE001
+        return result
+    if prices_df.empty or "stock_id" not in prices_df.columns:
+        return result
+
+    prices_df["stock_id"] = prices_df["stock_id"].astype(str).str.strip()
+    for idx, sid in result["stock_id"].items():
+        if bool(has_vol.loc[idx]):
+            continue
+        sub = prices_df.loc[prices_df["stock_id"] == str(sid)].copy()
+        if sub.empty:
+            continue
+        try:
+            analyzed = add_moving_averages(sub)
+            metrics = _extract_latest_volume_metrics(analyzed)
+            for k, v in metrics.items():
+                result.at[idx, k] = v
+        except Exception:  # noqa: BLE001
+            continue
+    return result
+
+
+def enrich_with_tracker(frame: pd.DataFrame, daily_dir: Path, target_date: date) -> pd.DataFrame:
+    """Add is_new / streak / daily_status / volume metrics using the same tracker logic as MA_Signal_Tracker."""
+    result = _backfill_volume_from_prices(frame, daily_dir, target_date)
     result["is_new"] = False
     result["streak"] = 1
     result["daily_status"] = ""
@@ -141,13 +188,23 @@ def _num(value: object, digits: int = 2) -> str:
         return "N/A"
 
 
+def _fmt_volume_line(row: Mapping[str, object]) -> str:
+    vol = _num(row.get("vol_lots"), 0)
+    ma5 = _num(row.get("vol_ma5_lots"), 0)
+    ma20 = _num(row.get("vol_ma20_lots"), 0)
+    status = str(row.get("vol_status", "") or "-").strip()
+    if vol == "N/A":
+        return "無成交量資料"
+    return f"今日 {vol} 張｜5日均量 {ma5} 張｜20日均量 {ma20} 張｜狀態：{status}"
+
+
 def build_dossier(index: int, row: Mapping[str, object], snapshot: str, summary: str) -> str:
     new_label = "🆕 是（新進榜）" if row.get("is_new") else "🔄 否（持續符合）"
     return "\n".join(
         [
             f"### 【候選標的 #{index}】{row['stock_id']} {row.get('stock_name', '')}"
             f"（{row.get('market', '')}｜{row.get('industry_category', '')}）",
-            "- [A. 均線訊號與位階動態]",
+            "- [A. 均線訊號、位階動態與量能結構]",
             (
                 f"  - 收盤價：{_num(row.get('close'))}｜3MA：{_num(row.get('MA3'))}｜17MA：{_num(row.get('MA17'))}"
                 f"｜45MA：{_num(row.get('MA45'))}｜117MA：{_num(row.get('MA117'))}｜189MA：{_num(row.get('MA189'))}"
@@ -156,6 +213,7 @@ def build_dossier(index: int, row: Mapping[str, object], snapshot: str, summary:
                 f"  - 訊號類型：{row.get('signal', '')}（17MA 與 45MA 差距：{_num(row.get('gap_percent'))}%）"
                 f"｜17MA 走勢：{row.get('ma17_trend', '')}"
             ),
+            f"  - 量能結構：{_fmt_volume_line(row)}",
             f"  - 進榜狀態：{new_label}｜連續符合天數：{row.get('streak', 1)} 日｜動態：{row.get('daily_status', '')}",
             "- [B. 核心量化財務與領先指標（系統自 Google Sheets 精確提取）]",
             snapshot,
@@ -327,6 +385,8 @@ def format_pick_report(
             report = results.get(stock_id, {}).get("report")
             verdict = str(pick.get("outlook_verdict", "無資料"))
             emoji = _VERDICT_EMOJI.get(verdict, "⚪")
+            vol_str = _fmt_volume_line(row)
+            vol_line = [f"量能：{vol_str}"] if vol_str != "無成交量資料" else []
             blocks.append(
                 "\n".join(
                     [
@@ -335,6 +395,7 @@ def format_pick_report(
                         f"收盤 {_num(row.get('close'))}｜17MA {_num(row.get('MA17'))}（短線支撐）"
                         f"｜45MA {_num(row.get('MA45'))}（波段防守）｜{row.get('signal', '')}"
                         f"｜連 {row.get('streak', 1)} 日",
+                        *vol_line,
                         f"理由：{pick.get('thesis', '')}",
                         f"風險：{pick.get('risk', '')}",
                         _links(stock_id, getattr(report, "war_room_url", None)),

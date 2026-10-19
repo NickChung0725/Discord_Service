@@ -167,10 +167,22 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(rows[0]["fundamental_score"], 77)
 
     def test_dossier_contains_all_sections(self) -> None:
-        row = _frame([{"stock_id": "2330", "stock_name": "台積電"}]).to_dict("records")[0]
+        row = _frame(
+            [{"stock_id": "2330", "stock_name": "台積電", "vol_lots": 5420, "vol_ma5_lots": 3800, "vol_ma20_lots": 2400, "vol_status": "🔥 放量點火 (2.26x｜5MA>20MA)"}]
+        ).to_dict("records")[0]
         text = build_dossier(1, row, "  - snapshot", '{"verdict":"v"}')
-        for needle in ("【候選標的 #1】2330 台積電", "[A.", "[B.", "[C.", "snapshot", '"verdict"'):
+        for needle in ("【候選標的 #1】2330 台積電", "[A.", "量能結構：今日 5,420 張", "[B.", "[C.", "snapshot", '"verdict"'):
             self.assertIn(needle, text)
+
+    def test_volume_status_classification(self) -> None:
+        from finmind_stock_scanner import describe_volume_status
+
+        self.assertIn("低量冷門", describe_volume_status(180, 200, 210))
+        self.assertIn("🔥 放量點火", describe_volume_status(5000, 3500, 2000))
+        self.assertIn("5MA>20MA", describe_volume_status(5000, 3500, 2000))
+        self.assertIn("📈 溫和放量", describe_volume_status(1500, 1300, 1000))
+        self.assertIn("💧 量縮整理", describe_volume_status(600, 900, 1000))
+        self.assertIn("⚠️ 天量過熱", describe_volume_status(5000, 2000, 1000))
 
 
 class SummaryTests(unittest.TestCase):

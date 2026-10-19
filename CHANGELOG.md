@@ -4,6 +4,27 @@
 
 ---
 
+## [v3.2.2] - 2026-10-19
+### ✨ 新增功能 (Added)
+* **專業操盤手視角「黃金量能三維度」全面導入 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py), [`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py))**：
+  * **零額外 API 額度消耗**：直接從 FinMind `taiwan_stock_daily` 既有 `Trading_Volume`（股數）換算「張數 (`/ 1000`)」，同步計算 **`成交量(張)`**、**`5日均量(張)`（1 週短線動能）**、**`20日均量(張)`（1 個月機構基準量）** 與 **`量能狀態(量比)`（今日量 ÷ 20MA 均量 ＋ 5MA vs 20MA 多頭量構）**。
+  * **6 大量能狀態智慧判讀 (`describe_volume_status`)**：
+    * `🔥 放量點火 (>= 2.0x)`：主力真金白銀進場點火，突破最具可信度。
+    * `📈 溫和放量 (1.2x ~ 2.0x)`：健康推升量，籌碼穩定換手。
+    * `➡️ 量能平穩 (0.8x ~ 1.2x)`：正常量能。
+    * `💧 量縮整理 (< 0.8x)`：拉回不破 `17MA` 屬主力鎖碼惜售；突破日若無量則提防假突破。
+    * `⚠️ 天量過熱 (> 4.5x)`：爆出超過月均量 4.5 倍以上天量，警示短線隔日沖或主力趁利多倒貨風險。
+    * `⚠️ 低量冷門 (< 500張)`：20 日均量與今日量皆低於 500 張，警示流動性不足與滑價風險。
+  * **Google Sheets `MA_Signal_Tracker` 擴充與視覺化上色**：
+    * 新增 4 欄：`成交量(張)`、`5日均量(張)`、`20日均量(張)`、`量能狀態(量比)`（共 22 欄，支援既有歷史資料與 `{date}_prices.csv` 自動回填）。
+    * 自動套用千分位整數格式 `#,##0`；`量能狀態(量比)` 含 `🔥` 或 `📈` 自動標示**橘紅底粗體**，含 `低量冷門` 自動標示**淺灰底深灰字**。
+  * **19:00 Discord 強勢股快報、22:00 AI 嚴選與 `/stock_ai` 全面連動**：
+    * **19:00 快報 (`format_alignment_report`)**：每檔標的直接顯示 `量能: 🔥 放量點火 (2.45x｜5MA>20MA) [今 5,820張 / 5MA 3,410張 / 20MA 2,380張]`。
+    * **22:00 AI 嚴選 (`alignment_ai_picker.py`)**：Dossier 與 Discord 推播卡片同步納入量能結構，並升級 `portfolio_selection` Prompt，引導 AI 優先加分「帶量突破 (`1.5x ~ 3.5x`) 或強勢股量縮回測 17MA 支撐」，自動降評 `< 500 張` 殭屍股與 `> 4.5x` 天量爆量股。
+    * **`/stock_ai` 單股診斷 (`fundamental_analyzer.py`)**：表 7 新增當日量能結構摘要與近 5 日成交量（張）明細，Prompt 第 6 節升級為「技術面與量價配合綜合結論」。
+
+---
+
 ## [v3.2.1] - 2026-10-18
 ### ✨ 新增功能與介面大升級 (Added & Improved)
 * **全方位投資戰情室（基本面財報 ＋ 技術面 K 線）二合一整合 ([`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py), [`chart_generator.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/chart_generator.py))**：
