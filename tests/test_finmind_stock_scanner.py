@@ -219,20 +219,20 @@ class FinMindStockScannerTests(unittest.TestCase):
 
         self.assertIsNotNone(signal)
         assert signal is not None
-        self.assertEqual(signal["signal"], "接近（差距 <= 1%）")
+        self.assertEqual(signal["signal"], "剛金叉起漲")
         self.assertGreaterEqual(signal["MA3"], signal["MA17"])
         self.assertGreater(signal["MA45"], signal["MA117"])
         self.assertGreater(signal["MA117"], signal["MA189"])
-        self.assertLessEqual(signal["gap_percent"], 1.0)
+        self.assertLessEqual(signal["gap_percent"], 2.5)
         self.assertGreater(signal["gap_percent"], 0.0)
         self.assertIn("ma17_trend", signal)
 
     def test_classifies_ma45_above_ma17(self) -> None:
-        # Construct series where MA3 >= MA45 >= MA17 and MA45 > MA117 > MA189
+        # Construct series where MA3 >= MA45 >= MA17 (-1.5% <= gap < 0%) and MA45 > MA117 > MA189
         prices = pd.DataFrame(
             {
                 "date": pd.date_range("2025-01-01", periods=220, freq="B"),
-                "close": [90.0] * 100 + [100.0] * 75 + [120.0] * 28 + [108.0] * 14 + [118.0] * 3,
+                "close": [90.0] * 100 + [100.0] * 75 + [105.0] * 28 + [103.0] * 14 + [106.0] * 3,
             }
         )
 
@@ -240,11 +240,48 @@ class FinMindStockScannerTests(unittest.TestCase):
 
         self.assertIsNotNone(signal)
         assert signal is not None
-        self.assertEqual(signal["signal"], "已超過")
+        self.assertEqual(signal["signal"], "即將金叉")
         self.assertGreaterEqual(signal["MA3"], signal["MA45"])
         self.assertGreaterEqual(signal["MA45"], signal["MA17"])
         self.assertGreater(signal["MA45"], signal["MA117"])
         self.assertGreater(signal["MA117"], signal["MA189"])
+        self.assertGreaterEqual(signal["gap_percent"], -1.5)
+        self.assertLess(signal["gap_percent"], 0.0)
+
+    def test_rejects_signal_when_gap_is_below_negative_1_point_5(self) -> None:
+        # MA45 >= MA17, but gap is below -1.5% (e.g. -5.8%), not yet close enough to golden cross
+        prices = pd.DataFrame(
+            {
+                "date": pd.date_range("2025-01-01", periods=220, freq="B"),
+                "close": [90.0] * 100 + [100.0] * 75 + [120.0] * 28 + [108.0] * 14 + [118.0] * 3,
+            }
+        )
+        self.assertIsNone(classify_latest_signal(add_moving_averages(prices)))
+
+    def test_classifies_golden_cross_in_extended_range(self) -> None:
+        # Gap between 1.0% and 2.5% (e.g. ~1.9%), previously rejected, now accepted as 剛金叉起漲
+        prices = pd.DataFrame(
+            {
+                "date": pd.date_range("2025-01-01", periods=220, freq="B"),
+                "close": [90.0] * 100 + [100.0] * 75 + [100.0] * 28 + [103.0] * 14 + [104.0] * 3,
+            }
+        )
+        signal = classify_latest_signal(add_moving_averages(prices))
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal["signal"], "剛金叉起漲")
+        self.assertGreater(signal["gap_percent"], 1.0)
+        self.assertLessEqual(signal["gap_percent"], 2.5)
+
+    def test_rejects_signal_when_gap_exceeds_positive_2_point_5(self) -> None:
+        # Gap > 2.5%, over-extended beyond initial takeoff
+        prices = pd.DataFrame(
+            {
+                "date": pd.date_range("2025-01-01", periods=220, freq="B"),
+                "close": [90.0] * 100 + [100.0] * 75 + [100.0] * 28 + [105.0] * 14 + [108.0] * 3,
+            }
+        )
+        self.assertIsNone(classify_latest_signal(add_moving_averages(prices)))
 
     def test_rejects_signal_when_ma3_is_not_above_all_lines(self) -> None:
         # MA45 >= MA17 and MA45 > MA117 > MA189, but MA3 < MA45
@@ -298,7 +335,7 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertGreaterEqual(signal["MA3"], signal["MA17"])
         self.assertGreater(signal["MA45"], signal["MA117"])
         self.assertGreater(signal["MA117"], signal["MA189"])
-        self.assertLessEqual(signal["MA17_MA45_gap_percent"], 1)
+        self.assertLessEqual(signal["MA17_MA45_gap_percent"], 2.5)
 
     def test_does_not_classify_alignment_if_fast_averages_are_not_both_above(self) -> None:
         prices = pd.DataFrame(
@@ -482,8 +519,8 @@ class FinMindStockScannerTests(unittest.TestCase):
                     "MA45": 985.0,
                     "MA117": 950.0,
                     "MA189": 910.0,
-                    "gap_percent": 0.51,
-                    "signal": "接近（差距 <= 1%）",
+                    "gap_percent": -0.50,
+                    "signal": "即將金叉",
                 }
             ]
         )
@@ -507,11 +544,11 @@ class FinMindStockScannerTests(unittest.TestCase):
                     "date": "2026-10-16",
                     "close": 1010.0,
                     "MA17": 992.0,
-                    "MA45": 995.0,
+                    "MA45": 985.0,
                     "MA117": 955.0,
                     "MA189": 915.0,
-                    "gap_percent": -0.30,
-                    "signal": "已超過",
+                    "gap_percent": 0.71,
+                    "signal": "剛金叉起漲",
                 },
                 {
                     "market": "上櫃",
@@ -525,7 +562,7 @@ class FinMindStockScannerTests(unittest.TestCase):
                     "MA117": 460.0,
                     "MA189": 430.0,
                     "gap_percent": 0.61,
-                    "signal": "接近（差距 <= 1%）",
+                    "signal": "剛金叉起漲",
                 },
             ]
         )
@@ -564,7 +601,7 @@ class FinMindStockScannerTests(unittest.TestCase):
                     "MA117": 950.0,
                     "MA189": 910.0,
                     "gap_percent": 0.51,
-                    "signal": "接近（差距 <= 1%）",
+                    "signal": "剛金叉起漲",
                 }
             ]
         )

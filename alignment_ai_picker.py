@@ -271,13 +271,49 @@ async def analyze_candidates(
 def parse_portfolio_json(raw: str, valid_ids: set[str], max_top: int) -> dict | None:
     """Extract and sanitise the decision JSON; ids outside the candidate list are dropped."""
     text = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end <= start:
+    start = text.find("{")
+    if start < 0:
         return None
-    try:
-        data = json.loads(text[start : end + 1])
-    except (json.JSONDecodeError, ValueError):
-        return None
+
+    def try_load(candidate: str) -> dict | None:
+        try:
+            res = json.loads(candidate)
+            return res if isinstance(res, dict) else None
+        except Exception:
+            return None
+
+    data = None
+
+    # Step 1: Try exact slice between first { and last }
+    end = text.rfind("}")
+    if end > start:
+        data = try_load(text[start : end + 1])
+
+    # Step 2: Fix trailing hallucinated words before/around closing braces (e.g. `} questionnaires}`)
+    if data is None:
+        cleaned = re.sub(r'\}\s*[a-zA-Z_0-9\-]+\s*\}?$', '}]}', text)
+        start_c = cleaned.find("{")
+        end_c = cleaned.rfind("}")
+        if start_c >= 0 and end_c > start_c:
+            data = try_load(cleaned[start_c : end_c + 1])
+
+    # Step 3: Remove trailing commas like `, }` or `, ]`
+    if data is None and end > start:
+        cleaned_commas = re.sub(r',\s*([\]\}])', r'\1', text[start : end + 1])
+        data = try_load(cleaned_commas)
+
+    # Step 4: Bracket balancing repair (find last complete dict entry and close open brackets)
+    if data is None:
+        matches = list(re.finditer(r'\}\s*\]?', text))
+        for m in reversed(matches):
+            cut = text[start : m.end()]
+            open_sq = cut.count("[") - cut.count("]")
+            open_cu = cut.count("{") - cut.count("}")
+            repaired = cut + ("]" * max(0, open_sq)) + ("}" * max(0, open_cu))
+            data = try_load(repaired)
+            if data is not None:
+                break
+
     if not isinstance(data, dict):
         return None
 

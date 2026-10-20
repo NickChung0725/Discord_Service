@@ -110,6 +110,34 @@ class PortfolioParsingTests(unittest.TestCase):
         self.assertIsNone(parse_portfolio_json("no json here", {"2330"}, 3))
         self.assertIsNone(parse_portfolio_json("{broken", {"2330"}, 3))
 
+    def test_parse_auto_repairs_trailing_hallucinated_words_and_unclosed_array(self) -> None:
+        # Realistic error: AI omitted closing bracket of avoid array and appended a stray word before closing brace
+        raw = (
+            '{"market_comment": "盤勢震盪", '
+            '"top_picks": [{"rank": 1, "stock_id": "2618", "score": 83, "outlook_verdict": "待驗證", "thesis": "營收成長", "risk": "油價"}], '
+            '"watchlist": [{"stock_id": "6277", "reason": "毛利高"}], '
+            '"avoid": [{"stock_id": "9912", "reason": "虧損"}, {"stock_id": "5450", "reason": "低量"} questionnaires}'
+        )
+        decision = parse_portfolio_json(raw, {"2618", "6277", "9912", "5450"}, max_top=3)
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision["market_comment"], "盤勢震盪")
+        self.assertEqual([p["stock_id"] for p in decision["top_picks"]], ["2618"])
+        self.assertEqual([w["stock_id"] for w in decision["watchlist"]], ["6277"])
+        self.assertEqual([a["stock_id"] for a in decision["avoid"]], ["9912", "5450"])
+
+    def test_parse_auto_repairs_trailing_commas(self) -> None:
+        raw = (
+            '{"market_comment": "好", '
+            '"top_picks": [{"rank": 1, "stock_id": "2330", "score": 95, "outlook_verdict": "高度可信", "thesis": "強", "risk": "無",},], '
+            '"watchlist": [], '
+            '"avoid": [],}'
+        )
+        decision = parse_portfolio_json(raw, {"2330"}, max_top=1)
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual([p["stock_id"] for p in decision["top_picks"]], ["2330"])
+
 
 class ReportTests(unittest.TestCase):
     def _decision(self) -> dict:

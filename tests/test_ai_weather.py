@@ -61,9 +61,9 @@ class WeatherReportTests(unittest.TestCase):
 
     def test_gemini_uses_configured_key_model_and_prompt(self) -> None:
         response = Mock()
-        response.text = "Hello!"
+        response.output_text = "Hello!"
         client = Mock()
-        client.models.generate_content.return_value = response
+        client.interactions.create.return_value = response
         with (
             patch.dict(
                 "os.environ",
@@ -76,15 +76,15 @@ class WeatherReportTests(unittest.TestCase):
 
         self.assertEqual(answer, "Hello!")
         create_client.assert_called_once_with(api_key="test-key")
-        client.models.generate_content.assert_called_once_with(
+        client.interactions.create.assert_called_once_with(
             model="test-model",
-            contents="hello",
+            input="hello",
         )
 
     def test_gemini_uses_working_sample_default_model(self) -> None:
-        response = Mock(text="Answer from Gemini")
+        response = Mock(output_text="Answer from Gemini")
         client = Mock()
-        client.models.generate_content.return_value = response
+        client.interactions.create.return_value = response
         with (
             patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}, clear=True),
             patch("ai_weather.genai.Client", return_value=client),
@@ -93,7 +93,7 @@ class WeatherReportTests(unittest.TestCase):
 
         self.assertEqual(answer, "Answer from Gemini")
         self.assertEqual(
-            client.models.generate_content.call_args.kwargs["model"],
+            client.interactions.create.call_args.kwargs["model"],
             "gemini-flash-lite-latest",
         )
 

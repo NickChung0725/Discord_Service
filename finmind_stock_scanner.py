@@ -39,8 +39,9 @@ MARKET_CODES = {"上市": "twse", "上櫃": "tpex", "興櫃": "emerging"}
 STOCK_INFO_COLUMNS = {"stock_id", "stock_name", "industry_category", "type"}
 PRICE_COLUMNS = {"date", "close"}
 MOVING_AVERAGE_PERIODS = (3, 17, 45, 117, 189)
-NEAR_CROSS_PERCENT = 1.0
-ALIGNMENT_MAX_GAP_PERCENT = 1.0
+ALIGNMENT_MIN_GAP_PERCENT = -1.5
+ALIGNMENT_MAX_GAP_PERCENT = 2.5
+NEAR_CROSS_PERCENT = ALIGNMENT_MAX_GAP_PERCENT
 REQUEST_PAUSE_SECONDS = 6.2
 REQUEST_TIMEOUT_SECONDS = 30
 INDICATOR_HISTORY_MONTHS = 12
@@ -409,12 +410,17 @@ def classify_latest_signal(
     if not (ma45 > ma117 and ma117 > ma189):
         return None
 
-    # 3. 以 17MA 為基準計算差距百分比
+    # 3. 以 17MA 為基準計算差距百分比：(17MA - 45MA) / 17MA * 100
+    # 採雙區間設計：-1.5% ~ 0% 即將金叉，0% ~ +2.5% 剛金叉起漲
     gap_percent = (ma17 - ma45) / ma17 * 100
-    if ma45 >= ma17:
-        signal = "已超過"
-    elif gap_percent <= NEAR_CROSS_PERCENT:
-        signal = "接近（差距 <= 1%）"
+    rounded_gap = round(gap_percent, 2)
+    if rounded_gap < 0:
+        if rounded_gap >= ALIGNMENT_MIN_GAP_PERCENT:
+            signal = "即將金叉"
+        else:
+            return None
+    elif rounded_gap <= ALIGNMENT_MAX_GAP_PERCENT:
+        signal = "剛金叉起漲"
     else:
         return None
 
@@ -469,7 +475,7 @@ def format_alignment_report(
     report_date = (as_of or _today_in_taipei()).isoformat()
     heading = (
         f"📊 {report_date} MA 均線排列訊號"
-        "\n條件：MA3 >= 所有均線；以 MA17 為基準，MA45 已超過或即將超過 MA17（差距 <= 1%）；"
+        "\n條件：MA3 >= 所有均線；17/45MA 處於即將金叉（-1.5%~0%）或剛金叉起漲（0%~+2.5%）；"
         "且 MA45 > MA117 > MA189"
     )
     if failed_count:
@@ -827,13 +833,13 @@ def build_signal_tracker_rows(
                 prev_signal = str(prev_rec.get("訊號類型", "")).strip()
                 prev_gap = _parse_optional_float(prev_rec.get("17與45MA差距(%)"))
                 if prev_signal and prev_signal != signal:
-                    if signal == "已超過":
+                    if "剛金叉" in signal or signal == "已超過":
                         daily_status = (
-                            f"🔥 轉強突破（接近 ➔ 已超過｜連 {streak} 日｜差距 {gap_val:.2f}%）"
+                            f"🔥 轉強突破（{prev_signal} ➔ {signal}｜連 {streak} 日｜差距 {gap_val:.2f}%）"
                         )
                     else:
                         daily_status = (
-                            f"⚠️ 訊號收斂（已超過 ➔ 接近｜連 {streak} 日｜差距 {gap_val:.2f}%）"
+                            f"⚠️ 均線拉回（{prev_signal} ➔ {signal}｜連 {streak} 日｜差距 {gap_val:.2f}%）"
                         )
                 elif prev_gap is not None:
                     daily_status = (
@@ -914,7 +920,8 @@ def build_signal_tracker_rows(
             if "🆕" in str(rec.get("當日新進", ""))
             else (2 if str(rec.get("股票代號", "")) == "-" else 1)
         )
-        signal_rank = 0 if str(rec.get("訊號類型", "")) == "已超過" else 1
+        is_golden = "剛金叉" in str(rec.get("訊號類型", "")) or str(rec.get("訊號類型", "")) == "已超過"
+        signal_rank = 0 if is_golden else 1
         gap_num = _parse_optional_float(rec.get("17與45MA差距(%)"))
         return (
             date_num,
@@ -1210,7 +1217,7 @@ def _format_signal_tracker_worksheet(
                     }
                 }
             )
-        if signal_str == "已超過":
+        if "剛金叉" in signal_str or signal_str == "已超過":
             requests_payload.append(
                 {
                     "repeatCell": {
@@ -1235,7 +1242,7 @@ def _format_signal_tracker_worksheet(
                     }
                 }
             )
-        elif "接近" in signal_str:
+        elif "即將金叉" in signal_str or "接近" in signal_str:
             requests_payload.append(
                 {
                     "repeatCell": {
@@ -2078,7 +2085,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=args.output_dir,
         )
         print(
-            f"\n符合 MA45 已超過或距 MA17 <= 1% 且 MA45 > MA117 > MA189：{signal_count} 檔"
+            f"\n符合 17/45MA 即將金叉（-1.5%~0%）或剛金叉起漲（0%~+2.5%）且 MA45 > MA117 > MA189：{signal_count} 檔"
         )
         signals_df = pd.read_csv(signal_path, dtype={"stock_id": str})
         if signal_count:

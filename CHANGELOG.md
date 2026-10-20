@@ -4,6 +4,26 @@
 
 ---
 
+## [v3.2.3] - 2026-10-20
+### ✨ 均線排列訊號邏輯升級 (Improved)
+* **17/45MA 雙區間訊號判讀全面重構（「-1.5% ~ 0% 即將金叉」＋「0% ~ +2.5% 剛金叉起漲」）([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：
+  * **解決舊版 `1%` 門檻過於嚴苛之痛點**：舊版限制 `1%` 導致強勢股剛黃金交叉 2~3 天（17MA 與 45MA 開口拉開至 1.2%~2.5%）即過早自追蹤表剔除，無法追蹤「初升段」與「首次量縮回測 17MA 支撐」之安全甜蜜買點。
+  * **雙區間訊號標準化**：
+    * `即將金叉`（差距 `-1.5% <= gap < 0%`）：17MA 處於 45MA 下方 1.5% 內且 3MA 已率先站上所有均線，蓄勢即將金叉。同時排除落後超過 -1.5%（如 -5%）之假反彈弱勢股。
+    * `剛金叉起漲`（差距 `0% <= gap <= +2.5%`）：17MA 正式站上 45MA，五線標準多頭排列（`3MA >= 17MA >= 45MA > 117MA > 189MA`），開口處於 +2.5% 內之初升段安全起漲區。
+  * **Google Sheets 與 Discord 視覺化同步升級**：
+    * `MA_Signal_Tracker` 每日執行狀況智慧辨識：當訊號由「即將金叉」轉為「剛金叉起漲」，自動標記 `🔥 轉強突破（即將金叉 ➔ 剛金叉起漲｜連 X 日｜差距 X.XX%）`；反之標記 `⚠️ 均線拉回`。
+    * 條件格式上色：`剛金叉起漲`（含舊版 `已超過`）標記為**暖橘紅底深橘字**；`即將金叉`（含舊版 `接近`）標記為**柔和藍底深藍字**。
+    * 19:00 Discord 快報條件標題與篩選規則同步更新為雙區間標準。
+
+### 🔧 錯誤修正 (Fixed)
+* **22:00 AI 嚴選報告導入多階自我修復式 JSON 解析器 (`parse_portfolio_json`) ([`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py))**：
+  * **根治 LLM 結尾幻覺與陣列未閉合造成的解析中斷**：針對 Gemini 生成長篇 JSON 在末端偶發漏閉合 `]` 或附加尾隨單詞（如 `} questionnaires}`）的情況，導入四階容錯修復流程（精確切片 ➔ 尾部雜字與漏閉合修復 ➔ 尾隨逗號清洗 ➔ 括號平衡重構），徹底避免前段 99% 精準分析因末尾微小語法問題而降級為未結構化文字。
+  * **Prompt 約束升級**：在 `portfolio_selection` 提示詞中強化結尾結構規範（嚴禁額外雜字、註解，陣列必須以 `]` 正確閉合）。
+
+
+---
+
 ## [v3.2.2] - 2026-10-19
 ### ✨ 新增功能 (Added)
 * **專業操盤手視角「黃金量能三維度」全面導入 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py), [`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py))**：
