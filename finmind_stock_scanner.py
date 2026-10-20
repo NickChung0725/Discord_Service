@@ -1927,6 +1927,150 @@ def scan_configured_universe(
     return report_paths, len(failures), len(alignment_signals), len(failed_groups)
 
 
+SIGNAL_CSV_COLUMNS = [
+    "market",
+    "industry_category",
+    "stock_id",
+    "stock_name",
+    "date",
+    "close",
+    "MA3",
+    "MA17",
+    "MA45",
+    "MA117",
+    "MA189",
+    "gap_percent",
+    "signal",
+    "ma17_trend",
+    "vol_lots",
+    "vol_ma5_lots",
+    "vol_ma20_lots",
+    "vol_status",
+]
+ALIGNMENT_CSV_COLUMNS = [
+    "MA17_MA45_gap_percent" if column == "gap_percent" else column
+    for column in SIGNAL_CSV_COLUMNS
+]
+
+
+def recalc_signals_from_prices(
+    prices: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """純本地運算：以已存檔的 prices.csv（內含完整均線與成交量）重新套用訊號規則。
+
+    不呼叫 FinMind API；prices.csv 內的 MA3~MA189 為 19:00 以近一年資料算好的值，
+    因此直接沿用，不在截短後的半年視窗內重算（否則 MA189 會變空值）。
+    """
+    signals: list[dict[str, object]] = []
+    alignments: list[dict[str, object]] = []
+    if prices.empty:
+        return (
+            pd.DataFrame(columns=SIGNAL_CSV_COLUMNS),
+            pd.DataFrame(columns=ALIGNMENT_CSV_COLUMNS),
+        )
+
+    frame = prices.copy()
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame = frame.dropna(subset=["date"]).sort_values(["stock_id", "date"])
+    for stock_id, group in frame.groupby("stock_id", sort=False):
+        first = group.iloc[0]
+        meta = {
+            "market": first.get("market", ""),
+            "industry_category": first.get("industry_category", ""),
+            "stock_id": str(stock_id),
+            "stock_name": first.get("stock_name", ""),
+        }
+        signal = classify_latest_signal(group)
+        if signal is not None:
+            signals.append({**meta, **signal})
+        alignment = classify_latest_alignment_signal(group)
+        if alignment is not None:
+            alignments.append({**meta, **alignment})
+
+    return (
+        pd.DataFrame(signals, columns=SIGNAL_CSV_COLUMNS),
+        pd.DataFrame(alignments, columns=ALIGNMENT_CSV_COLUMNS),
+    )
+
+
+def recalc_from_cache(
+    config: Mapping[str, object],
+    *,
+    as_of: date | None = None,
+    output_dir: Path | None = None,
+    dry_run: bool = False,
+    skip_gsheet: bool = False,
+    skip_discord: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """讀取 {date}_prices.csv 秒級重算訊號，並（非 dry-run 時）覆寫 CSV／Sheets／Discord。"""
+    today = as_of or _today_in_taipei()
+    output_root = output_dir or Path(str(config["output_directory"]))
+    daily_directory = output_root / "daily"
+    prices_path = daily_directory / f"{today.isoformat()}_prices.csv"
+    if not prices_path.is_file():
+        raise FileNotFoundError(
+            f"找不到 {prices_path}；請先執行 scan-all 抓取當日日線資料。"
+        )
+
+    prices = pd.read_csv(prices_path, dtype={"stock_id": str})
+    signals, alignments = recalc_signals_from_prices(prices)
+    print(
+        f"[recalc] 讀取 {prices_path.name}（{prices['stock_id'].nunique()} 檔）；"
+        f"符合訊號 {len(signals)} 檔、均線排列清單 {len(alignments)} 檔。"
+    )
+    if not alignments.empty:
+        display_columns = [
+            "stock_id",
+            "stock_name",
+            "signal",
+            "MA17_MA45_gap_percent",
+            "vol_status",
+        ]
+        print(alignments[display_columns].to_string(index=False))
+
+    if dry_run:
+        print("[recalc] --dry-run：未寫入任何檔案、Google Sheets 與 Discord。")
+        return signals, alignments
+
+    _atomic_write_csv(signals, daily_directory / f"{today.isoformat()}_signals.csv")
+    _atomic_write_csv(
+        alignments, daily_directory / f"{today.isoformat()}_alignment_signals.csv"
+    )
+    print(f"[recalc] 已覆寫 {today.isoformat()}_signals.csv 與 _alignment_signals.csv。")
+
+    if config.get("sync_signals_to_gsheet") and not skip_gsheet:
+        tab_name = str(config.get("gsheet_tab_name") or SIGNAL_TRACKER_SHEET_NAME)
+        rows = sync_signals_to_gsheet(
+            signals,
+            as_of=today,
+            tab_name=tab_name,
+            daily_directory=daily_directory,
+            replace_date=True,
+        )
+        print(f"[recalc] 已覆寫 Google Sheets [{tab_name}] 今日資料（共 {rows} 筆紀錄）。")
+
+    if config.get("post_alignment_to_discord") and not skip_discord:
+        failures_path = daily_directory / f"{today.isoformat()}_failures.csv"
+        failed_count = 0
+        if failures_path.is_file():
+            try:
+                failed_count = len(pd.read_csv(failures_path))
+            except pd.errors.EmptyDataError:
+                failed_count = 0
+        bot_token = (
+            os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or ""
+        ).strip()
+        post_alignment_report_to_discord(
+            alignments,
+            channel_id=str(config["stock_channel_id"]),
+            bot_token=bot_token,
+            as_of=today,
+            failed_count=failed_count,
+        )
+        print("[recalc] 已重發 Discord 均線快報。")
+    return signals, alignments
+
+
 def _make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="使用 FinMind 列出台股市場／產業，並掃描 MA45 與 MA17。"
@@ -1984,6 +2128,24 @@ def _make_parser() -> argparse.ArgumentParser:
         help="停用將 signals.csv 同步寫入 Google Sheets MA_Signal_Tracker",
     )
 
+    recalc_parser = subparsers.add_parser(
+        "recalc-signals",
+        help="秒級重算：不呼叫 FinMind，直接讀當日 prices.csv 重新套用訊號規則（調參／回測用）",
+    )
+    recalc_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("finmind_scanner.json"),
+        help="JSON 設定檔路徑（預設：finmind_scanner.json）",
+    )
+    recalc_parser.add_argument("--date", help="指定日期 YYYY-MM-DD（預設今日）")
+    recalc_parser.add_argument("--output-dir", type=Path, help="覆寫設定檔的 output_directory")
+    recalc_parser.add_argument(
+        "--dry-run", action="store_true", help="只在終端機印出結果，不寫 CSV／Sheets／Discord"
+    )
+    recalc_parser.add_argument("--no-gsheet", action="store_true", help="不更新 Google Sheets")
+    recalc_parser.add_argument("--no-discord", action="store_true", help="不重發 Discord 快報")
+
     analyze_parser = subparsers.add_parser(
         "analyze-alignment",
         help="22:00 流程：對當日 alignment_signals 做財報/法說分析並由 AI 嚴選進場標的",
@@ -2016,6 +2178,18 @@ def main(argv: list[str] | None = None) -> int:
                 force_ai=args.force_ai,
                 dry_run=args.dry_run,
             )
+
+        if args.command == "recalc-signals":
+            config = load_scan_config(args.config)
+            recalc_from_cache(
+                config,
+                as_of=date.fromisoformat(args.date) if args.date else None,
+                output_dir=args.output_dir,
+                dry_run=args.dry_run,
+                skip_gsheet=args.no_gsheet,
+                skip_discord=args.no_discord,
+            )
+            return 0
 
         if args.command == "scan-all":
             config = load_scan_config(args.config)

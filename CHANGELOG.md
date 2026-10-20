@@ -5,6 +5,13 @@
 ---
 
 ## [v3.2.3] - 2026-10-20
+### ✨ 新增功能：資料層／策略層拆分，秒級重算 (Added)
+* **新增 CLI 子命令 `recalc-signals` ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：直接讀取 19:00 已存檔的 `daily/{date}_prices.csv`（內含近一年算好的 MA 與成交量），以純本地運算重新套用訊號規則，**0 次 FinMind 請求、約 2 秒完成**（原本需重抓約 1 小時）。
+  * 新增 `recalc_signals_from_prices`（純函式）與 `recalc_from_cache`（讀檔／寫檔／Sheets／Discord 編排），並抽出 `SIGNAL_CSV_COLUMNS`、`ALIGNMENT_CSV_COLUMNS` 常數。
+  * 參數：`--date`、`--dry-run`（只預覽不寫入）、`--no-gsheet`、`--no-discord`、`--output-dir`、`--config`。
+  * 19:00／22:00 `systemd` 兩班車流程與服務檔完全不變；調整門檻後可 `recalc-signals` ➔ `analyze-alignment`，22:00 對已分析股票直接命中 Sheets 快取。
+  * 測試：[`tests/test_finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_finmind_stock_scanner.py) 新增 `RecalcFromCacheTests`。
+
 ### ✨ 均線排列訊號邏輯升級 (Improved)
 * **17/45MA 雙區間訊號判讀全面重構（「-1.5% ~ 0% 即將金叉」＋「0% ~ +2.5% 剛金叉起漲」）([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：
   * **解決舊版 `1%` 門檻過於嚴苛之痛點**：舊版限制 `1%` 導致強勢股剛黃金交叉 2~3 天（17MA 與 45MA 開口拉開至 1.2%~2.5%）即過早自追蹤表剔除，無法追蹤「初升段」與「首次量縮回測 17MA 支撐」之安全甜蜜買點。

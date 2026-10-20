@@ -69,6 +69,61 @@ def sample_stock_info() -> pd.DataFrame:
     )
 
 
+class RecalcFromCacheTests(unittest.TestCase):
+    def _prices_csv_frame(self) -> pd.DataFrame:
+        from finmind_stock_scanner import add_moving_averages
+
+        series = [90.0] * 100 + [100.0] * 75 + [100.0] * 28 + [103.0] * 14 + [104.0] * 3
+        raw = pd.DataFrame(
+            {
+                "date": pd.date_range("2025-01-01", periods=len(series), freq="B"),
+                "close": series,
+                "Trading_Volume": [1_000_000] * len(series),
+            }
+        )
+        analyzed = add_moving_averages(raw)
+        analyzed.insert(0, "market", "上市")
+        analyzed.insert(0, "industry_category", "半導體業")
+        analyzed.insert(0, "stock_name", "測試")
+        analyzed.insert(0, "stock_id", "9999")
+        return analyzed
+
+    def test_recalc_uses_saved_moving_averages_without_api(self) -> None:
+        from finmind_stock_scanner import recalc_signals_from_prices
+
+        signals, alignments = recalc_signals_from_prices(self._prices_csv_frame())
+
+        self.assertEqual(list(signals["stock_id"]), ["9999"])
+        self.assertEqual(signals.iloc[0]["signal"], "剛金叉起漲")
+        self.assertIn("MA17_MA45_gap_percent", alignments.columns)
+        self.assertEqual(alignments.iloc[0]["vol_lots"], 1000)
+
+    def test_recalc_from_cache_overwrites_csvs_and_dry_run_does_not(self) -> None:
+        from finmind_stock_scanner import recalc_from_cache
+
+        with tempfile.TemporaryDirectory() as tmp:
+            daily = Path(tmp) / "daily"
+            daily.mkdir()
+            self._prices_csv_frame().to_csv(daily / "2026-10-20_prices.csv", index=False)
+            config = {"output_directory": tmp}
+
+            recalc_from_cache(config, as_of=date(2026, 10, 20), dry_run=True)
+            self.assertFalse((daily / "2026-10-20_alignment_signals.csv").exists())
+
+            recalc_from_cache(config, as_of=date(2026, 10, 20))
+            saved = pd.read_csv(
+                daily / "2026-10-20_alignment_signals.csv", dtype={"stock_id": str}
+            )
+            self.assertEqual(list(saved["stock_id"]), ["9999"])
+
+    def test_recalc_from_cache_requires_prices_csv(self) -> None:
+        from finmind_stock_scanner import recalc_from_cache
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                recalc_from_cache({"output_directory": tmp}, as_of=date(2026, 10, 20))
+
+
 class FinMindStockScannerTests(unittest.TestCase):
     def test_lists_market_counts_and_industries(self) -> None:
         info = sample_stock_info()

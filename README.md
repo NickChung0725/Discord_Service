@@ -127,6 +127,11 @@ uv run python -m unittest discover -s tests
 # 手動執行 19:00 全產業均線掃描
 uv run python finmind_stock_scanner.py scan-all --config finmind_scanner.json
 
+# 秒級重算（調參／回測用，不呼叫 FinMind）：讀當日 prices.csv 重新套用均線與量能規則
+uv run python finmind_stock_scanner.py recalc-signals --date YYYY-MM-DD --dry-run   # 只預覽名單
+uv run python finmind_stock_scanner.py recalc-signals --date YYYY-MM-DD --no-discord # 覆寫 CSV 與 MA_Signal_Tracker，不重發快報
+uv run python finmind_stock_scanner.py recalc-signals --date YYYY-MM-DD              # 完整覆寫 CSV／Sheets／Discord
+
 # 手動預覽 22:00 AI 財報選股（--dry-run 不寫入 08 表、不推播 Discord，僅印在終端機）
 uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD --dry-run
 
