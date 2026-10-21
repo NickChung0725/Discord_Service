@@ -174,6 +174,48 @@ class ReportTests(unittest.TestCase):
         self.assertIn("1234", joined)
         self.assertIn("5 檔因超過候選上限", joined)
 
+    def test_report_renders_tactical_type_and_target_prices_and_market_light(self) -> None:
+        frame = _frame([{"stock_id": "2330", "stock_name": "台積電"}])
+        results = {"2330": {"report": SimpleNamespace(war_room_url=""), "summary": "{}"}}
+        decision = {
+            "market_light": "🟡黃燈",
+            "market_comment": "震盪環境以低接為主",
+            "top_picks": [
+                {
+                    "rank": 1,
+                    "stock_id": "2330",
+                    "score": 88,
+                    "tactical_type": "🎯 短中期波段持有 (5~20日)（依附 45MA）",
+                    "target_price_1": "1,020 元 (17MA)",
+                    "target_price_2": "1,100 元 (前高)",
+                    "stop_loss_price": "950 元 (-4%)",
+                    "outlook_verdict": "高度可信",
+                    "thesis": "基本面佳",
+                    "risk": "匯率",
+                }
+            ],
+            "watchlist": [],
+            "avoid": [],
+        }
+        messages = format_pick_report(
+            date(2026, 10, 21),
+            decision,
+            "",
+            frame,
+            results,
+            [],
+            total_signals=5,
+            skipped=0,
+            model="gemini-3.8-flash",
+            market_regime={"light": "🟡黃燈", "summary": "🟡黃燈｜0050 收盤 190.00"},
+        )
+        joined = "\n".join(messages)
+        self.assertIn("🚦 大盤紅綠燈：🟡黃燈｜0050 收盤 190.00", joined)
+        self.assertIn("定位：🎯 短中期波段持有 (5~20日)（依附 45MA）", joined)
+        self.assertIn("第一目標價 1,020 元 (17MA)", joined)
+        self.assertIn("第二目標價 1,100 元 (前高)", joined)
+        self.assertIn("嚴格停損 950 元 (-4%)", joined)
+
     def test_report_falls_back_to_raw_text_when_unparsed(self) -> None:
         frame = _frame([{"stock_id": "2330"}])
         messages = format_pick_report(

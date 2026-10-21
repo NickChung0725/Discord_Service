@@ -51,6 +51,39 @@ TAIPEI_TIMEZONE = ZoneInfo("Asia/Taipei")
 DISCORD_POST_PAUSE_SECONDS = 1.0
 SIGNAL_TRACKER_SHEET_NAME = "MA_Signal_Tracker"
 SIGNAL_TRACKER_HEADERS = list(SHEET_SCHEMAS[SIGNAL_TRACKER_SHEET_NAME])
+REBOUND_WATCHLIST_SHEET_NAME = "Rebound_Watchlist"
+REBOUND_WATCHLIST_HEADERS = list(SHEET_SCHEMAS[REBOUND_WATCHLIST_SHEET_NAME])
+REBOUND_SUPPORT_MIN_PCT = -1.5
+REBOUND_SUPPORT_MAX_PCT = 2.5
+REBOUND_MIN_RETURN_TO_MA17_PCT = 5.0
+REBOUND_MIN_CLOSE_STRENGTH = 0.55
+REBOUND_LOOKBACK_DAYS = 60
+REBOUND_CSV_COLUMNS = [
+    "market",
+    "industry_category",
+    "stock_id",
+    "stock_name",
+    "date",
+    "close",
+    "high_60d",
+    "drop_amount",
+    "drop_pct",
+    "support_ma",
+    "support_price",
+    "support_gap_pct",
+    "target_ma17",
+    "potential_return_pct",
+    "close_strength",
+    "MA3",
+    "MA17",
+    "MA45",
+    "MA117",
+    "MA189",
+    "vol_lots",
+    "vol_ma5_lots",
+    "vol_ma20_lots",
+    "vol_status",
+]
 EXCLUDED_INDUSTRY_CATEGORIES = {
     "ETF",
     "ETN",
@@ -467,10 +500,272 @@ def classify_latest_alignment_signal(
     }
 
 
+def _rebound_min_drop_amount(price: float) -> float | None:
+    """依股價位階回傳型態 A 要求的最低高點回跌金額（元）；低於 30 元不納入。"""
+    if price < 30.0:
+        return None
+    if price < 150.0:
+        return 10.0
+    if price < 500.0:
+        return 30.0
+    if price < 1000.0:
+        return 100.0
+    return 300.0
+
+
+def classify_rebound_signal(
+    analyzed_prices: pd.DataFrame,
+    *,
+    lookback_days: int = REBOUND_LOOKBACK_DAYS,
+) -> dict[str, object] | None:
+    """型態 A：高點回跌 10/30/100/300 元（且跌幅 >= 10%）回踩長均線（45MA/117MA）反彈篩選。
+
+    條件：
+    1. 長線護體：MA45 >= MA117 > MA189
+    2. 高點回跌門檻：近 60 個交易日最高價 (high_60d) 回跌金額達位階門檻，且跌幅 >= 10%
+    3. 下有長均線支撐：今日收盤價落在 45MA 或 117MA 的 -1.5% ~ +2.5% 區間內
+    4. 上有反彈空間：收盤價 < 17MA，且反彈至 17MA 的空間 ((MA17 - Close) / Close) >= 5%
+    5. K 線收盤強度濾網：收盤強度 (Close - Min) / (Max - Min) >= 0.55（排除長上影線假反彈）
+    """
+    required_columns = ("MA3", "MA17", "MA45", "MA117", "MA189")
+    if not set(required_columns).issubset(analyzed_prices.columns):
+        return None
+    usable = analyzed_prices.dropna(subset=list(required_columns))
+    if usable.empty:
+        return None
+
+    latest = usable.iloc[-1]
+    ma3, ma17, ma45, ma117, ma189 = (
+        float(latest[column]) for column in required_columns
+    )
+    close = float(latest["close"])
+    if min(close, ma3, ma17, ma45, ma117, ma189) <= 0:
+        return None
+
+    # 1. 長線護體：MA45 >= MA117 > MA189
+    if not (ma45 >= ma117 and ma117 > ma189):
+        return None
+
+    # 2. 近 60 個交易日高點與回跌門檻（位階可用 close 或 high_60d 判定，此處若 close 達 30 元以上即依位階檢核）
+    min_drop_req = _rebound_min_drop_amount(close)
+    if min_drop_req is None:
+        return None
+
+    window = analyzed_prices.tail(lookback_days)
+    if "max" in window.columns and window["max"].notna().any():
+        high_series = pd.to_numeric(window["max"], errors="coerce").dropna()
+        high_60d = float(high_series.max()) if not high_series.empty else float(window["close"].max())
+    else:
+        high_60d = float(pd.to_numeric(window["close"], errors="coerce").max())
+
+    if high_60d <= close or high_60d <= 0:
+        return None
+
+    drop_amount = high_60d - close
+    drop_pct = (drop_amount / high_60d) * 100.0
+    if round(drop_amount, 4) < min_drop_req or round(drop_pct, 4) < 10.0:
+        return None
+
+    # 3. 下有長均線支撐：今日收盤價落在 45MA 或 117MA 的 -1.5% ~ +2.5% 區間內
+    gap_45 = (close - ma45) / ma45 * 100.0
+    gap_117 = (close - ma117) / ma117 * 100.0
+    in_45 = REBOUND_SUPPORT_MIN_PCT <= round(gap_45, 2) <= REBOUND_SUPPORT_MAX_PCT
+    in_117 = REBOUND_SUPPORT_MIN_PCT <= round(gap_117, 2) <= REBOUND_SUPPORT_MAX_PCT
+    if not (in_45 or in_117):
+        return None
+
+    if in_45 and in_117:
+        if abs(gap_45) <= abs(gap_117):
+            support_ma, support_price, support_gap_pct = "45MA", ma45, gap_45
+        else:
+            support_ma, support_price, support_gap_pct = "117MA", ma117, gap_117
+    elif in_45:
+        support_ma, support_price, support_gap_pct = "45MA", ma45, gap_45
+    else:
+        support_ma, support_price, support_gap_pct = "117MA", ma117, gap_117
+
+    # 4. 上有反彈空間：收盤價低於 17MA，且反彈至 17MA 的空間 >= 5%
+    if close >= ma17:
+        return None
+    potential_return_pct = (ma17 - close) / close * 100.0
+    if round(potential_return_pct, 4) < REBOUND_MIN_RETURN_TO_MA17_PCT:
+        return None
+
+    # 5. K 線收盤強度濾網：(Close - Min) / (Max - Min) >= 0.55
+    day_max = _parse_optional_float(latest.get("max"))
+    day_min = _parse_optional_float(latest.get("min"))
+    if day_max is not None and day_min is not None:
+        if day_max > day_min:
+            close_strength = (close - day_min) / (day_max - day_min)
+        elif day_max == day_min and close >= day_max:
+            close_strength = 1.0
+        else:
+            close_strength = 0.0
+        if round(close_strength, 4) < REBOUND_MIN_CLOSE_STRENGTH:
+            return None
+    else:
+        close_strength = 1.0
+
+    vol_metrics = _extract_latest_volume_metrics(usable)
+    date_val = (
+        latest["date"].strftime("%Y-%m-%d")
+        if hasattr(latest["date"], "strftime")
+        else str(latest["date"])[:10]
+    )
+
+    return {
+        "date": date_val,
+        "close": round(close, 2),
+        "high_60d": round(high_60d, 2),
+        "drop_amount": round(drop_amount, 2),
+        "drop_pct": round(drop_pct, 2),
+        "support_ma": support_ma,
+        "support_price": round(support_price, 2),
+        "support_gap_pct": round(support_gap_pct, 2),
+        "target_ma17": round(ma17, 2),
+        "potential_return_pct": round(potential_return_pct, 2),
+        "close_strength": round(close_strength, 2),
+        "MA3": round(ma3, 2),
+        "MA17": round(ma17, 2),
+        "MA45": round(ma45, 2),
+        "MA117": round(ma117, 2),
+        "MA189": round(ma189, 2),
+        "vol_lots": vol_metrics.get("vol_lots", ""),
+        "vol_ma5_lots": vol_metrics.get("vol_ma5_lots", ""),
+        "vol_ma20_lots": vol_metrics.get("vol_ma20_lots", ""),
+        "vol_status": vol_metrics.get("vol_status", "-"),
+    }
+
+
+def evaluate_market_regime(
+    benchmark_prices: pd.DataFrame,
+    benchmark_label: str = "0050",
+) -> dict[str, object]:
+    """依據大盤基準（0050 或 TAIEX）日線均線位階計算大盤環境紅綠燈。
+
+    - 🟢綠燈：大盤 >= 17MA 且 17MA 向上（偏多環境，順勢主推 17/45MA 金叉突破）
+    - 🟡黃燈：大盤跌破 17MA 但守住 45MA/117MA，或處於震盪整理（提高型態 A 反彈清單權重）
+    - 🔴紅燈：大盤跌破 45MA 且 45MA 下彎（空頭警戒，強制防禦警示）
+    """
+    default_regime = {
+        "light": "🟡黃燈",
+        "status": "震盪整理（無基準日線，預設中性風控）",
+        "benchmark": benchmark_label,
+        "close": None,
+        "MA17": None,
+        "MA45": None,
+        "MA117": None,
+        "summary": f"🟡黃燈（{benchmark_label} 預設震盪中性）",
+    }
+    if benchmark_prices is None or benchmark_prices.empty or "close" not in benchmark_prices.columns:
+        return default_regime
+
+    try:
+        analyzed = add_moving_averages(benchmark_prices)
+    except Exception:
+        return default_regime
+
+    usable = analyzed.dropna(subset=["close", "MA17", "MA45"])
+    if usable.empty:
+        return default_regime
+
+    latest = usable.iloc[-1]
+    close = float(latest["close"])
+    ma17 = float(latest["MA17"])
+    ma45 = float(latest["MA45"])
+    ma117 = float(latest["MA117"]) if pd.notna(latest.get("MA117")) else ma45
+
+    prev_ma17 = float(usable.iloc[-2]["MA17"]) if len(usable) >= 2 else ma17
+    prev_ma45 = float(usable.iloc[-2]["MA45"]) if len(usable) >= 2 else ma45
+    ma17_up = ma17 >= prev_ma17
+    ma45_down = ma45 < prev_ma45
+
+    if close < ma45 and ma45_down:
+        light = "🔴紅燈"
+        status = "空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）"
+    elif close >= ma17 and close >= ma45 and ma17_up:
+        light = "🟢綠燈"
+        status = "偏多順勢環境（站上 17MA 與 45MA 且短均向上，主推 17/45MA 金叉突破）"
+    else:
+        light = "🟡黃燈"
+        status = "震盪盤整環境（跌破或測試 17MA 但守住長均線，提高型態 A 反彈權重）"
+
+    summary = (
+        f"{light}｜{benchmark_label} 收盤 {close:,.2f}（17MA {ma17:,.2f}／45MA {ma45:,.2f}／117MA {ma117:,.2f}）— {status}"
+    )
+    return {
+        "light": light,
+        "status": status,
+        "benchmark": benchmark_label,
+        "close": round(close, 2),
+        "MA17": round(ma17, 2),
+        "MA45": round(ma45, 2),
+        "MA117": round(ma117, 2),
+        "summary": summary,
+    }
+
+
+def fetch_or_load_market_regime(
+    *,
+    daily_directory: Path | None = None,
+    as_of: date | None = None,
+    loader: DataLoader | None = None,
+    benchmark_id: str = "0050",
+) -> dict[str, object]:
+    """優先從當日緩存或本地 prices.csv 讀取大盤紅綠燈，若無則透過 FinMind 抓取 0050 日線並快取。"""
+    today = as_of or _today_in_taipei()
+    cache_path = (
+        daily_directory / f"{today.isoformat()}_market_regime.json"
+        if daily_directory is not None
+        else None
+    )
+    if cache_path is not None and cache_path.is_file():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached, dict) and cached.get("light"):
+                return cached
+        except Exception:
+            pass
+
+    if daily_directory is not None:
+        prices_path = daily_directory / f"{today.isoformat()}_prices.csv"
+        if prices_path.is_file():
+            try:
+                prices_df = pd.read_csv(prices_path, dtype={"stock_id": str})
+                sub = prices_df.loc[prices_df["stock_id"].astype(str).str.strip() == benchmark_id].copy()
+                if not sub.empty:
+                    regime = evaluate_market_regime(sub, benchmark_label=benchmark_id)
+                    if cache_path is not None:
+                        cache_path.write_text(
+                            json.dumps(regime, ensure_ascii=False, indent=2), encoding="utf-8"
+                        )
+                    return regime
+            except Exception:
+                pass
+
+    if loader is not None:
+        try:
+            start_date = (pd.Timestamp(today) - pd.DateOffset(months=INDICATOR_HISTORY_MONTHS)).strftime("%Y-%m-%d")
+            df = _fetch_stock_prices(loader, benchmark_id, start_date, today.isoformat())
+            if not df.empty:
+                regime = evaluate_market_regime(df, benchmark_label=benchmark_id)
+                if cache_path is not None:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_text(
+                        json.dumps(regime, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
+                return regime
+        except Exception:
+            logger.warning("Failed to fetch market regime benchmark %s", benchmark_id, exc_info=True)
+
+    return evaluate_market_regime(pd.DataFrame(), benchmark_label=benchmark_id)
+
+
 def format_alignment_report(
     alignment_signals: pd.DataFrame,
     as_of: date | None = None,
     failed_count: int = 0,
+    market_regime: Mapping[str, object] | None = None,
 ) -> list[str]:
     report_date = (as_of or _today_in_taipei()).isoformat()
     heading = (
@@ -478,6 +773,8 @@ def format_alignment_report(
         "\n條件：MA3 >= 所有均線；17/45MA 處於即將金叉（-1.5%~0%）或剛金叉起漲（0%~+2.5%）；"
         "且 MA45 > MA117 > MA189"
     )
+    if market_regime and market_regime.get("summary"):
+        heading += f"\n🚦 大盤紅綠燈：{market_regime['summary']}"
     if failed_count:
         heading += f"\n⚠️ 有 {failed_count} 檔股票資料抓取失敗，以下僅列成功分析的股票。"
     if alignment_signals.empty:
@@ -534,6 +831,7 @@ def post_alignment_report_to_discord(
     bot_token: str,
     as_of: date | None = None,
     failed_count: int = 0,
+    market_regime: Mapping[str, object] | None = None,
 ) -> int:
     if not channel_id.isdigit():
         raise ValueError("STOCK_CHANNEL_ID 必須是 Discord 頻道 ID 數字。")
@@ -541,7 +839,10 @@ def post_alignment_report_to_discord(
         raise ValueError("DISCORD_TOKEN (or BOT_TOKEN) is required to post the report.")
 
     messages = format_alignment_report(
-        alignment_signals, as_of, failed_count=failed_count
+        alignment_signals,
+        as_of,
+        failed_count=failed_count,
+        market_regime=market_regime,
     )
     sent_count = 0
     for index, content in enumerate(messages):
@@ -568,6 +869,108 @@ def post_alignment_report_to_discord(
             raise RuntimeError(
                 f"Discord rejected the report (HTTP {error.code}): {response_body}"
             ) from error
+        except URLError as error:
+            raise RuntimeError(f"Failed to reach Discord: {error.reason}") from error
+        sent_count += 1
+        if index + 1 < len(messages):
+            time.sleep(DISCORD_POST_PAUSE_SECONDS)
+    return sent_count
+
+
+def format_rebound_report(
+    rebound_signals: pd.DataFrame,
+    as_of: date | None = None,
+    failed_count: int = 0,
+    market_regime: Mapping[str, object] | None = None,
+    ai_executed: bool = False,
+) -> list[str]:
+    """格式化 22:30 型態 A（高點急跌回踩長均線反彈）Discord 快報。"""
+    report_date = (as_of or _today_in_taipei()).isoformat()
+    count = len(rebound_signals)
+    heading_lines = [
+        f"🪃 【22:30 型態 A：高點回跌回踩長均線反彈清單】{report_date}",
+        f"🎯 今日符合反彈條件標的總數：**{count} 檔**",
+        "條件：MA45 >= MA117 > MA189｜近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 >=10%｜回踩 45MA/117MA（-1.5%~+2.5%）｜反彈至 17MA 空間 >=5%｜K線收盤強度 >=0.55",
+    ]
+    if market_regime and market_regime.get("summary"):
+        heading_lines.append(f"🚦 大盤紅綠燈：{market_regime['summary']}")
+        if "🔴" in str(market_regime.get("light", "")):
+            heading_lines.append("🛡️ **空頭防禦警示**：目前大盤跌破 45MA 且下彎，搶反彈請嚴格過濾基本面與自由現金流，嚴守停損！")
+        elif "🟡" in str(market_regime.get("light", "")):
+            heading_lines.append("💡 **震盪盤整環境**：大盤處於黃燈區間，系統提高「型態 A 反彈清單」關注權重。")
+    if failed_count:
+        heading_lines.append(f"⚠️ 有 {failed_count} 檔股票分析過程發生異常。")
+    if not ai_executed and count > 0:
+        heading_lines.append(
+            "📌 **第一階段觀測模式**：已寫入 Google Sheets `Rebound_Watchlist`。若欲啟動 AI 深度診斷與嚴選，請執行 `analyze-rebound --run-ai`。"
+        )
+    heading = "\n".join(heading_lines)
+
+    if rebound_signals.empty:
+        return [heading + "\n今日沒有符合型態 A 反彈條件的股票。"]
+
+    chunks: list[str] = []
+    current = heading
+    for row in rebound_signals.itertuples(index=False):
+        vol_lots = _parse_optional_float(getattr(row, "vol_lots", None))
+        vol_status = getattr(row, "vol_status", "-")
+        vol_str = f" | 量 {int(round(vol_lots)):,}張 ({vol_status})" if vol_lots is not None else ""
+        line = (
+            f"\n• **{row.stock_id} {row.stock_name}**（{getattr(row, 'industry_category', '')}）"
+            f"｜收盤 {float(row.close):,.2f}｜60日高 {float(row.high_60d):,.2f}"
+            f"（跌 {float(row.drop_amount):,.2f}元 / -{float(row.drop_pct):.1f}%）"
+            f"｜回踩 {row.support_ma} {float(row.support_price):,.2f}（{float(row.support_gap_pct):+.2f}%）"
+            f"｜17MA目標 {float(row.target_ma17):,.2f}（空間 +{float(row.potential_return_pct):.1f}%）"
+            f"｜收盤強度 {float(row.close_strength):.2f}{vol_str}"
+        )
+        if len(current) + len(line) > 1800:
+            chunks.append(current)
+            current = heading_lines[0] + "\n（續）"
+        current += line
+    chunks.append(current)
+    return chunks
+
+
+def post_rebound_report_to_discord(
+    rebound_signals: pd.DataFrame,
+    channel_id: str,
+    bot_token: str,
+    as_of: date | None = None,
+    failed_count: int = 0,
+    market_regime: Mapping[str, object] | None = None,
+    ai_executed: bool = False,
+) -> int:
+    if not channel_id.isdigit():
+        raise ValueError("STOCK_CHANNEL_ID 必須是 Discord 頻道 ID 數字。")
+    if not bot_token.strip():
+        raise ValueError("DISCORD_TOKEN (or BOT_TOKEN) is required to post the report.")
+
+    messages = format_rebound_report(
+        rebound_signals,
+        as_of=as_of,
+        failed_count=failed_count,
+        market_regime=market_regime,
+        ai_executed=ai_executed,
+    )
+    sent_count = 0
+    for index, content in enumerate(messages):
+        request = Request(
+            f"{DISCORD_API_BASE_URL}/channels/{channel_id}/messages",
+            data=json.dumps({"content": content, "flags": 4}, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bot {bot_token.strip()}",
+                "Content-Type": "application/json",
+                "User-Agent": "DiscordService (FinMind rebound scanner)",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                if response.status not in (200, 201):
+                    raise RuntimeError(f"Discord returned unexpected HTTP status {response.status}.")
+        except HTTPError as error:
+            response_body = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Discord rejected the report (HTTP {error.code}): {response_body}") from error
         except URLError as error:
             raise RuntimeError(f"Failed to reach Discord: {error.reason}") from error
         sent_count += 1
@@ -1748,7 +2151,11 @@ def _cleanup_old_daily_reports(
 ) -> None:
     cutoff = as_of - timedelta(days=retention_days)
     filename_pattern = re.compile(
-        r"^\d{4}-\d{2}-\d{2}_((prices|alignment_signals|failures)\.csv|ai_recommendations\.(json|md))$"
+        r"^\d{4}-\d{2}-\d{2}_("
+        r"(prices|alignment_signals|failures|rebound_signals|rebound_failures)\.csv|"
+        r"(ai_recommendations|rebound_ai_recommendations)\.(json|md)|"
+        r"market_regime\.json"
+        r")$"
     )
     for path in daily_directory.iterdir():
         match = filename_pattern.fullmatch(path.name)
@@ -1757,6 +2164,236 @@ def _cleanup_old_daily_reports(
         file_date = date.fromisoformat(path.name[:10])
         if file_date < cutoff:
             path.unlink()
+
+
+def scan_rebound_from_prices(
+    prices: pd.DataFrame,
+    *,
+    lookback_days: int = REBOUND_LOOKBACK_DAYS,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """從 daily/{date}_prices.csv 讀取近 60 個交易日數據，篩選「型態 A：高點回跌回踩長均線反彈」清單。
+
+    回傳 (rebound_signals_df, rebound_failures_df)。
+    """
+    rebounds: list[dict[str, object]] = []
+    failures: list[dict[str, str]] = []
+    if prices.empty:
+        return (
+            pd.DataFrame(columns=REBOUND_CSV_COLUMNS),
+            pd.DataFrame(columns=["stock_id", "stock_name", "error"]),
+        )
+
+    frame = prices.copy()
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame = frame.dropna(subset=["date"]).sort_values(["stock_id", "date"])
+    for stock_id, group in frame.groupby("stock_id", sort=False):
+        first = group.iloc[0]
+        sid = str(stock_id).strip()
+        sname = str(first.get("stock_name", "")).strip()
+        meta = {
+            "market": first.get("market", ""),
+            "industry_category": first.get("industry_category", ""),
+            "stock_id": sid,
+            "stock_name": sname,
+        }
+        try:
+            working = group
+            if not set(("MA3", "MA17", "MA45", "MA117", "MA189")).issubset(working.columns):
+                working = add_moving_averages(working)
+            signal = classify_rebound_signal(working, lookback_days=lookback_days)
+            if signal is not None:
+                rebounds.append({**meta, **signal})
+        except Exception as error:  # noqa: BLE001
+            failures.append({"stock_id": sid, "stock_name": sname, "error": str(error)})
+
+    rebound_df = pd.DataFrame(rebounds, columns=REBOUND_CSV_COLUMNS)
+    if not rebound_df.empty:
+        rebound_df = rebound_df.sort_values(
+            ["potential_return_pct", "drop_pct", "stock_id"],
+            ascending=[False, False, True],
+            kind="stable",
+        ).reset_index(drop=True)
+    failure_df = pd.DataFrame(failures, columns=["stock_id", "stock_name", "error"])
+    return rebound_df, failure_df
+
+
+def build_rebound_watchlist_rows(
+    rebound_df: pd.DataFrame,
+    *,
+    as_of: date | None = None,
+    market_light: str = "🟡黃燈",
+    ai_results: Mapping[str, Mapping[str, object]] | None = None,
+    existing_master_map: Mapping[str, Mapping[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    """建立寫入 Google Sheets Rebound_Watchlist 的結構化列。"""
+    scan_date_str = (as_of or _today_in_taipei()).isoformat()
+    if rebound_df is None or rebound_df.empty:
+        return []
+
+    rows: list[dict[str, object]] = []
+    for _, row in rebound_df.drop_duplicates(subset=["stock_id"], keep="last").iterrows():
+        sid = str(row.get("stock_id", "")).strip()
+        if not sid:
+            continue
+        ai_summary = ""
+        war_room_url = ""
+        if ai_results and sid in ai_results:
+            item = ai_results[sid]
+            ai_summary = str(item.get("summary", "") or "")
+            report = item.get("report")
+            war_room_url = str(getattr(report, "war_room_url", "") or item.get("war_room_url", "") or "")
+        elif existing_master_map and sid in existing_master_map:
+            m_row = existing_master_map[sid]
+            ai_summary = str(m_row.get("ai_summary_json", "") or "")
+            war_room_url = str(m_row.get("war_room_url", "") or "")
+
+        rows.append(
+            {
+                "pk_key": f"{scan_date_str}_{sid}",
+                "stock_id": sid,
+                "stock_name": str(row.get("stock_name", "")).strip(),
+                "industry_category": str(row.get("industry_category", "")).strip(),
+                "scan_date": scan_date_str,
+                "close_price": round(float(row["close"]), 2) if pd.notna(row.get("close")) else "",
+                "high_60d": round(float(row["high_60d"]), 2) if pd.notna(row.get("high_60d")) else "",
+                "drop_amount": round(float(row["drop_amount"]), 2) if pd.notna(row.get("drop_amount")) else "",
+                "drop_pct": round(float(row["drop_pct"]), 2) if pd.notna(row.get("drop_pct")) else "",
+                "support_ma": str(row.get("support_ma", "")).strip(),
+                "support_price": round(float(row["support_price"]), 2) if pd.notna(row.get("support_price")) else "",
+                "target_ma17": round(float(row["target_ma17"]), 2) if pd.notna(row.get("target_ma17")) else "",
+                "potential_return_pct": (
+                    round(float(row["potential_return_pct"]), 2)
+                    if pd.notna(row.get("potential_return_pct"))
+                    else ""
+                ),
+                "volume_status": str(row.get("vol_status") or row.get("volume_status") or "-").strip(),
+                "market_light": market_light,
+                "ai_summary_json": ai_summary,
+                "war_room_url": war_room_url,
+            }
+        )
+    return rows
+
+
+def sync_rebound_watchlist_to_gsheet(
+    rebound_df: pd.DataFrame,
+    *,
+    as_of: date | None = None,
+    market_light: str = "🟡黃燈",
+    ai_results: Mapping[str, Mapping[str, object]] | None = None,
+    spreadsheet_id: str | None = None,
+    credentials_path: str | None = None,
+    tab_name: str = REBOUND_WATCHLIST_SHEET_NAME,
+    replace_date: bool = True,
+) -> int:
+    """將 22:30 型態 A 反彈清單同步寫入 Google Sheets Rebound_Watchlist。"""
+    resolved_credentials = (
+        credentials_path
+        if credentials_path is not None
+        else os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    )
+    resolved_spreadsheet_id = (
+        spreadsheet_id
+        if spreadsheet_id is not None
+        else os.getenv("GSHEET_SPREADSHEET_ID", "").strip()
+    )
+    if not resolved_credentials:
+        raise ValueError("GOOGLE_APPLICATION_CREDENTIALS 未設定，無法寫入 Google Sheets。")
+    if not resolved_spreadsheet_id:
+        raise ValueError("GSHEET_SPREADSHEET_ID 未設定，無法寫入 Google Sheets。")
+
+    today = as_of or _today_in_taipei()
+    today_iso = today.isoformat()
+    gc = gspread.service_account(filename=resolved_credentials)
+    spreadsheet = _gspread_call_with_retry(gc.open_by_key, resolved_spreadsheet_id)
+
+    worksheets = _gspread_call_with_retry(spreadsheet.worksheets)
+    existing_tabs = {ws.title: ws for ws in worksheets}
+
+    # 讀取 00_Watchlist_Master 既有快取（若未啟動 AI 診斷時可自動帶入既有 ai_summary_json 與 war_room_url）
+    master_map: dict[str, dict[str, object]] = {}
+    if "00_Watchlist_Master" in existing_tabs:
+        try:
+            master_raw = _gspread_call_with_retry(
+                existing_tabs["00_Watchlist_Master"].get_all_values,
+                value_render_option=gspread.utils.ValueRenderOption.unformatted,
+                date_time_render_option=gspread.utils.DateTimeOption.formatted_string,
+            )
+            if master_raw and len(master_raw) > 1:
+                m_headers = [str(h).strip() for h in master_raw[0]]
+                for r in master_raw[1:]:
+                    padded = list(r) + [""] * (len(m_headers) - len(r))
+                    rec = {m_headers[i]: padded[i] for i in range(len(m_headers)) if m_headers[i]}
+                    sid = str(rec.get("stock_id", "")).strip()
+                    if sid:
+                        master_map[sid] = rec
+        except Exception:
+            logger.warning("Failed to read 00_Watchlist_Master for rebound enrichment", exc_info=True)
+
+    headers = list(REBOUND_WATCHLIST_HEADERS)
+    if tab_name not in existing_tabs:
+        worksheet = _gspread_call_with_retry(
+            spreadsheet.add_worksheet,
+            title=tab_name,
+            rows=1000,
+            cols=len(headers),
+        )
+        _gspread_call_with_retry(worksheet.append_row, headers)
+        raw_rows = [headers]
+    else:
+        worksheet = existing_tabs[tab_name]
+        raw_rows = _gspread_call_with_retry(
+            worksheet.get_all_values,
+            value_render_option=gspread.utils.ValueRenderOption.unformatted,
+            date_time_render_option=gspread.utils.DateTimeOption.formatted_string,
+        )
+
+    existing_records: list[dict[str, object]] = []
+    if raw_rows and len(raw_rows) > 1:
+        sheet_headers = [str(h).strip() for h in raw_rows[0]]
+        for row in raw_rows[1:]:
+            padded = list(row) + [""] * (len(sheet_headers) - len(row))
+            record = {sheet_headers[i]: padded[i] for i in range(len(sheet_headers)) if sheet_headers[i]}
+            if any(str(v).strip() for v in record.values()):
+                existing_records.append(record)
+
+    prior_records = (
+        [rec for rec in existing_records if str(rec.get("scan_date", "")).strip() != today_iso]
+        if replace_date
+        else existing_records
+    )
+
+    today_rows = build_rebound_watchlist_rows(
+        rebound_df,
+        as_of=today,
+        market_light=market_light,
+        ai_results=ai_results,
+        existing_master_map=master_map,
+    )
+    merged_records = today_rows + prior_records
+
+    matrix: list[list[object]] = [headers]
+    for rec in merged_records:
+        matrix.append([rec.get(col, "") for col in headers])
+
+    required_rows = max(len(matrix) + 50, 200)
+    required_cols = len(headers)
+    if worksheet.row_count < required_rows or worksheet.col_count < required_cols:
+        _gspread_call_with_retry(
+            worksheet.resize,
+            rows=max(worksheet.row_count, required_rows),
+            cols=max(worksheet.col_count, required_cols),
+        )
+
+    _gspread_call_with_retry(worksheet.clear)
+    end_cell = gspread.utils.rowcol_to_a1(len(matrix), required_cols)
+    _gspread_call_with_retry(
+        worksheet.update,
+        range_name=f"A1:{end_cell}",
+        values=matrix,
+        value_input_option="USER_ENTERED",
+    )
+    return len(today_rows)
 
 
 def scan_configured_universe(
@@ -1849,6 +2486,35 @@ def scan_configured_universe(
                 all_failures, ["stock_id", "stock_name", "error"]
             ),
         }
+        # 若設定了大盤基準（例如 TAIEX），在掃描完成後一併抓取並快取大盤日線，同時追加進 prices.csv
+        market_regime: dict[str, object] | None = None
+        if config.get("enable_market_regime"):
+            benchmark_id = str(config.get("market_benchmark_id") or "TAIEX")
+            with _rate_limit_finmind_http_requests(limiter):
+                market_regime = fetch_or_load_market_regime(
+                    daily_directory=daily_directory,
+                    as_of=today,
+                    loader=loader,
+                    benchmark_id=benchmark_id,
+                )
+            # 若 prices.csv 尚未包含該大盤代號，將大盤基準日線追加至 prices.csv，方便 22:00/22:30 秒級重算
+            prices_frame = report_files["prices"]
+            if not prices_frame.empty and benchmark_id not in prices_frame["stock_id"].astype(str).values:
+                try:
+                    start_date = (pd.Timestamp(today) - pd.DateOffset(months=REPORT_HISTORY_MONTHS)).strftime("%Y-%m-%d")
+                    fetch_start_date = (pd.Timestamp(today) - pd.DateOffset(months=INDICATOR_HISTORY_MONTHS)).strftime("%Y-%m-%d")
+                    bench_raw = _fetch_stock_prices(loader, benchmark_id, fetch_start_date, today.isoformat())
+                    if not bench_raw.empty:
+                        bench_analyzed = add_moving_averages(bench_raw)
+                        bench_analyzed = bench_analyzed.loc[bench_analyzed["date"] >= pd.Timestamp(start_date)].copy()
+                        bench_analyzed["stock_id"] = benchmark_id
+                        bench_analyzed["stock_name"] = "加權指數" if benchmark_id == "TAIEX" else benchmark_id
+                        bench_analyzed["industry_category"] = "大盤"
+                        bench_analyzed["market"] = "上市"
+                        report_files["prices"] = pd.concat([prices_frame, bench_analyzed], ignore_index=True)
+                except Exception:
+                    logger.warning("Failed to append benchmark %s to prices.csv", benchmark_id, exc_info=True)
+
         report_paths = {
             name: daily_directory / f"{today.isoformat()}_{name}.csv"
             for name in report_files
@@ -1869,6 +2535,17 @@ def scan_configured_universe(
             replace_date=True,
         )
 
+    market_regime: dict[str, object] | None = None
+    if config.get("enable_market_regime"):
+        benchmark_id = str(config.get("market_benchmark_id") or "TAIEX")
+        with _rate_limit_finmind_http_requests(limiter):
+            market_regime = fetch_or_load_market_regime(
+                daily_directory=daily_directory,
+                as_of=today,
+                loader=loader,
+                benchmark_id=benchmark_id,
+            )
+
     if config["post_alignment_to_discord"]:
         bot_token = (
             os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or ""
@@ -1879,6 +2556,7 @@ def scan_configured_universe(
             bot_token=bot_token,
             as_of=today,
             failed_count=len(failures) + len(failed_groups),
+            market_regime=market_regime,
         )
 
     _cleanup_old_daily_reports(
@@ -2119,6 +2797,33 @@ def _make_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--date", help="指定分析日期 YYYY-MM-DD（預設今日）")
     analyze_parser.add_argument("--force-ai", action="store_true", help="忽略單股 AI 快取，強制重新診斷")
     analyze_parser.add_argument("--dry-run", action="store_true", help="不寫入 Sheets、不推播 Discord，只輸出結果")
+
+    rebound_parser = subparsers.add_parser(
+        "analyze-rebound",
+        help="22:30 流程：執行型態 A（高點回跌回踩長均線反彈）掃描、寫入 Rebound_Watchlist 並彈性決定是否啟動 AI 嚴選",
+    )
+    rebound_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("finmind_scanner.json"),
+        help="JSON 設定檔路徑（預設：finmind_scanner.json）",
+    )
+    rebound_parser.add_argument("--date", help="指定分析日期 YYYY-MM-DD（預設今日）")
+    rebound_parser.add_argument("--output-dir", type=Path, help="覆寫設定檔的 output_directory")
+    rebound_parser.add_argument(
+        "--run-ai",
+        action="store_true",
+        help="強制啟動 AI 深度財報診斷與嚴選（預設依設定檔 rebound_auto_run_ai 或第一階段僅輸出清單）",
+    )
+    rebound_parser.add_argument(
+        "--no-ai",
+        action="store_true",
+        help="強制僅執行量化掃描與推播觀看標的數量，不呼叫 AI 深度診斷",
+    )
+    rebound_parser.add_argument("--force-ai", action="store_true", help="忽略單股 AI 快取，強制重新診斷")
+    rebound_parser.add_argument("--dry-run", action="store_true", help="只在終端機印出結果，不寫入 Sheets 與 Discord")
+    rebound_parser.add_argument("--no-gsheet", action="store_true", help="不更新 Google Sheets Rebound_Watchlist")
+    rebound_parser.add_argument("--no-discord", action="store_true", help="不推播 Discord 訊息")
     return parser
 
 
@@ -2137,6 +2842,20 @@ def main(argv: list[str] | None = None) -> int:
                 target_date=args.date,
                 force_ai=args.force_ai,
                 dry_run=args.dry_run,
+            )
+
+        if args.command == "analyze-rebound":
+            from alignment_ai_picker import run_rebound_from_cli
+
+            return run_rebound_from_cli(
+                config_path=args.config,
+                target_date=args.date,
+                output_dir=args.output_dir,
+                run_ai=True if args.run_ai else (False if args.no_ai else None),
+                force_ai=args.force_ai,
+                dry_run=args.dry_run,
+                skip_gsheet=args.no_gsheet,
+                skip_discord=args.no_discord,
             )
 
         if args.command == "recalc-signals":

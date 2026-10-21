@@ -696,5 +696,131 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertIn("🆕", updated_values[1][6])
 
 
+class ReboundAndMarketRegimeTests(unittest.TestCase):
+    def _make_rebound_series(
+        self,
+        *,
+        latest_close: float = 113.0,
+        latest_max: float = 114.0,
+        latest_min: float = 110.0,
+    ) -> pd.DataFrame:
+        # 80 days @ 85, 85 days @ 100, 35 days @ 105, 19 days @ 126, 1 day @ latest_close (113)
+        # Last 20 days = 19*126 + 113 -> Last 17 days = 16*126 + 113 -> MA17 = 125.24
+        # Last 45 days = 25*105 + 19*126 + 113 = 5132 -> MA45 = 114.04 (close 113 is -0.91% from MA45!)
+        # MA117 ~ 105.5, MA189 ~ 99.0 -> MA45 >= MA117 > MA189
+        # 60d high = 127.0, drop = 14.0 >= 10, drop_pct = 11.02% >= 10%
+        # potential_return_pct = (125.24 - 113) / 113 = +10.83% >= 5%
+        closes = [85.0] * 80 + [100.0] * 85 + [105.0] * 35 + [126.0] * 19 + [latest_close]
+        maxs = [c + 1.0 for c in closes[:-1]] + [latest_max]
+        mins = [c - 1.0 for c in closes[:-1]] + [latest_min]
+        df = pd.DataFrame(
+            {
+                "stock_id": ["2357"] * len(closes),
+                "stock_name": ["華碩"] * len(closes),
+                "industry_category": ["電腦及週邊設備業"] * len(closes),
+                "market": ["上市"] * len(closes),
+                "date": pd.date_range("2025-06-01", periods=len(closes), freq="B"),
+                "close": closes,
+                "max": maxs,
+                "min": mins,
+                "Trading_Volume": [2_000_000] * len(closes),
+            }
+        )
+        return add_moving_averages(df)
+
+    def test_classify_rebound_signal_matches_valid_type_a_setup(self) -> None:
+        from finmind_stock_scanner import classify_rebound_signal
+
+        analyzed = self._make_rebound_series(
+            latest_close=113.0, latest_max=114.0, latest_min=110.0
+        )
+        sig = classify_rebound_signal(analyzed)
+        self.assertIsNotNone(sig)
+        assert sig is not None
+        self.assertEqual(sig["support_ma"], "45MA")
+        self.assertGreaterEqual(sig["drop_amount"], 10.0)
+        self.assertGreaterEqual(sig["drop_pct"], 10.0)
+        self.assertGreaterEqual(sig["potential_return_pct"], 5.0)
+        self.assertGreaterEqual(sig["close_strength"], 0.55)
+
+    def test_classify_rebound_rejects_weak_close_strength_upper_shadow(self) -> None:
+        from finmind_stock_scanner import classify_rebound_signal
+
+        # Close near daily low -> close_strength = (113 - 112.5) / (118 - 112.5) = 0.09 < 0.55
+        analyzed = self._make_rebound_series(
+            latest_close=113.0, latest_max=118.0, latest_min=112.5
+        )
+        self.assertIsNone(classify_rebound_signal(analyzed))
+
+    def test_rebound_min_drop_amount_tiers(self) -> None:
+        from finmind_stock_scanner import _rebound_min_drop_amount
+
+        self.assertIsNone(_rebound_min_drop_amount(25.0))
+        self.assertEqual(_rebound_min_drop_amount(80.0), 10.0)
+        self.assertEqual(_rebound_min_drop_amount(250.0), 30.0)
+        self.assertEqual(_rebound_min_drop_amount(600.0), 100.0)
+        self.assertEqual(_rebound_min_drop_amount(1200.0), 300.0)
+
+    def test_evaluate_market_regime_lights(self) -> None:
+        from finmind_stock_scanner import evaluate_market_regime
+
+        # Green light: close >= MA17 and MA17 rising
+        green_df = pd.DataFrame(
+            {
+                "date": pd.date_range("2026-01-01", periods=130, freq="B"),
+                "close": [150.0] * 100 + [160.0] * 25 + [165.0] * 5,
+            }
+        )
+        res_g = evaluate_market_regime(green_df, "0050")
+        self.assertEqual(res_g["light"], "🟢綠燈")
+
+        # Yellow light: close < MA17 but >= MA45
+        yellow_df = pd.DataFrame(
+            {
+                "date": pd.date_range("2026-01-01", periods=130, freq="B"),
+                "close": [140.0] * 85 + [160.0] * 40 + [153.0] * 5,
+            }
+        )
+        res_y = evaluate_market_regime(yellow_df, "0050")
+        self.assertEqual(res_y["light"], "🟡黃燈")
+
+        # Red light: close < MA45 and MA45 falling
+        red_df = pd.DataFrame(
+            {
+                "date": pd.date_range("2026-01-01", periods=130, freq="B"),
+                "close": [180.0] * 80 + [170.0] * 30 + [140.0] * 20,
+            }
+        )
+        res_r = evaluate_market_regime(red_df, "0050")
+        self.assertEqual(res_r["light"], "🔴紅燈")
+
+    def test_build_rebound_watchlist_rows_matches_09_schema(self) -> None:
+        from finmind_stock_scanner import (
+            REBOUND_WATCHLIST_HEADERS,
+            build_rebound_watchlist_rows,
+            scan_rebound_from_prices,
+        )
+
+        analyzed = self._make_rebound_series(
+            latest_close=113.0, latest_max=114.0, latest_min=110.0
+        )
+        rebound_df, failures_df = scan_rebound_from_prices(analyzed)
+        self.assertEqual(len(failures_df), 0)
+        self.assertEqual(len(rebound_df), 1)
+
+        rows = build_rebound_watchlist_rows(
+            rebound_df,
+            as_of=date(2026, 10, 21),
+            market_light="🟡黃燈",
+            existing_master_map={"2357": {"ai_summary_json": '{"score":85}', "war_room_url": "https://x/2357.html"}},
+        )
+        self.assertEqual(len(rows), 1)
+        for col in REBOUND_WATCHLIST_HEADERS:
+            self.assertIn(col, rows[0])
+        self.assertEqual(rows[0]["stock_id"], "2357")
+        self.assertEqual(rows[0]["market_light"], "🟡黃燈")
+        self.assertEqual(rows[0]["war_room_url"], "https://x/2357.html")
+
+
 if __name__ == "__main__":
     unittest.main()

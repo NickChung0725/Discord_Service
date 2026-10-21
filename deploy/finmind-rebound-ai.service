@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily FinMind Type-A rebound scanner, Google Sheets sync and optional AI stock picker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=nick_chung0725
+WorkingDirectory=/home/nick_chung0725/Discord_Service
+EnvironmentFile=/home/nick_chung0725/Discord_Service/.env
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+ExecStart=/home/nick_chung0725/Discord_Service/.venv/bin/python /home/nick_chung0725/Discord_Service/finmind_stock_scanner.py analyze-rebound --config /home/nick_chung0725/Discord_Service/finmind_scanner.json
+TimeoutStartSec=infinity

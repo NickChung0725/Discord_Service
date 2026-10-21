@@ -262,5 +262,14 @@
   "ai_picker_call_interval_seconds": 4.5,
   "publish_war_room_for_all_candidates": false,
   "post_ai_picks_to_discord": true,
-  "save_ai_picks_to_gsheet": true
+  "save_ai_picks_to_gsheet": true,
+  "enable_market_regime": true,
+  "market_benchmark_id": "TAIEX",
+  "rebound_gsheet_tab_name": "Rebound_Watchlist",
+  "sync_rebound_to_gsheet": true,
+  "post_rebound_to_discord": true,
+  "rebound_auto_run_ai": false,
+  "rebound_ai_min_candidates": 3,
+  "rebound_ai_max_candidates": 15
 }
+

@@ -4,6 +4,38 @@
 
 ---
 
+## [v3.3.0] - 2026-10-21
+### ✨ 新增功能 (Added)
+* **補足左側反彈契機：「型態 A（高點急跌回踩長均線反彈）」量化掃描系統 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：
+  * 新增 `classify_rebound_signal` 與 `scan_rebound_from_prices`：從 `daily/{date}_prices.csv` 讀取近 60 個交易日數據，嚴格篩選同時滿足五大條件之均值回歸標的：
+    1. **長線護體**：`MA45 >= MA117 > MA189`（長期多頭結構未破壞）。
+    2. **高點回跌門檻（位階分級 ＋ 跌幅 >= 10%）**：`30~150元` 回跌 $\ge 10$ 元、`150~500元` 回跌 $\ge 30$ 元、`500~1,000元` 回跌 $\ge 100$ 元、`>=1,000元` 回跌 $\ge 300$ 元，且自近 60 日高點 (`high_60d`) 跌幅 $\ge 10\%$。
+    3. **下有長均線支撐**：今日收盤價落在下方 `45MA`（季線）或 `117MA`（半年線）的 `-1.5% ~ +2.5%` 區間內。
+    4. **上有反彈空間**：收盤價低於 `17MA`，且反彈至 `17MA` 的空間 $\ge 5\%$。
+    5. **K 線收盤強度濾網**：計算 `收盤強度 = (Close - Min) / (Max - Min)`，硬性要求 $\ge 0.55$（排除長上影線假反彈股）。
+  * 產出本地檔案：`daily/{date}_rebound_signals.csv` 與 `daily/{date}_rebound_failures.csv`。
+* **大盤總經視角連動：大盤環境紅綠燈機制 (`Market Regime Filter`) ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：
+  * 新增 `evaluate_market_regime` 與 `fetch_or_load_market_regime`（預設以加權指數 **`TAIEX`** 為大盤基準並快取至 `daily/{date}_market_regime.json`）：
+    * `🟢綠燈`（大盤 $\ge 17\text{MA}$ 與 $45\text{MA}$ 且 $17\text{MA}$ 向上）：偏多環境，順勢主推「17/45MA 金叉突破」。
+    * `🟡黃燈`（大盤跌破 $17\text{MA}$ 但守住 $45\text{MA}/117\text{MA}$）：震盪盤整，系統提高「型態 A 反彈清單」推薦權重。
+    * `🔴紅燈`（大盤跌破 $45\text{MA}$ 且季線下彎）：空頭警戒，強制在 AI 報告與 Discord 標註防禦警示，嚴格過濾基本面。
+  * **免除產業排除干擾並自動快取日線**：大盤紅綠燈採定向獨立抓取，完全不受 `excluded_industry_categories`（排除 ETF/大盤）影響；並在 19:00 自動將 `TAIEX` 日線追加進 `prices.csv`，使 22:00 與 22:30 秒級重算零額外 API 消耗。
+* **Google Sheets 擴充第 11 張工作表 `Rebound_Watchlist` ([`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py), [`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：
+  * 新增 `Rebound_Watchlist` Schema 與 `sync_rebound_watchlist_to_gsheet`，完整記錄 `pk_key`, `stock_id`, `stock_name`, `industry_category`, `scan_date`, `close_price`, `high_60d`, `drop_amount`, `drop_pct`, `support_ma`, `support_price`, `target_ma17`, `potential_return_pct`, `volume_status`, `market_light`, `ai_summary_json`, `war_room_url`。
+* **新增每日 22:30 獨立排程與 CLI 子命令 `analyze-rebound` ([`deploy/finmind-rebound-ai.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-rebound-ai.service), [`deploy/finmind-rebound-ai.timer`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-rebound-ai.timer), [`finmind_scanner.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_scanner.json))**：
+  * 新增 `python finmind_stock_scanner.py analyze-rebound`（支援 `--date`、`--run-ai`、`--no-ai`、`--force-ai`、`--dry-run`）。
+  * 支援兩階段彈性決策：第一階段預設 `rebound_auto_run_ai: false`，先推播「今日符合反彈條件標的總數」與清單至 Discord 並寫入 `Rebound_Watchlist`；當開啟 `rebound_auto_run_ai: true`（且檔數落於 `3 ~ 15` 檔區間）或傳入 `--run-ai` 時，自動銜接 AI 深度財報診斷與推播。
+
+### 🔧 優化與修正 (Changed)
+* **AI 嚴選總決策 Prompt (`portfolio_selection`) 四大法人操盤規範全面升級 ([`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：
+  1. **大盤環境背景宣告**：動態注入當日 `🟢綠燈 / 🟡黃燈 / 🔴紅燈` 狀態，要求 AI 動態調整進場防守係數。
+  2. **戰術操作定位分流 (`tactical_type`)**：強制將每檔入選股歸類為 `🎯 短中期波段持有 (5~20日)`、`⚡ 短線價差/當沖` 或 `🏦 長線價值抱單` 並標註依附均線。
+  3. **法人測幅三刀流 (`target_price_1`, `target_price_2`, `stop_loss_price`)**：結合 `05_AI_Metrics_Wide` 之 `TTM_EPS` 與本益比區間、`17MA 正乖離極值 (+12%)` 及 `N 字箱型等幅測距`，在結構化 JSON 與 Discord 報告具體輸出第一目標價、第二目標價與嚴格停損價（-4% 或跌破支撐）。
+  4. **勝率優化與排雷確認**：強制審視近 5 日法人買賣超與自由現金流（FCF），若技術面反彈但法人連續大賣且 FCF 為負，強制列入風險警示或降級 (`avoid` / `watchlist`)。
+* **單元測試擴充**：於 [`tests/test_finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_finmind_stock_scanner.py) 與 [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py) 新增型態 A 篩選、K 線收盤強度濾網、大盤紅綠燈、`Rebound_Watchlist` 與戰術定位測幅渲染測試（共 72 項測試全數通過）。
+
+---
+
 ## [v3.2.4] - 2026-10-21
 ### 🔧 優化與修正 (Changed)
 * **移除舊版 `{date}_signals.csv` 產出，統一以 `{date}_alignment_signals.csv` 作為均線清單資料源 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：
@@ -65,7 +97,7 @@
 
 ### 🔧 錯誤修正 (Fixed)
 * **修正 22:00 AI 嚴選個股戰情室網址未回寫與過期網頁未覆蓋問題 ([`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py))**：
-  * **修正未寫回 `00_Watchlist_Master.war_room_url`**：過去 22:00 選出 `TOP_PICK` 時，在產生並上傳 HTML 後未呼叫 `cache._update_watchlist_master`，導致 Google Sheets 欄位維持空白（僅 Discord 與 `08_AI_Daily_Picks` 有網址）。已修正為發布成功後立即自動同步回寫。
+  * **修正未寫回 `00_Watchlist_Master.war_room_url`**：過去 22:00 選出 `TOP_PICK` 時，在產生並上傳 HTML 後未呼叫 `cache._update_watchlist_master`，導致 Google Sheets 欄位維持空白（僅 Discord 與 `AI_Daily_Picks` 有網址）。已修正為發布成功後立即自動同步回寫。
   * **修正「已曾分析過之個股」戰情室 HTML 停留在舊日期未更新**：過去因判斷 `if report.war_room_url: continue`，只要該股先前曾分析過，便會跳過發布，導致網頁停留在舊版。已修正為若當日重新執行 AI 診斷（`not report.cached`），一律強制重新渲染最新全方位戰情室 HTML 並推播至 GitHub Pages。
   * **已立即手動回補**：將今日 22:00 嚴選出的長榮航 (2618)、樺漢 (6414)、宏正 (6277) 之 `war_room_url` 完整寫回 Google Sheets，並重新發布威鋒電子 (6756) 之全方位戰情室 HTML 至最新版本。
 
@@ -109,7 +141,7 @@
 * **雙層 Gemini 模型分工與免費額度 429 自動降級保護 ([`ai_weather.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/ai_weather.py))**：
   * 第一階段（單股財報＋法說驗證）維持使用高配額 `gemini-flash-lite-latest`（15 RPM / 500 RPD）。
   * 第二階段（22:00 跨股綜合評選，每晚僅 1 次）指定使用高階推理模型 `gemini-3.8-flash`（5 RPM / 20 RPD），若遇 `429 RESOURCE_EXHAUSTED` 或 `503` 自動無縫降級至 `gemini-flash-lite-latest`。
-* **Google Sheets 第 10 張工作表 `08_AI_Daily_Picks` ([`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py))**：
+* **Google Sheets 第 10 張工作表 `AI_Daily_Picks` ([`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py))**：
   * 自動記錄每日 22:00 AI 嚴選出的 `TOP_PICK`、`WATCHLIST` 與 `AVOID` 清單、推薦時收盤價、17MA/45MA 支撐防守價、單股體質分、總決策推薦分與法說展望評級，方便長期回測追蹤。
 
 ### 🔧 優化與修正 (Changed & Fixed)

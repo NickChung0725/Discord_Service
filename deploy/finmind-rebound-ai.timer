@@ -1,0 +1,10 @@
+[Unit]
+Description=Run FinMind Type-A rebound scan and watchlist sync on weekdays at 22:30
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 22:30:00 Asia/Taipei
+Persistent=true
+Unit=finmind-rebound-ai.service
+
+[Install]
+WantedBy=timers.target
