@@ -252,7 +252,7 @@
   "timezone": "Asia/Taipei",
   "post_alignment_to_discord": true,
   "stock_channel_id": "1557778164124622918",
-  "sync_signals_to_gsheet": true,
+  "sync_alignment_to_gsheet": true,
   "gsheet_tab_name": "MA_Signal_Tracker",
   "output_directory": "finmind_reports",
   "local_retention_days": 30,

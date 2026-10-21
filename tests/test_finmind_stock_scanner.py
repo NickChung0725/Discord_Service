@@ -28,7 +28,8 @@ from finmind_stock_scanner import (
     scan_configured_universe,
     scan_industry,
     select_stocks,
-    sync_signals_to_gsheet,
+    sync_alignment_to_gsheet,
+    _cleanup_old_daily_reports,
 )
 
 
@@ -91,11 +92,11 @@ class RecalcFromCacheTests(unittest.TestCase):
     def test_recalc_uses_saved_moving_averages_without_api(self) -> None:
         from finmind_stock_scanner import recalc_signals_from_prices
 
-        signals, alignments = recalc_signals_from_prices(self._prices_csv_frame())
+        _, alignments = recalc_signals_from_prices(self._prices_csv_frame())
 
-        self.assertEqual(list(signals["stock_id"]), ["9999"])
-        self.assertEqual(signals.iloc[0]["signal"], "剛金叉起漲")
         self.assertIn("MA17_MA45_gap_percent", alignments.columns)
+        self.assertEqual(list(alignments["stock_id"]), ["9999"])
+        self.assertEqual(alignments.iloc[0]["signal"], "剛金叉起漲")
         self.assertEqual(alignments.iloc[0]["vol_lots"], 1000)
 
     def test_recalc_from_cache_overwrites_csvs_and_dry_run_does_not(self) -> None:
@@ -465,14 +466,7 @@ class FinMindStockScannerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(
             FinMindRequestLimiter, "wait_for_slot"
         ):
-            (
-                prices_path,
-                signals_path,
-                alignment_path,
-                failures_path,
-                signal_count,
-                alignment_count,
-            ) = scan_industry(
+            (prices_path, alignment_path, failures_path, alignment_count) = scan_industry(
                 loader=loader,
                 stocks=stocks,
                 market="上市",
@@ -482,24 +476,20 @@ class FinMindStockScannerTests(unittest.TestCase):
             )
 
             self.assertTrue(prices_path.is_file())
-            self.assertTrue(signals_path.is_file())
             self.assertTrue(alignment_path.is_file())
             self.assertIsNotNone(failures_path)
             assert failures_path is not None
             self.assertTrue(failures_path.is_file())
-            self.assertEqual(signal_count, 1)
             self.assertEqual(alignment_count, 1)
             saved_prices = pd.read_csv(
                 prices_path, dtype={"stock_id": str}, parse_dates=["date"]
             )
-            saved_signals = pd.read_csv(signals_path)
             saved_alignment = pd.read_csv(alignment_path)
             saved_failures = pd.read_csv(failures_path, dtype={"stock_id": str})
 
         self.assertTrue((saved_prices["date"] >= pd.Timestamp("2025-09-30")).all())
         self.assertTrue((saved_prices["date"] <= pd.Timestamp("2026-03-31")).all())
         self.assertLess(len(saved_prices), 220)
-        self.assertEqual(len(saved_signals), 1)
         self.assertEqual(saved_prices["stock_id"].unique().tolist(), ["2330"])
         self.assertEqual(len(saved_alignment), 1)
         self.assertIn("MA189", saved_prices.columns)
@@ -545,7 +535,6 @@ class FinMindStockScannerTests(unittest.TestCase):
             )
 
             self.assertTrue(reports["prices"].is_file())
-            self.assertTrue(reports["signals"].is_file())
             self.assertTrue(reports["alignment_signals"].is_file())
             self.assertTrue(reports["failures"].is_file())
             self.assertEqual(failure_count, 0)
@@ -641,7 +630,21 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertEqual(day2_rows[1]["連續天數"], 2)
         self.assertIn("轉強突破", str(day2_rows[1]["每日執行狀況"]))
 
-    def test_sync_signals_to_gsheet_auto_creates_worksheet_and_writes_rows(self) -> None:
+    def test_cleanup_does_not_delete_legacy_signals_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            daily = Path(tmp) / "daily"
+            daily.mkdir()
+            (daily / "2026-01-01_signals.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+            (daily / "2026-01-01_alignment_signals.csv").write_text(
+                "stock_id,MA17_MA45_gap_percent\n2330,0.1\n", encoding="utf-8"
+            )
+
+            _cleanup_old_daily_reports(daily, as_of=date(2026, 2, 15), retention_days=30)
+
+            self.assertTrue((daily / "2026-01-01_signals.csv").exists())
+            self.assertFalse((daily / "2026-01-01_alignment_signals.csv").exists())
+
+    def test_sync_alignment_to_gsheet_auto_creates_worksheet_and_writes_rows(self) -> None:
         signals_df = pd.DataFrame(
             [
                 {
@@ -655,7 +658,7 @@ class FinMindStockScannerTests(unittest.TestCase):
                     "MA45": 985.0,
                     "MA117": 950.0,
                     "MA189": 910.0,
-                    "gap_percent": 0.51,
+                    "MA17_MA45_gap_percent": 0.51,
                     "signal": "剛金叉起漲",
                 }
             ]
@@ -673,7 +676,7 @@ class FinMindStockScannerTests(unittest.TestCase):
         fake_gc.open_by_key.return_value = fake_spreadsheet
 
         with patch("finmind_stock_scanner.gspread.service_account", return_value=fake_gc):
-            row_count = sync_signals_to_gsheet(
+            row_count = sync_alignment_to_gsheet(
                 signals_df,
                 as_of=date(2026, 10, 16),
                 spreadsheet_id="test-sheet-id",

@@ -6,6 +6,12 @@
 
 ## [v3.2.4] - 2026-10-21
 ### 🔧 優化與修正 (Changed)
+* **移除舊版 `{date}_signals.csv` 產出，統一以 `{date}_alignment_signals.csv` 作為均線清單資料源 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：
+  * 19:00 掃描不再產生 `daily/{date}_signals.csv`（含每市場/產業中繼 `signals_*.csv`），僅保留 `prices`／`alignment_signals`／`failures`。
+  * `MA_Signal_Tracker` 同步資料來源改為 `alignment_signals`（自動欄位相容：`MA17_MA45_gap_percent` → `gap_percent`），並將設定鍵更名為 `sync_alignment_to_gsheet`（`sync_signals_to_gsheet` 保留向下相容）。
+  * 調整本地保留期清理規則：不再自動刪除歷史 `daily/*_signals.csv` 舊檔，避免誤刪。
+  * 測試同步更新：[`tests/test_finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_finmind_stock_scanner.py)。
+
 * **縮減 19:00 Discord 均線排列快報每檔輸出欄位，提高可讀性 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：
   * `format_alignment_report` 移除每檔股票後段的 `MA3/MA17/MA45/MA117/MA189` 數值與 `17/45 差`，僅保留「訊號類型、收盤、量能狀態、17MA 走勢」等關鍵資訊。
 

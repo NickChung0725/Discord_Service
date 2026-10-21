@@ -698,7 +698,7 @@ def build_signal_tracker_rows(
     updated_at: str | None = None,
     replace_date: bool = True,
 ) -> list[dict[str, object]]:
-    """將當日 signals.csv 資料與歷史紀錄比對，標註『當日新進』、『連續天數』與『每日執行狀況』。"""
+    """將當日均線排列清單資料與歷史紀錄比對，標註『當日新進』、『連續天數』與『每日執行狀況』。"""
     scan_date_str = (as_of or _today_in_taipei()).isoformat()
     now_str = updated_at or datetime.now(TAIPEI_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -929,14 +929,36 @@ def build_signal_tracker_rows(
     return all_records
 
 
+def _ensure_tracker_signal_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Ensure tracker-required columns exist when feeding alignment_signals into tracker logic."""
+    if frame is None:
+        return pd.DataFrame()
+    df = frame.copy()
+    if "stock_id" in df.columns:
+        df["stock_id"] = df["stock_id"].astype(str).str.strip()
+    if "gap_percent" not in df.columns and "MA17_MA45_gap_percent" in df.columns:
+        df["gap_percent"] = df["MA17_MA45_gap_percent"]
+    for col, default in (
+        ("MA3", ""),
+        ("ma17_trend", "-"),
+        ("vol_lots", ""),
+        ("vol_ma5_lots", ""),
+        ("vol_ma20_lots", ""),
+        ("vol_status", "-"),
+    ):
+        if col not in df.columns:
+            df[col] = default
+    return df
+
+
 def _load_local_prior_signals(
     daily_directory: Path | None, before_date: date
 ) -> list[dict[str, object]]:
-    """若工作表尚無歷史資料，從本地 daily/*_signals.csv 載入符合新均線邏輯的歷史訊號以銜接連續天數。"""
+    """若工作表尚無歷史資料，從本地 daily/*_alignment_signals.csv 載入符合新均線邏輯的歷史訊號以銜接連續天數。"""
     if daily_directory is None or not daily_directory.is_dir():
         return []
 
-    pattern = re.compile(r"^(\d{4}-\d{2}-\d{2})_signals\.csv$")
+    pattern = re.compile(r"^(\d{4}-\d{2}-\d{2})_alignment_signals\.csv$")
     matched_files: list[tuple[date, Path]] = []
     for path in daily_directory.iterdir():
         m = pattern.fullmatch(path.name)
@@ -953,6 +975,7 @@ def _load_local_prior_signals(
             df = pd.read_csv(csv_path, dtype={"stock_id": str})
         except Exception:
             continue
+        df = _ensure_tracker_signal_columns(df)
         if not df.empty:
             for col in ("MA3", "MA17", "MA45", "MA117", "MA189"):
                 if col in df.columns:
@@ -1311,8 +1334,8 @@ def _format_signal_tracker_worksheet(
     _gspread_call_with_retry(spreadsheet.batch_update, {"requests": requests_payload})
 
 
-def sync_signals_to_gsheet(
-    signals_df: pd.DataFrame,
+def sync_alignment_to_gsheet(
+    alignment_signals_df: pd.DataFrame,
     *,
     as_of: date | None = None,
     spreadsheet_id: str | None = None,
@@ -1321,7 +1344,7 @@ def sync_signals_to_gsheet(
     daily_directory: Path | None = None,
     replace_date: bool = True,
 ) -> int:
-    """使用現有 Service Account JSON 將 signals.csv 報表同步至 Google Sheets MA_Signal_Tracker。"""
+    """將均線排列清單（alignment_signals）同步至 Google Sheets MA_Signal_Tracker。"""
     resolved_credentials = (
         credentials_path
         if credentials_path is not None
@@ -1370,7 +1393,7 @@ def sync_signals_to_gsheet(
             if any(str(v).strip() for v in record.values()):
                 existing_records.append(record)
 
-    # 若工作表內尚無早於今日的歷史紀錄，自動從本地 daily/*_signals.csv 補齊歷史基準
+    # 若工作表內尚無早於今日的歷史紀錄，自動從本地 daily/*_alignment_signals.csv 補齊歷史基準
     has_prior_history = any(
         str(rec.get("執行日期") or rec.get("scan_date") or "").strip() < today.isoformat()
         for rec in existing_records
@@ -1381,8 +1404,10 @@ def sync_signals_to_gsheet(
         if seeded:
             existing_records = seeded + existing_records
 
+    tracker_df = _ensure_tracker_signal_columns(alignment_signals_df)
+
     merged_records = build_signal_tracker_rows(
-        signals_df,
+        tracker_df,
         existing_records=existing_records,
         as_of=today,
         replace_date=replace_date,
@@ -1443,7 +1468,7 @@ def scan_industry(
     output_dir: Path,
     as_of: date | None = None,
     request_pause_seconds: float | None = REQUEST_PAUSE_SECONDS,
-) -> tuple[Path, Path, Path, Path | None, int, int]:
+) -> tuple[Path, Path, Path | None, int]:
     today = as_of or _today_in_taipei()
     report_start_date = (
         pd.Timestamp(today) - pd.DateOffset(months=REPORT_HISTORY_MONTHS)
@@ -1456,7 +1481,6 @@ def scan_industry(
     stem = _output_stem(market, industry)
 
     all_prices: list[pd.DataFrame] = []
-    signals: list[dict[str, object]] = []
     alignment_signals: list[dict[str, object]] = []
     failures: list[dict[str, str]] = []
     stock_count = len(stocks)
@@ -1473,7 +1497,6 @@ def scan_industry(
             analyzed = analyzed.loc[
                 analyzed["date"] >= pd.Timestamp(report_start_date)
             ].copy()
-            signal = classify_latest_signal(analyzed)
             alignment_signal = classify_latest_alignment_signal(analyzed)
             if analyzed["MA189"].notna().sum() == 0:
                 raise ValueError("近一年有效日線不足 189 個交易日，無法計算 MA189")
@@ -1495,16 +1518,6 @@ def scan_industry(
                 ]
             ]
             all_prices.append(analyzed)
-            if signal is not None:
-                signals.append(
-                    {
-                        "market": market,
-                        "industry_category": industry,
-                        "stock_id": stock_id,
-                        "stock_name": str(stock.stock_name),
-                        **signal,
-                    }
-                )
             if alignment_signal is not None:
                 alignment_signals.append(
                     {
@@ -1533,7 +1546,6 @@ def scan_industry(
             time.sleep(request_pause_seconds)
 
     price_path = output_dir / f"prices_{stem}.csv"
-    signal_path = output_dir / f"signals_{stem}.csv"
     alignment_path = output_dir / f"alignment_signals_{stem}.csv"
     failure_path = output_dir / f"failures_{stem}.csv" if failures else None
 
@@ -1551,29 +1563,6 @@ def scan_industry(
                 *(f"MA{period}" for period in MOVING_AVERAGE_PERIODS),
             ]
         )
-    )
-    signal_frame = pd.DataFrame(
-        signals,
-        columns=[
-            "market",
-            "industry_category",
-            "stock_id",
-            "stock_name",
-            "date",
-            "close",
-            "MA3",
-            "MA17",
-            "MA45",
-            "MA117",
-            "MA189",
-            "gap_percent",
-            "signal",
-            "ma17_trend",
-            "vol_lots",
-            "vol_ma5_lots",
-            "vol_ma20_lots",
-            "vol_status",
-        ],
     )
     alignment_frame = pd.DataFrame(
         alignment_signals,
@@ -1599,17 +1588,14 @@ def scan_industry(
         ],
     )
     _atomic_write_csv(price_frame, price_path)
-    _atomic_write_csv(signal_frame, signal_path)
     _atomic_write_csv(alignment_frame, alignment_path)
     if failure_path is not None:
         _atomic_write_csv(pd.DataFrame(failures), failure_path)
 
     return (
         price_path,
-        signal_path,
         alignment_path,
         failure_path,
-        len(signals),
         len(alignment_signals),
     )
 
@@ -1677,10 +1663,16 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
         raise ValueError(
             "post_alignment_to_discord 為 true 時，stock_channel_id 必須是數字 ID。"
         )
+    if "sync_alignment_to_gsheet" in config and not isinstance(
+        config.get("sync_alignment_to_gsheet"), bool
+    ):
+        raise ValueError("設定 sync_alignment_to_gsheet 必須是布林值。")
     if "sync_signals_to_gsheet" in config and not isinstance(
         config.get("sync_signals_to_gsheet"), bool
     ):
-        raise ValueError("設定 sync_signals_to_gsheet 必須是布林值。")
+        raise ValueError(
+            "設定 sync_signals_to_gsheet 必須是布林值（舊鍵，建議改用 sync_alignment_to_gsheet）。"
+        )
     if "gsheet_tab_name" in config and (
         not isinstance(config.get("gsheet_tab_name"), str)
         or not str(config.get("gsheet_tab_name")).strip()
@@ -1756,7 +1748,7 @@ def _cleanup_old_daily_reports(
 ) -> None:
     cutoff = as_of - timedelta(days=retention_days)
     filename_pattern = re.compile(
-        r"^\d{4}-\d{2}-\d{2}_((prices|signals|alignment_signals|failures)\.csv|ai_recommendations\.(json|md))$"
+        r"^\d{4}-\d{2}-\d{2}_((prices|alignment_signals|failures)\.csv|ai_recommendations\.(json|md))$"
     )
     for path in daily_directory.iterdir():
         match = filename_pattern.fullmatch(path.name)
@@ -1787,7 +1779,6 @@ def scan_configured_universe(
     universe = _configured_universe(stock_info, config)
 
     all_prices: list[Path] = []
-    all_signals: list[Path] = []
     all_alignments: list[Path] = []
     all_failures: list[Path] = []
     failed_groups: list[str] = []
@@ -1814,10 +1805,9 @@ def scan_configured_universe(
                     failed_groups.append(f"{market}/{industry}")
                     continue
                 all_prices.append(paths[0])
-                all_signals.append(paths[1])
-                all_alignments.append(paths[2])
-                if paths[3] is not None:
-                    all_failures.append(paths[3])
+                all_alignments.append(paths[1])
+                if paths[2] is not None:
+                    all_failures.append(paths[2])
 
         report_files = {
             "prices": _combine_csvs(
@@ -1830,29 +1820,6 @@ def scan_configured_universe(
                     "date",
                     "close",
                     *(f"MA{period}" for period in MOVING_AVERAGE_PERIODS),
-                ],
-            ),
-            "signals": _combine_csvs(
-                all_signals,
-                [
-                    "market",
-                    "industry_category",
-                    "stock_id",
-                    "stock_name",
-                    "date",
-                    "close",
-                    "MA3",
-                    "MA17",
-                    "MA45",
-                    "MA117",
-                    "MA189",
-                    "gap_percent",
-                    "signal",
-                    "ma17_trend",
-                    "vol_lots",
-                    "vol_ma5_lots",
-                    "vol_ma20_lots",
-                    "vol_status",
                 ],
             ),
             "alignment_signals": _combine_csvs(
@@ -1890,13 +1857,12 @@ def scan_configured_universe(
             _atomic_write_csv(frame, report_paths[name])
 
     failures = report_files["failures"]
-    signals = report_files["signals"]
     alignment_signals = report_files["alignment_signals"]
 
-    if config.get("sync_signals_to_gsheet"):
+    if config.get("sync_alignment_to_gsheet") or config.get("sync_signals_to_gsheet"):
         tab_name = str(config.get("gsheet_tab_name") or SIGNAL_TRACKER_SHEET_NAME)
-        sync_signals_to_gsheet(
-            signals,
+        sync_alignment_to_gsheet(
+            alignment_signals,
             as_of=today,
             tab_name=tab_name,
             daily_directory=daily_directory,
@@ -1995,7 +1961,7 @@ def recalc_from_cache(
     dry_run: bool = False,
     skip_gsheet: bool = False,
     skip_discord: bool = False,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> pd.DataFrame:
     """讀取 {date}_prices.csv 秒級重算訊號，並（非 dry-run 時）覆寫 CSV／Sheets／Discord。"""
     today = as_of or _today_in_taipei()
     output_root = output_dir or Path(str(config["output_directory"]))
@@ -2010,7 +1976,7 @@ def recalc_from_cache(
     signals, alignments = recalc_signals_from_prices(prices)
     print(
         f"[recalc] 讀取 {prices_path.name}（{prices['stock_id'].nunique()} 檔）；"
-        f"符合訊號 {len(signals)} 檔、均線排列清單 {len(alignments)} 檔。"
+        f"均線排列清單 {len(alignments)} 檔。"
     )
     if not alignments.empty:
         display_columns = [
@@ -2024,18 +1990,18 @@ def recalc_from_cache(
 
     if dry_run:
         print("[recalc] --dry-run：未寫入任何檔案、Google Sheets 與 Discord。")
-        return signals, alignments
+        return alignments
 
-    _atomic_write_csv(signals, daily_directory / f"{today.isoformat()}_signals.csv")
     _atomic_write_csv(
         alignments, daily_directory / f"{today.isoformat()}_alignment_signals.csv"
     )
-    print(f"[recalc] 已覆寫 {today.isoformat()}_signals.csv 與 _alignment_signals.csv。")
+    print(f"[recalc] 已覆寫 {today.isoformat()}_alignment_signals.csv。")
 
-    if config.get("sync_signals_to_gsheet") and not skip_gsheet:
+    if (config.get("sync_alignment_to_gsheet") or config.get("sync_signals_to_gsheet")) and not skip_gsheet:
         tab_name = str(config.get("gsheet_tab_name") or SIGNAL_TRACKER_SHEET_NAME)
-        rows = sync_signals_to_gsheet(
-            signals,
+        tracker_source = _ensure_tracker_signal_columns(alignments)
+        rows = sync_alignment_to_gsheet(
+            tracker_source,
             as_of=today,
             tab_name=tab_name,
             daily_directory=daily_directory,
@@ -2062,7 +2028,7 @@ def recalc_from_cache(
             failed_count=failed_count,
         )
         print("[recalc] 已重發 Discord 均線快報。")
-    return signals, alignments
+    return alignments
 
 
 def _make_parser() -> argparse.ArgumentParser:
@@ -2119,7 +2085,7 @@ def _make_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument(
         "--no-sync-gsheet",
         action="store_true",
-        help="停用將 signals.csv 同步寫入 Google Sheets MA_Signal_Tracker",
+        help="停用將均線排列清單同步寫入 Google Sheets MA_Signal_Tracker",
     )
 
     recalc_parser = subparsers.add_parser(
@@ -2238,14 +2204,7 @@ def main(argv: list[str] | None = None) -> int:
             f"輸出近 {REPORT_HISTORY_MONTHS} 個月，"
             f"每檔間隔 {REQUEST_PAUSE_SECONDS:g} 秒"
         )
-        (
-            price_path,
-            signal_path,
-            alignment_path,
-            failure_path,
-            signal_count,
-            alignment_count,
-        ) = scan_industry(
+        (price_path, alignment_path, failure_path, alignment_count) = scan_industry(
             loader=loader,
             stocks=stocks,
             market=args.market,
@@ -2253,32 +2212,27 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=args.output_dir,
         )
         print(
-            f"\n符合 17/45MA 即將金叉（-1.5%~0%）或剛金叉起漲（0%~+2.5%）且 MA45 > MA117 > MA189：{signal_count} 檔"
-        )
-        signals_df = pd.read_csv(signal_path, dtype={"stock_id": str})
-        if signal_count:
-            print(signals_df.to_string(index=False))
-        print(
             f"\n符合均線排列訊號（MA45 > MA117 > MA189）："
             f"{alignment_count} 檔"
         )
+        alignment_df = pd.read_csv(alignment_path, dtype={"stock_id": str})
         if alignment_count:
-            print(pd.read_csv(alignment_path).to_string(index=False))
+            print(alignment_df.to_string(index=False))
         print(f"\n近六個月交易資料（均線使用近一年計算）：{price_path}")
-        print(f"訊號清單：{signal_path}")
         print(f"均線排列特別清單：{alignment_path}")
         if (
             not args.no_sync_gsheet
             and os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
             and os.getenv("GSHEET_SPREADSHEET_ID", "").strip()
         ):
-            synced_rows = sync_signals_to_gsheet(
-                signals_df,
+            tracker_source = _ensure_tracker_signal_columns(alignment_df)
+            synced_rows = sync_alignment_to_gsheet(
+                tracker_source,
                 daily_directory=args.output_dir / "daily",
                 replace_date=False,
             )
             print(
-                f"已將 signals 報表同步寫入 Google Sheets [{SIGNAL_TRACKER_SHEET_NAME}]（共 {synced_rows} 筆紀錄）。"
+                f"已將均線排列清單同步寫入 Google Sheets [{SIGNAL_TRACKER_SHEET_NAME}]（共 {synced_rows} 筆紀錄）。"
             )
         failures = pd.read_csv(failure_path) if failure_path is not None else None
         if args.post_to_discord:

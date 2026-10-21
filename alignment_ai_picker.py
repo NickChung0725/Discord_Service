@@ -33,6 +33,7 @@ from finmind_stock_scanner import (
     FinMindRequestLimiter,
     _cleanup_old_daily_reports,
     _extract_latest_volume_metrics,
+    _ensure_tracker_signal_columns,
     _load_local_prior_signals,
     _rate_limit_finmind_http_requests,
     _today_in_taipei,
@@ -128,8 +129,9 @@ def enrich_with_tracker(frame: pd.DataFrame, daily_dir: Path, target_date: date)
         return result
     try:
         prior = _load_local_prior_signals(daily_dir, target_date)
+        tracker_source = _ensure_tracker_signal_columns(result)
         rows = build_signal_tracker_rows(
-            result, existing_records=prior, as_of=target_date, replace_date=True
+            tracker_source, existing_records=prior, as_of=target_date, replace_date=True
         )
     except Exception as error:  # noqa: BLE001
         print(f"[warn] 無法計算連續天數/新進狀態，使用預設值：{error}")
