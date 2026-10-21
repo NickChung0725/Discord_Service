@@ -518,12 +518,6 @@ def format_alignment_report(
         line = (
             f"\n{row.stock_id} {row.stock_name}{signal_part} | 收盤 {float(row.close):,.2f}"
             f"{vol_part}"
-            f"{ma3_part}"
-            f" | MA17 {float(row.MA17):,.2f}"
-            f" | MA45 {float(row.MA45):,.2f}"
-            f" | MA117 {float(row.MA117):,.2f}"
-            f" | MA189 {float(row.MA189):,.2f}"
-            f" | 17/45 差 {float(gap_val):.2f}%"
             f"{trend_part}"
         )
         if len(current) + len(line) > 1800:

@@ -4,6 +4,13 @@
 
 ---
 
+## [v3.2.4] - 2026-10-21
+### 🔧 優化與修正 (Changed)
+* **縮減 19:00 Discord 均線排列快報每檔輸出欄位，提高可讀性 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：
+  * `format_alignment_report` 移除每檔股票後段的 `MA3/MA17/MA45/MA117/MA189` 數值與 `17/45 差`，僅保留「訊號類型、收盤、量能狀態、17MA 走勢」等關鍵資訊。
+
+---
+
 ## [v3.2.3] - 2026-10-20
 ### ✨ 新增功能：資料層／策略層拆分，秒級重算 (Added)
 * **新增 CLI 子命令 `recalc-signals` ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：直接讀取 19:00 已存檔的 `daily/{date}_prices.csv`（內含近一年算好的 MA 與成交量），以純本地運算重新套用訊號規則，**0 次 FinMind 請求、約 2 秒完成**（原本需重抓約 1 小時）。
