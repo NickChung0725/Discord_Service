@@ -32,7 +32,10 @@
   2. **戰術操作定位分流 (`tactical_type`)**：強制將每檔入選股歸類為 `🎯 短中期波段持有 (5~20日)`、`⚡ 短線價差/當沖` 或 `🏦 長線價值抱單` 並標註依附均線。
   3. **法人測幅三刀流 (`target_price_1`, `target_price_2`, `stop_loss_price`)**：結合 `05_AI_Metrics_Wide` 之 `TTM_EPS` 與本益比區間、`17MA 正乖離極值 (+12%)` 及 `N 字箱型等幅測距`，在結構化 JSON 與 Discord 報告具體輸出第一目標價、第二目標價與嚴格停損價（-4% 或跌破支撐）。
   4. **勝率優化與排雷確認**：強制審視近 5 日法人買賣超與自由現金流（FCF），若技術面反彈但法人連續大賣且 FCF 為負，強制列入風險警示或降級 (`avoid` / `watchlist`)。
-* **單元測試擴充**：於 [`tests/test_finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_finmind_stock_scanner.py) 與 [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py) 新增型態 A 篩選、K 線收盤強度濾網、大盤紅綠燈、`Rebound_Watchlist` 與戰術定位測幅渲染測試（共 72 項測試全數通過）。
+* **Discord 超長文字自動分段推播支援「關聯回覆 (Message Reference)」機制 ([`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：
+  * 解決 22:00 AI 總決策、22:30 型態 A 反彈與 19:00 均線快報在文字超過 1,800 字元被截斷分段發送時，接續訊息與首則訊息各自獨立、無關聯性的問題。
+  * 系統自動擷取首則推播訊息之 Discord Message ID，後續接續分段一律帶入 `message_reference: {"message_id": first_id, "fail_if_not_exists": False}` 與 `allowed_mentions: {"replied_user": False}`，呈現與 `/stock_ai` 完全一致的回覆串連線條，確保閱讀體驗統一。
+* **單元測試擴充**：於 [`tests/test_finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_finmind_stock_scanner.py) 與 [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py) 新增型態 A 篩選、K 線收盤強度濾網、大盤紅綠燈、`Rebound_Watchlist`、戰術定位測幅渲染與 Discord 超長分段關聯回覆測試（共 75 項測試全數通過）。
 
 ---
 

@@ -19,6 +19,7 @@ from alignment_ai_picker import (
     format_pick_report,
     load_alignment_candidates,
     parse_portfolio_json,
+    post_messages_to_discord,
     prefilter_candidates,
 )
 from fundamental_analyzer import FundamentalAnalyzer
@@ -301,6 +302,40 @@ class GeminiFallbackTests(unittest.TestCase):
         with patch.object(ai_weather, "_generate_ai_response", side_effect=ValueError("bad prompt")):
             with self.assertRaises(ValueError):
                 asyncio.run(ai_weather.ask_gemini("p", model="a", fallback_model="b"))
+
+
+class DiscordPostReplyTests(unittest.TestCase):
+    def test_multi_chunk_messages_reply_to_first_message(self) -> None:
+        calls = []
+
+        def fake_urlopen(request, timeout=10):
+            payload = json.loads(request.data.decode("utf-8"))
+            calls.append(payload)
+            mock_resp = Mock()
+            mock_resp.status = 200
+            mock_resp.__enter__ = Mock(return_value=mock_resp)
+            mock_resp.__exit__ = Mock(return_value=None)
+            mock_resp.read.return_value = json.dumps({"id": "msg-first-12345"}).encode("utf-8")
+            return mock_resp
+
+        messages = ["Message chunk 1", "Message chunk 2", "Message chunk 3"]
+        with patch("alignment_ai_picker.urlopen", side_effect=fake_urlopen):
+            with patch("time.sleep", return_value=None):
+                sent = post_messages_to_discord(messages, channel_id="123456789", bot_token="fake-token")
+
+        self.assertEqual(sent, 3)
+        self.assertEqual(len(calls), 3)
+        # Message 1 should NOT have message_reference
+        self.assertNotIn("message_reference", calls[0])
+        self.assertEqual(calls[0]["content"], "Message chunk 1")
+        # Message 2 and 3 MUST reply to message 1
+        self.assertIn("message_reference", calls[1])
+        self.assertEqual(calls[1]["message_reference"]["message_id"], "msg-first-12345")
+        self.assertFalse(calls[1]["message_reference"]["fail_if_not_exists"])
+        self.assertEqual(calls[1]["allowed_mentions"], {"replied_user": False})
+
+        self.assertIn("message_reference", calls[2])
+        self.assertEqual(calls[2]["message_reference"]["message_id"], "msg-first-12345")
 
 
 if __name__ == "__main__":

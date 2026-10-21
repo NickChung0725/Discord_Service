@@ -845,12 +845,22 @@ def post_alignment_report_to_discord(
         market_regime=market_regime,
     )
     sent_count = 0
+    first_message_id: str | None = None
     for index, content in enumerate(messages):
+        payload_dict: dict[str, Any] = {
+            "content": content,
+            "flags": 4,
+        }
+        if index > 0 and first_message_id:
+            payload_dict["message_reference"] = {
+                "message_id": str(first_message_id),
+                "fail_if_not_exists": False,
+            }
+            payload_dict["allowed_mentions"] = {"replied_user": False}
+
         request = Request(
             f"{DISCORD_API_BASE_URL}/channels/{channel_id}/messages",
-            data=json.dumps({"content": content}, ensure_ascii=False).encode(
-                "utf-8"
-            ),
+            data=json.dumps(payload_dict, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bot {bot_token.strip()}",
                 "Content-Type": "application/json",
@@ -864,6 +874,19 @@ def post_alignment_report_to_discord(
                     raise RuntimeError(
                         f"Discord returned unexpected HTTP status {response.status}."
                     )
+                resp_body = response.read()
+                if isinstance(resp_body, bytes):
+                    resp_text = resp_body.decode("utf-8", errors="replace")
+                elif isinstance(resp_body, str):
+                    resp_text = resp_body
+                else:
+                    resp_text = ""
+                try:
+                    resp_data = json.loads(resp_text) if resp_text else {}
+                    if index == 0 and isinstance(resp_data, dict) and resp_data.get("id"):
+                        first_message_id = str(resp_data["id"])
+                except Exception:
+                    pass
         except HTTPError as error:
             response_body = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(
@@ -953,10 +976,22 @@ def post_rebound_report_to_discord(
         ai_executed=ai_executed,
     )
     sent_count = 0
+    first_message_id: str | None = None
     for index, content in enumerate(messages):
+        payload_dict: dict[str, Any] = {
+            "content": content,
+            "flags": 4,
+        }
+        if index > 0 and first_message_id:
+            payload_dict["message_reference"] = {
+                "message_id": str(first_message_id),
+                "fail_if_not_exists": False,
+            }
+            payload_dict["allowed_mentions"] = {"replied_user": False}
+
         request = Request(
             f"{DISCORD_API_BASE_URL}/channels/{channel_id}/messages",
-            data=json.dumps({"content": content, "flags": 4}, ensure_ascii=False).encode("utf-8"),
+            data=json.dumps(payload_dict, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bot {bot_token.strip()}",
                 "Content-Type": "application/json",
@@ -968,6 +1003,19 @@ def post_rebound_report_to_discord(
             with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 if response.status not in (200, 201):
                     raise RuntimeError(f"Discord returned unexpected HTTP status {response.status}.")
+                resp_body = response.read()
+                if isinstance(resp_body, bytes):
+                    resp_text = resp_body.decode("utf-8", errors="replace")
+                elif isinstance(resp_body, str):
+                    resp_text = resp_body
+                else:
+                    resp_text = ""
+                try:
+                    resp_data = json.loads(resp_text) if resp_text else {}
+                    if index == 0 and isinstance(resp_data, dict) and resp_data.get("id"):
+                        first_message_id = str(resp_data["id"])
+                except Exception:
+                    pass
         except HTTPError as error:
             response_body = error.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"Discord rejected the report (HTTP {error.code}): {response_body}") from error

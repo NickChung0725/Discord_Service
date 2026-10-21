@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import tempfile
+import json
 import sqlite3
+import tempfile
 import unittest
 from contextlib import closing
 from datetime import date
@@ -446,6 +447,101 @@ class FinMindStockScannerTests(unittest.TestCase):
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "https://discord.com/api/v10/channels/123456789/messages")
         self.assertEqual(request.get_header("Authorization"), "Bot test-token")
+
+    def test_post_alignment_report_multi_chunk_replies_to_first_message(self) -> None:
+        signals = pd.DataFrame(
+            [
+                {
+                    "stock_id": f"{2000+i}",
+                    "stock_name": f"測試股{i}",
+                    "industry_category": "半導體業",
+                    "close": 100.0,
+                    "MA3": 101.0,
+                    "MA17": 99.0,
+                    "MA45": 98.0,
+                    "gap_percent": 1.0,
+                    "vol_lots": 1500,
+                    "vol_status": "量能平穩",
+                }
+                for i in range(80)  # 產生超過 1800 字元的超長報告以觸發分段
+            ]
+        )
+        calls = []
+
+        def fake_urlopen(request, timeout=10):
+            payload = json.loads(request.data.decode("utf-8"))
+            calls.append(payload)
+            mock_resp = MagicMock(status=200)
+            mock_resp.__enter__.return_value = mock_resp
+            mock_resp.read.return_value = json.dumps({"id": "align-first-123"}).encode("utf-8")
+            return mock_resp
+
+        with patch("finmind_stock_scanner.urlopen", side_effect=fake_urlopen):
+            with patch("time.sleep", return_value=None):
+                sent_count = post_alignment_report_to_discord(
+                    signals,
+                    channel_id="123456789",
+                    bot_token="test-token",
+                    as_of=date(2026, 10, 12),
+                )
+
+        self.assertGreater(sent_count, 1)
+        self.assertNotIn("message_reference", calls[0])
+        self.assertIn("message_reference", calls[1])
+        self.assertEqual(calls[1]["message_reference"]["message_id"], "align-first-123")
+        self.assertFalse(calls[1]["message_reference"]["fail_if_not_exists"])
+        self.assertEqual(calls[1]["allowed_mentions"], {"replied_user": False})
+
+    def test_post_rebound_report_multi_chunk_replies_to_first_message(self) -> None:
+        rebound = pd.DataFrame(
+            [
+                {
+                    "stock_id": f"{3000+i}",
+                    "stock_name": f"反彈股{i}",
+                    "industry_category": "半導體業",
+                    "close": 120.0,
+                    "high_60d": 150.0,
+                    "drop_amount": 30.0,
+                    "drop_pct": 20.0,
+                    "support_ma": "45MA",
+                    "support_price": 119.0,
+                    "support_gap_pct": 0.84,
+                    "target_ma17": 130.0,
+                    "potential_return_pct": 8.33,
+                    "close_strength": 0.75,
+                    "vol_lots": 2000,
+                    "vol_status": "量能平穩",
+                }
+                for i in range(50)
+            ]
+        )
+        calls = []
+
+        def fake_urlopen(request, timeout=10):
+            payload = json.loads(request.data.decode("utf-8"))
+            calls.append(payload)
+            mock_resp = MagicMock(status=200)
+            mock_resp.__enter__.return_value = mock_resp
+            mock_resp.read.return_value = json.dumps({"id": "rebound-first-456"}).encode("utf-8")
+            return mock_resp
+
+        from finmind_stock_scanner import post_rebound_report_to_discord
+
+        with patch("finmind_stock_scanner.urlopen", side_effect=fake_urlopen):
+            with patch("time.sleep", return_value=None):
+                sent_count = post_rebound_report_to_discord(
+                    rebound,
+                    channel_id="123456789",
+                    bot_token="test-token",
+                    as_of=date(2026, 10, 12),
+                )
+
+        self.assertGreater(sent_count, 1)
+        self.assertNotIn("message_reference", calls[0])
+        self.assertIn("message_reference", calls[1])
+        self.assertEqual(calls[1]["message_reference"]["message_id"], "rebound-first-456")
+        self.assertFalse(calls[1]["message_reference"]["fail_if_not_exists"])
+        self.assertEqual(calls[1]["allowed_mentions"], {"replied_user": False})
 
     def test_scan_writes_prices_signals_and_failures(self) -> None:
         prices = pd.DataFrame(
