@@ -491,6 +491,11 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertEqual(calls[1]["message_reference"]["message_id"], "align-first-123")
         self.assertFalse(calls[1]["message_reference"]["fail_if_not_exists"])
         self.assertEqual(calls[1]["allowed_mentions"], {"replied_user": False})
+        # Continuation should not repeat heading / （續）
+        self.assertNotIn("（續）", calls[1]["content"])
+        # Alignment report should not contain Markdown bold markers
+        self.assertNotIn("**", calls[0]["content"])
+        self.assertNotIn("**", calls[1]["content"])
 
     def test_post_rebound_report_multi_chunk_replies_to_first_message(self) -> None:
         rebound = pd.DataFrame(
@@ -542,6 +547,8 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertEqual(calls[1]["message_reference"]["message_id"], "rebound-first-456")
         self.assertFalse(calls[1]["message_reference"]["fail_if_not_exists"])
         self.assertEqual(calls[1]["allowed_mentions"], {"replied_user": False})
+        # Continuation should not repeat heading / （續）
+        self.assertNotIn("（續）", calls[1]["content"])
 
     def test_scan_writes_prices_signals_and_failures(self) -> None:
         prices = pd.DataFrame(

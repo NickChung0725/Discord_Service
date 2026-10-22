@@ -825,6 +825,23 @@ def format_alignment_report(
     return chunks
 
 
+def _trim_reply_continuation(content: str, *, marker: str = "（續）", scan_lines: int = 50) -> str:
+    """Trim repeated heading for continuation chunks.
+
+    Some scheduled Discord reports format continuation chunks as "<heading>\n（續）\n...".
+    When the chunk is posted as a reply to the first message (message_reference),
+    the heading context is already visible, so we strip everything up to and
+    including the marker line.
+    """
+
+    lines = content.splitlines()
+    for idx, line in enumerate(lines[:scan_lines]):
+        if line.strip() == marker:
+            trimmed = "\n".join(lines[idx + 1 :]).lstrip("\n")
+            return trimmed or content
+    return content
+
+
 def post_alignment_report_to_discord(
     alignment_signals: pd.DataFrame,
     channel_id: str,
@@ -847,8 +864,12 @@ def post_alignment_report_to_discord(
     sent_count = 0
     first_message_id: str | None = None
     for index, content in enumerate(messages):
+        content_to_send = content
+        if index > 0 and first_message_id:
+            content_to_send = _trim_reply_continuation(content)
+
         payload_dict: dict[str, Any] = {
-            "content": content,
+            "content": content_to_send,
             "flags": 4,
         }
         if index > 0 and first_message_id:
@@ -912,20 +933,20 @@ def format_rebound_report(
     count = len(rebound_signals)
     heading_lines = [
         f"🪃 【22:30 型態 A：高點回跌回踩長均線反彈清單】{report_date}",
-        f"🎯 今日符合反彈條件標的總數：**{count} 檔**",
+        f"🎯 今日符合反彈條件標的總數：{count} 檔",
         "條件：MA45 >= MA117 > MA189｜近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 >=10%｜回踩 45MA/117MA（-1.5%~+2.5%）｜反彈至 17MA 空間 >=5%｜K線收盤強度 >=0.55",
     ]
     if market_regime and market_regime.get("summary"):
         heading_lines.append(f"🚦 大盤紅綠燈：{market_regime['summary']}")
         if "🔴" in str(market_regime.get("light", "")):
-            heading_lines.append("🛡️ **空頭防禦警示**：目前大盤跌破 45MA 且下彎，搶反彈請嚴格過濾基本面與自由現金流，嚴守停損！")
+            heading_lines.append("🛡️ 空頭防禦警示：目前大盤跌破 45MA 且下彎，搶反彈請嚴格過濾基本面與自由現金流，嚴守停損！")
         elif "🟡" in str(market_regime.get("light", "")):
-            heading_lines.append("💡 **震盪盤整環境**：大盤處於黃燈區間，系統提高「型態 A 反彈清單」關注權重。")
+            heading_lines.append("💡 震盪盤整環境：大盤處於黃燈區間，系統提高「型態 A 反彈清單」關注權重。")
     if failed_count:
         heading_lines.append(f"⚠️ 有 {failed_count} 檔股票分析過程發生異常。")
     if not ai_executed and count > 0:
         heading_lines.append(
-            "📌 **第一階段觀測模式**：已寫入 Google Sheets `Rebound_Watchlist`。若欲啟動 AI 深度診斷與嚴選，請執行 `analyze-rebound --run-ai`。"
+            "📌 第一階段觀測模式：已寫入 Google Sheets `Rebound_Watchlist`。若欲啟動 AI 深度診斷與嚴選，請執行 `analyze-rebound --run-ai`。"
         )
     heading = "\n".join(heading_lines)
 
@@ -939,7 +960,7 @@ def format_rebound_report(
         vol_status = getattr(row, "vol_status", "-")
         vol_str = f" | 量 {int(round(vol_lots)):,}張 ({vol_status})" if vol_lots is not None else ""
         line = (
-            f"\n• **{row.stock_id} {row.stock_name}**（{getattr(row, 'industry_category', '')}）"
+            f"\n• {row.stock_id} {row.stock_name}（{getattr(row, 'industry_category', '')}）"
             f"｜收盤 {float(row.close):,.2f}｜60日高 {float(row.high_60d):,.2f}"
             f"（跌 {float(row.drop_amount):,.2f}元 / -{float(row.drop_pct):.1f}%）"
             f"｜回踩 {row.support_ma} {float(row.support_price):,.2f}（{float(row.support_gap_pct):+.2f}%）"
@@ -978,8 +999,12 @@ def post_rebound_report_to_discord(
     sent_count = 0
     first_message_id: str | None = None
     for index, content in enumerate(messages):
+        content_to_send = content
+        if index > 0 and first_message_id:
+            content_to_send = _trim_reply_continuation(content)
+
         payload_dict: dict[str, Any] = {
-            "content": content,
+            "content": content_to_send,
             "flags": 4,
         }
         if index > 0 and first_message_id:

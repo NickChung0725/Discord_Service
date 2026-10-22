@@ -318,7 +318,11 @@ class DiscordPostReplyTests(unittest.TestCase):
             mock_resp.read.return_value = json.dumps({"id": "msg-first-12345"}).encode("utf-8")
             return mock_resp
 
-        messages = ["Message chunk 1", "Message chunk 2", "Message chunk 3"]
+        messages = [
+            "Message chunk 1",
+            "Title\n（續）\n\n#3 3010 華立",
+            "Another title\n（續）\n\n#4 2330 台積電",
+        ]
         with patch("alignment_ai_picker.urlopen", side_effect=fake_urlopen):
             with patch("time.sleep", return_value=None):
                 sent = post_messages_to_discord(messages, channel_id="123456789", bot_token="fake-token")
@@ -333,9 +337,12 @@ class DiscordPostReplyTests(unittest.TestCase):
         self.assertEqual(calls[1]["message_reference"]["message_id"], "msg-first-12345")
         self.assertFalse(calls[1]["message_reference"]["fail_if_not_exists"])
         self.assertEqual(calls[1]["allowed_mentions"], {"replied_user": False})
+        # Continuation chunks should be trimmed (no repeated heading / no （續）)
+        self.assertEqual(calls[1]["content"], "#3 3010 華立")
 
         self.assertIn("message_reference", calls[2])
         self.assertEqual(calls[2]["message_reference"]["message_id"], "msg-first-12345")
+        self.assertEqual(calls[2]["content"], "#4 2330 台積電")
 
 
 if __name__ == "__main__":

@@ -570,6 +570,23 @@ def format_pick_report(
     return chunks
 
 
+def _trim_reply_continuation(content: str, *, marker: str = "（續）", scan_lines: int = 50) -> str:
+    """Trim repeated heading for continuation chunks.
+
+    The scheduled reports may build continuation chunks as "<heading>\n（續）\n...".
+    When we are replying to the first message via message_reference, the heading is
+    already visible in the reply preview, so we strip everything up to and
+    including the marker line.
+    """
+
+    lines = content.splitlines()
+    for idx, line in enumerate(lines[:scan_lines]):
+        if line.strip() == marker:
+            trimmed = "\n".join(lines[idx + 1 :]).lstrip("\n")
+            return trimmed or content
+    return content
+
+
 def post_messages_to_discord(messages: list[str], channel_id: str, bot_token: str) -> int:
     if not channel_id.isdigit():
         raise ValueError("stock_channel_id 必須是 Discord 頻道 ID 數字。")
@@ -578,8 +595,12 @@ def post_messages_to_discord(messages: list[str], channel_id: str, bot_token: st
     sent = 0
     first_message_id: str | None = None
     for index, content in enumerate(messages):
+        content_to_send = content
+        if index > 0 and first_message_id:
+            content_to_send = _trim_reply_continuation(content)
+
         payload_dict: dict[str, Any] = {
-            "content": content,
+            "content": content_to_send,
             "flags": 4,
         }
         if index > 0 and first_message_id:

@@ -4,6 +4,16 @@
 
 ---
 
+## [v3.3.1] - 2026-10-22
+### 🔧 優化與修正 (Changed)
+* **Discord 分段推播在「關聯回覆」續篇不再重複標題，直接接續股票條目 ([`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：
+  * 當第 2 段起訊息以 `message_reference` 回覆第 1 段時，自動移除續篇內重複的標題與 `（續）`，讓閱讀更聚焦。
+  * 同步擴充測試覆蓋續篇 trim 行為（[`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py), [`tests/test_finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_finmind_stock_scanner.py)）。
+* **22:30 型態 A 反彈清單移除 Markdown 粗體符號 `**`，改善複製到 LINE 的可讀性 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py))**：
+  * 將標題區與個股條目中的 `**...**` 改為純文字，避免跨平台貼上出現 `**` 雜訊。
+
+---
+
 ## [v3.3.0] - 2026-10-21
 ### ✨ 新增功能 (Added)
 * **補足左側反彈契機：「型態 A（高點急跌回踩長均線反彈）」量化掃描系統 ([`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：
