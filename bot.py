@@ -11,7 +11,8 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from ai_weather import register_ai_command, register_weather_command
+from ai_service import register_ai_command
+from weather_service import register_weather_command
 from chart_generator import (
     InvalidStockIDError,
     StockNotFoundError,

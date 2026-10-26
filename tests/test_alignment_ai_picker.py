@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 import pandas as pd
 
-import ai_weather
+import ai_service
 from alignment_ai_picker import (
     build_dossier,
     build_pick_rows,
@@ -21,6 +21,7 @@ from alignment_ai_picker import (
     parse_portfolio_json,
     post_messages_to_discord,
     prefilter_candidates,
+    run_portfolio_selection,
 )
 from fundamental_analyzer import FundamentalAnalyzer
 
@@ -278,8 +279,8 @@ class SummaryTests(unittest.TestCase):
 
 class GeminiFallbackTests(unittest.TestCase):
     def test_default_call_signature_unchanged(self) -> None:
-        with patch.object(ai_weather, "_generate_ai_response", return_value="hi") as gen:
-            self.assertEqual(asyncio.run(ai_weather.ask_gemini("p")), "hi")
+        with patch.object(ai_service, "_generate_ai_response", return_value="hi") as gen:
+            self.assertEqual(asyncio.run(ai_service.ask_gemini("p")), "hi")
         gen.assert_called_once_with("p")
 
     def test_quota_error_degrades_to_fallback_model(self) -> None:
@@ -291,17 +292,36 @@ class GeminiFallbackTests(unittest.TestCase):
                 raise RuntimeError("429 RESOURCE_EXHAUSTED daily quota")
             return "fallback answer"
 
-        with patch.object(ai_weather, "_generate_ai_response", side_effect=fake):
+        with patch.object(ai_service, "_generate_ai_response", side_effect=fake):
             answer = asyncio.run(
-                ai_weather.ask_gemini("p", model="gemini-3.8-flash", fallback_model="gemini-flash-lite-latest")
+                ai_service.ask_gemini("p", model="gemini-3.8-flash", fallback_model="gemini-flash-lite-latest")
             )
         self.assertEqual(answer, "fallback answer")
         self.assertEqual(calls, ["gemini-3.8-flash", "gemini-flash-lite-latest"])
 
     def test_non_quota_error_is_not_swallowed(self) -> None:
-        with patch.object(ai_weather, "_generate_ai_response", side_effect=ValueError("bad prompt")):
+        with patch.object(ai_service, "_generate_ai_response", side_effect=ValueError("bad prompt")):
             with self.assertRaises(ValueError):
-                asyncio.run(ai_weather.ask_gemini("p", model="a", fallback_model="b"))
+                asyncio.run(ai_service.ask_gemini("p", model="a", fallback_model="b"))
+
+    def test_portfolio_selection_uses_vertex_ai_and_env_vertex_model(self) -> None:
+        with (
+            patch.dict("os.environ", {"VERTEX_MODEL": "gemini-2.5-pro"}, clear=False),
+            patch("alignment_ai_picker.ask_vertex_ai", return_value='{"top_picks":[]}') as vertex_call,
+        ):
+            model = ai_service.get_vertex_model()
+            res = asyncio.run(
+                run_portfolio_selection(
+                    ["dossier-1"],
+                    max_top=5,
+                    model=model,
+                    market_regime={"light": "🟢綠燈", "summary": "🟢綠燈"},
+                )
+            )
+        self.assertEqual(model, "gemini-2.5-pro")
+        self.assertEqual(res, '{"top_picks":[]}')
+        vertex_call.assert_called_once()
+        self.assertEqual(vertex_call.call_args.kwargs["model"], "gemini-2.5-pro")
 
 
 class DiscordPostReplyTests(unittest.TestCase):

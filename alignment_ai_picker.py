@@ -25,7 +25,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 from dotenv import load_dotenv
 
-from ai_weather import DEFAULT_GEMINI_MODEL, ask_gemini
+from ai_service import DEFAULT_VERTEX_MODEL, ask_vertex_ai, get_vertex_model
 from finmind_stock_scanner import (
     DISCORD_API_BASE_URL,
     DISCORD_POST_PAUSE_SECONDS,
@@ -57,7 +57,7 @@ PICKS_SHEET_NAME = "AI_Daily_Picks"
 FINMIND_HOSTS = ("finmindtrade.com",)
 DEFAULT_MAX_CANDIDATES = 25
 DEFAULT_MAX_TOP_PICKS = 5
-DEFAULT_PORTFOLIO_MODEL = "gemini-3.8-flash"
+DEFAULT_PORTFOLIO_MODEL = DEFAULT_VERTEX_MODEL
 DEFAULT_CALL_INTERVAL_SECONDS = 4.5
 DISCORD_CHUNK_LIMIT = 1800
 
@@ -395,8 +395,7 @@ async def run_portfolio_selection(
     dossiers: list[str],
     *,
     max_top: int,
-    model: str,
-    fallback_model: str,
+    model: str | None = None,
     market_regime: Mapping[str, object] | None = None,
     strategy_context: str = "",
 ) -> str:
@@ -417,7 +416,7 @@ async def run_portfolio_selection(
         + f"【今日候選資料卡（共 {len(dossiers)} 檔）】\n\n"
         + "\n\n".join(dossiers)
     )
-    return await ask_gemini(prompt, model=model, fallback_model=fallback_model)
+    return await ask_vertex_ai(prompt, model=model)
 
 
 # --------------------------------------------------------------------------- #
@@ -466,7 +465,7 @@ def format_pick_report(
     heading = (
         f"🎯 【{title_label}】{target_date.isoformat()}"
         f"\n候選訊號股 {total_signals} 檔 ➔ 深度分析 {len(results)} 檔 ➔ 嚴選 {top_count} 檔"
-        f"｜決策模型：{model}（額度不足時自動降級）"
+        f"｜決策模型：Vertex AI ({model})"
     )
     if market_regime and market_regime.get("summary"):
         heading += f"\n🚦 大盤紅綠燈：{market_regime['summary']}"
@@ -732,8 +731,7 @@ async def run_pipeline(
     daily_dir = output_root / "daily"
     max_candidates = int(_cfg(config, "ai_picker_max_candidates", DEFAULT_MAX_CANDIDATES))
     max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
-    portfolio_model = str(_cfg(config, "ai_picker_portfolio_model", DEFAULT_PORTFOLIO_MODEL))
-    fallback_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+    portfolio_model = get_vertex_model()
     call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
     publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", False))
     post_discord = bool(_cfg(config, "post_ai_picks_to_discord", True)) and not dry_run
@@ -794,13 +792,23 @@ async def run_pipeline(
         build_dossier(i, row, str(results[str(row["stock_id"])]["snapshot"]), str(results[str(row["stock_id"])]["summary"]))
         for i, row in enumerate(analyzed.to_dict("records"), start=1)
     ]
-    raw_text = await run_portfolio_selection(
-        dossiers,
-        max_top=max_top,
-        model=portfolio_model,
-        fallback_model=fallback_model,
-        market_regime=market_regime,
-    )
+    try:
+        raw_text = await run_portfolio_selection(
+            dossiers,
+            max_top=max_top,
+            model=portfolio_model,
+            market_regime=market_regime,
+        )
+    except Exception as error:  # noqa: BLE001
+        message = (
+            f"❌ {target_date.isoformat()} 22:00 AI 彙總選股失敗"
+            f"（Vertex AI 模型 `{portfolio_model}` 呼叫異常，為確保決策品質未降級至免費版）："
+            f"{type(error).__name__}: {error}"
+        )
+        print(message)
+        if post_discord:
+            post_messages_to_discord([message], channel_id, bot_token)
+        return 1
     decision = parse_portfolio_json(raw_text, set(results.keys()), max_top)
 
     # Publish war-room pages for final picks:
@@ -1016,8 +1024,7 @@ async def run_rebound_pipeline(
     if should_run_ai and not rebound_df.empty:
         max_candidates = int(_cfg(config, "ai_picker_max_candidates", DEFAULT_MAX_CANDIDATES))
         max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
-        portfolio_model = str(_cfg(config, "ai_picker_portfolio_model", DEFAULT_PORTFOLIO_MODEL))
-        fallback_model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+        portfolio_model = get_vertex_model()
         call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
         publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", False))
 
@@ -1058,7 +1065,6 @@ async def run_rebound_pipeline(
                 dossiers,
                 max_top=max_top,
                 model=portfolio_model,
-                fallback_model=fallback_model,
                 market_regime=market_regime,
                 strategy_context=rebound_context,
             )

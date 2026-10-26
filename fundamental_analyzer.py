@@ -3,7 +3,7 @@
 Responsibilities:
 - Slice sliding windows for AI and charts
 - Build markdown context from cached Sheets data (using in-memory cache)
-- Call Gemini via ai_weather.ask_gemini
+- Call Gemini via ai_service.ask_gemini
 - Render Plotly war-room HTML and publish to GitHub Pages under /charts
 """
 
@@ -27,7 +27,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-from ai_weather import ask_gemini
+from ai_service import ask_gemini
 from finmind_stock_scanner import (
     MOVING_AVERAGE_PERIODS,
     _extract_latest_volume_metrics,

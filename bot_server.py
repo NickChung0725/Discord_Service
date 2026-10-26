@@ -6,7 +6,8 @@ import os
 import logging
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from dotenv import load_dotenv
-from ai_weather import get_weather_report, register_ai_command, register_weather_command
+from ai_service import register_ai_command
+from weather_service import get_weather_report, register_weather_command
 from stock_ai_command import register_stock_ai_command
 
 logger = logging.getLogger(__name__)

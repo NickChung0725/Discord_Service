@@ -11,7 +11,7 @@
 | **每 6 小時** | **伺服器存活心跳** | `bot_server.py` (`scheduled_task`) | 向 `GCP_VM_SERVER_CHANNEL_ID` 發送系統時間心跳通知，確認 GCP VM 與 Bot 正常運作。 |
 | **每日 08:00** | **台北早安氣象報** | `bot_server.py` (`daily_weather_task`) | 串接 Open-Meteo API，自動推播當日台北即時溫度、體感、高低溫、降雨機率與紫外線指數至 `ANNOUNCE_CHANNEL_ID`。 |
 | **週一至週五 19:00** | **第一階段：台股五線均線＋黃金量能＋大盤紅綠燈掃描** | `systemd` (`finmind-scan.timer`) | 掃描五大重點產業日 K 線與加權指數（`TAIEX`），篩選符合 `MA3 >= 各線`、`MA45 > MA117 > MA189` 且處於 `17/45MA 即將金叉 (-1.5%~0%)` 或 `剛金叉起漲 (0%~+2.5%)` 之強勢股，並同步計算**黃金量能三指標**與**大盤環境紅綠燈（🟢綠燈 / 🟡黃燈 / 🔴紅燈）**：<br>1. 產出本地 CSV：`daily/{date}_prices.csv`、`daily/{date}_alignment_signals.csv`、`daily/{date}_failures.csv` 與 `daily/{date}_market_regime.json`<br>2. 同步至 Google Sheets `MA_Signal_Tracker`（設定鍵：`sync_alignment_to_gsheet`）<br>3. 推播精簡版均線快報（含大盤紅綠燈狀態）至 `STOCK_CHANNEL_ID`。 |
-| **週一至週五 22:00** | **第二階段：右側強勢股財報＋法說會驗證＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **增量同步財報與籌碼**：自動補齊月營收、三大財報、衍生財務比率、股利與法人買賣超<br>2. **法說展望擷取與吹牛檢測 (`gemini-flash-lite-latest`)**：定向檢索近 180 天法說會報導並交叉佐證真實性，產出結構化 `ai_summary_json`<br>3. **跨股總決策嚴選 (`gemini-3.8-flash`)**：結合**大盤紅綠燈風控宣告**、**戰術操作定位分流（波段/當沖/長線）**、**法人測幅三刀流（第一/第二目標價與 -4% 停損價）**與**法人賣超+負FCF強制排雷**，評選出 Top 進場標的<br>4. 寫入 `AI_Daily_Picks`、本地 JSON/MD，並發布全方位戰情室網頁後推播至 `STOCK_CHANNEL_ID`。 |
+| **週一至週五 22:00** | **第二階段：右側強勢股財報＋法說會驗證＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **增量同步財報與籌碼**：自動補齊月營收、三大財報、衍生財務比率、股利與法人買賣超<br>2. **法說展望擷取與吹牛檢測（免費版 Google AI Studio：`GEMINI_MODEL`）**：定向檢索近 180 天法說會報導並交叉佐證真實性，產出結構化 `ai_summary_json`<br>3. **跨股總決策嚴選（付費版 Vertex AI：`VERTEX_MODEL`）**：固定讀取 `.env` 之 `VERTEX_MODEL` 呼叫 GCP Vertex AI（僅在 Vertex AI 內自動重試，不降級至免費版以確保決策品質一致），結合**大盤紅綠燈風控宣告**、**戰術操作定位分流（波段/當沖/長線）**、**法人測幅三刀流（第一/第二目標價與 -4% 停損價）**與**法人賣超+負FCF強制排雷**，評選出 Top 進場標的<br>4. 寫入 `AI_Daily_Picks`、本地 JSON/MD，並發布全方位戰情室網頁後推播至 `STOCK_CHANNEL_ID`。 |
 | **週一至週五 22:30** | **第三階段：左側「型態 A 高點回跌回踩長均線反彈」掃描與彈性 AI 診斷** | `systemd` (`finmind-rebound-ai.timer`) | 從 `daily/{date}_prices.csv` 讀取近 60 個交易日數據，捕捉績優股急跌回踩長均線之均值回歸契機：<br>1. **型態 A 五大濾網**：`MA45 >= MA117 > MA189`、近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 `>= 10%`、收盤回踩 `45MA` 或 `117MA`（`-1.5% ~ +2.5%`）、反彈至 `17MA` 空間 `>= 5%`、K 線收盤強度 `(Close-Min)/(Max-Min) >= 0.55`<br>2. 產出本地 `daily/{date}_rebound_signals.csv` 與 `daily/{date}_rebound_failures.csv`<br>3. 寫入獨立 Google Sheets 工作表 `Rebound_Watchlist`<br>4. **彈性決策點**：先推播「今日符合反彈條件標的總數」與清單至 Discord；支援第一階段觀測標的數量（預設不自動跑 AI），或透過 `--run-ai` / `rebound_auto_run_ai`（當檔數落於 3~15 檔合理區間）無縫啟動 AI 深度診斷與推播。 |
 
 ---
@@ -63,8 +63,9 @@ Discord_Service/
 ├── fundamental_cache.py        # [財報快取引擎] Google Sheets 增量同步、累季轉單季、衍生指標計算与批次記憶體快取管理
 ├── fundamental_analyzer.py     # [單股分析引擎] 滑動視窗切片、7 大財報表+新聞+法說展望檢索、結構化 ai_summary_json 與戰情室發布
 ├── finmind_stock_scanner.py    # [19:00/22:30 掃描器] 五線順勢與型態A反彈掃描、大盤紅綠燈、SQLite 限流器、Sheets 同步與 CLI 入口
-├── alignment_ai_picker.py      # [22:00/22:30 選股器] 訊號預篩、批次財報同步、雙層模型跨股決策（含戰術分流與測幅三刀流）與推播
-├── ai_weather.py               # [AI 與氣象] Gemini API 呼叫封裝（含雙層模型指定與 429 自動降級 Fallback）與 Open-Meteo 天氣報表
+├── alignment_ai_picker.py      # [22:00/22:30 選股器] 訊號預篩、批次財報同步、Vertex AI 跨股總決策（含戰術分流與測幅三刀流）與推播
+├── ai_service.py               # [雙軌 AI 服務] 免費版 Google AI Studio（日常/單股診斷）與付費版 Vertex AI（22:00 跨股彙總決策）呼叫封裝與 /ai 指令
+├── weather_service.py          # [氣象服務] Open-Meteo 台北即時與預報天氣抓取、格式化與 /weather 指令
 ├── github_uploader.py          # [網頁發布器] 透過 GitHub Contents API 將 HTML 圖表與戰情室上傳至 GitHub Pages
 ├── finmind_scanner.json        # [掃描設定檔] 掃描市場/產業、排除清單、API 速率限制、19:00 / 22:00 / 22:30 排程開關設定
 ├── deploy/                     # [systemd 部署] Linux 常駐與定時排程設定檔
@@ -92,9 +93,16 @@ ANNOUNCE_CHANNEL_ID=每日08:00天氣推播頻道ID
 STOCK_CHANNEL_ID=每日19:00與22:00股票推播頻道ID
 GCP_VM_SERVER_CHANNEL_ID=每6小時心跳通知頻道ID
 
-# 2. Google Gemini AI 設定（雙層模型分工）
+# 2. 雙軌 AI 設定（Google AI Studio 免費版 ＋ GCP Vertex AI 付費版）
+# 2-1. Google AI Studio（免費版：用於 /ai、/stock_ai 與單股基本面財報診斷）
 GEMINI_API_KEY=你的_Gemini_API_Key
 GEMINI_MODEL=gemini-flash-lite-latest
+
+# 2-2. GCP Vertex AI（付費版：專用於 22:00 / 22:30 跨股彙總決策選股，固定以 VERTEX_MODEL 為主）
+GOOGLE_CLOUD_PROJECT_ID=你的_GCP_Project_ID
+GOOGLE_CLOUD_LOCATION=us-central1
+VERTEX_API_KEY=你的_Vertex_API_Key
+VERTEX_MODEL=gemini-2.5-flash-lite
 
 # 3. FinMind 台股數據 API 設定
 FINMIND_API_TOKEN=你的_FinMind_API_Token

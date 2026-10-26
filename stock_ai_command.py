@@ -14,7 +14,7 @@ import re
 import discord
 from discord import app_commands
 
-from ai_weather import ask_gemini
+from ai_service import ask_gemini
 from fundamental_analyzer import FundamentalAnalyzer
 from fundamental_cache import FundamentalCacheError, FundamentalCacheManager
 from fundamental_config import PROMPT_TEMPLATES
