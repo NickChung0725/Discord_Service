@@ -12,10 +12,11 @@
 * **導入「雙軌 AI 供應商分流架構」：22:00 跨股彙總選股升級使用付費版 Vertex AI，其餘維持免費版 Google AI Studio ([`ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/ai_service.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py))**：
   * **付費版 Vertex AI (`ask_vertex_ai` / `get_vertex_model`)**：專用於 22:00（及 22:30 反彈開啟 AI 時）的 `run_portfolio_selection` 跨股總決策選股。
     * 固定以 `.env` 中的 `VERTEX_MODEL` 為主（覆蓋 `finmind_scanner.json` 的 `ai_picker_portfolio_model`），搭配 `GOOGLE_CLOUD_PROJECT_ID`、`GOOGLE_CLOUD_LOCATION` 與 `VERTEX_API_KEY` 初始化 `genai.Client(vertexai=True, ...)`。
-    * **堅持決策品質不降級**：遇到網路或 429/503 暫時性錯誤時，僅在 Vertex AI 內部進行指數退避重試（3s / 6s / 12s）；若仍失敗則直接報錯並推播提醒至 Discord，絕不降級至免費版模型。
-  * **免費版 Google AI Studio (`ask_gemini` / `get_gemini_model`)**：用於 22:00 第一階段逐股基本面財報診斷 (`FundamentalAnalyzer`)、`/stock_ai` 單股/多股問答與 `/ai` 日常問答，兼顧零成本與高效率。
-* **單元測試擴充 ([`tests/test_ai_weather.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_ai_weather.py), [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py))**：
-  * 新增 `VertexAiTests` 驗證 Vertex AI 參數初始化、暫時性錯誤內部重試、以及失敗時不降級至 Google AI Studio 之保護機制（全專案 80 項單元測試全數通過）。
+    * **堅持決策品質不降級**：遇到網路或 429/500/502/503/504 (`deadline_exceeded`) 暫時性錯誤時，僅在 Vertex AI 內部進行指數退避重試（3s / 6s / 12s）；若仍失敗則直接報錯並推播提醒至 Discord，絕不降級至免費版模型。
+  * **免費版 Google AI Studio (`ask_gemini` / `get_gemini_model`)**：用於 22:00 第一階段逐股基本面財報診斷 (`FundamentalAnalyzer`)、`/stock_ai` 單股/多股問答與 `/ai` 日常問答，兼顧零成本與高效率；即使未指定 `fallback_model`，遇到 `504 deadline_exceeded` 等暫時性錯誤亦會自動退避重試。
+* **擴充暫時性錯誤重試特徵與單元測試 ([`ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/ai_service.py), [`tests/test_ai_weather.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_ai_weather.py), [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py))**：
+  * 將 `502`、`504`、`deadline_exceeded`、`deadline expired`、`timed out`、`timeout`、`internalservererror` 納入 `_RETRYABLE_ERROR_MARKERS`，解決長 Prompt 偶發 `504 Deadline expired before operation could complete` 時未觸發重試即中斷的問題。
+  * 新增 `VertexAiTests` 與 `504 deadline_exceeded` 自動重試測試（全專案 82 項單元測試全數通過）。
 
 ---
 

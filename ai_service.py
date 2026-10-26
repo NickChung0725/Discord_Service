@@ -34,13 +34,20 @@ DEFAULT_VERTEX_LOCATION = "us-central1"
 
 _RETRYABLE_ERROR_MARKERS = (
     "429",
-    "503",
     "500",
+    "502",
+    "503",
+    "504",
     "resource_exhausted",
     "unavailable",
     "overloaded",
     "quota",
     "rate limit",
+    "deadline_exceeded",
+    "deadline expired",
+    "timed out",
+    "timeout",
+    "internalservererror",
 )
 _TRANSIENT_RETRY_DELAYS_SECONDS = (3.0, 6.0, 12.0)
 
@@ -76,27 +83,57 @@ def _generate_ai_response(prompt: str, model: str | None = None) -> str:
     return answer
 
 
+def _call_google_ai(prompt: str, model: str | None) -> str:
+    if model is None:
+        return _generate_ai_response(prompt)
+    return _generate_ai_response(prompt, model)
+
+
 def _generate_with_fallback(
     prompt: str, model: str | None, fallback_model: str | None
 ) -> str:
-    """Call `model` on Google AI Studio; on quota/overload errors degrade to `fallback_model` (with backoff)."""
+    """Call `model` on Google AI Studio; on transient/quota/timeout errors retry or degrade to `fallback_model`."""
     try:
-        return _generate_ai_response(prompt, model)
+        return _call_google_ai(prompt, model)
     except MissingGeminiApiKeyError:
         raise
     except Exception as error:  # noqa: BLE001
-        if not fallback_model or not _is_retryable_gemini_error(error):
+        if not _is_retryable_gemini_error(error):
             raise
-        logger.warning(
-            "Gemini model %s unavailable (%s); falling back to %s.",
-            model,
-            error,
-            fallback_model,
-        )
+        target_model = fallback_model if fallback_model is not None else model
+        if fallback_model:
+            logger.warning(
+                "Gemini model %s unavailable (%s); falling back to %s.",
+                model,
+                error,
+                fallback_model,
+            )
+        else:
+            logger.warning(
+                "Gemini model %s transient error (%s); retrying with backoff...",
+                model or get_gemini_model(),
+                error,
+            )
 
-    for delay in (*_TRANSIENT_RETRY_DELAYS_SECONDS, None):
+    if fallback_model is not None:
+        # First attempt on fallback_model immediately, then backoff on further transient errors
+        retry_schedule: tuple[float | None, ...] = (*_TRANSIENT_RETRY_DELAYS_SECONDS, None)
+    else:
+        # Same model: sleep before each retry
+        for delay in _TRANSIENT_RETRY_DELAYS_SECONDS:
+            time.sleep(delay)
+            try:
+                return _call_google_ai(prompt, target_model)
+            except MissingGeminiApiKeyError:
+                raise
+            except Exception as error:  # noqa: BLE001
+                if not _is_retryable_gemini_error(error):
+                    raise
+        return _call_google_ai(prompt, target_model)
+
+    for delay in retry_schedule:
         try:
-            return _generate_ai_response(prompt, fallback_model)
+            return _call_google_ai(prompt, target_model)
         except MissingGeminiApiKeyError:
             raise
         except Exception as error:  # noqa: BLE001
@@ -113,8 +150,6 @@ async def ask_gemini(
     fallback_model: str | None = None,
 ) -> str:
     """Ask Google AI Studio (free tier). `model` overrides GEMINI_MODEL; `fallback_model` enables quota fallback."""
-    if model is None and fallback_model is None:
-        return await asyncio.to_thread(_generate_ai_response, prompt)
     return await asyncio.to_thread(_generate_with_fallback, prompt, model, fallback_model)
 
 

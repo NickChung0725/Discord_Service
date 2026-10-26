@@ -109,6 +109,28 @@ class GoogleAiStudioTests(unittest.TestCase):
         self.assertEqual([len(message) for message in messages], [2000, 2000, 1])
         self.assertEqual("".join(messages), answer)
 
+    def test_gemini_retries_504_deadline_exceeded_even_without_fallback_model(self) -> None:
+        attempts = 0
+
+        def fake_gen(prompt: str) -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 2:
+                raise RuntimeError(
+                    "Error code: 504 - {'error': {'message': 'Deadline expired before operation could complete.', 'code': 'deadline_exceeded'}}"
+                )
+            return "recovered free tier"
+
+        with (
+            patch.object(ai_service, "_generate_ai_response", side_effect=fake_gen),
+            patch("ai_service.time.sleep", return_value=None) as sleep_mock,
+        ):
+            result = asyncio.run(ai_service.ask_gemini("hello"))
+
+        self.assertEqual(result, "recovered free tier")
+        self.assertEqual(attempts, 2)
+        sleep_mock.assert_called_once_with(3.0)
+
 
 class VertexAiTests(unittest.TestCase):
     def test_vertex_requires_project_id(self) -> None:
@@ -168,6 +190,28 @@ class VertexAiTests(unittest.TestCase):
         self.assertEqual(attempts, 2)
         sleep_mock.assert_called_once()
         free_tier_mock.assert_not_called()
+
+    def test_vertex_retries_504_deadline_exceeded_error(self) -> None:
+        attempts = 0
+
+        def fake_vertex(prompt: str, model: str | None = None) -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 2:
+                raise RuntimeError(
+                    "Error code: 504 - {'error': {'message': 'Deadline expired before operation could complete.', 'code': 'deadline_exceeded'}}"
+                )
+            return "recovered after 504"
+
+        with (
+            patch.object(ai_service, "_generate_vertex_ai_response", side_effect=fake_vertex),
+            patch("ai_service.time.sleep", return_value=None) as sleep_mock,
+        ):
+            result = asyncio.run(ai_service.ask_vertex_ai("prompt", model="gemini-2.5-pro"))
+
+        self.assertEqual(result, "recovered after 504")
+        self.assertEqual(attempts, 2)
+        sleep_mock.assert_called_once_with(3.0)
 
     def test_vertex_raises_when_all_retries_exhausted_and_never_falls_back_to_google_ai(self) -> None:
         with (
