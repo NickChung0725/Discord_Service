@@ -4,6 +4,13 @@
 
 ---
 
+## [v3.4.1] - 2026-10-27
+### 🔧 優化與修正 (Changed)
+* **關閉財報 Markdown 表格科學記號顯示 ([`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py))**：
+  * 將 `build_markdown_context`（表 1 ~ 表 6）與 `build_latest_ma_context`（表 7）中所有 `to_markdown(index=False)` 呼叫全面加上 `floatfmt=".2f"`，強制關閉 `tabulate` 預設對大數值轉為科學記號（如 `2.89105e+08`）的行為，改以固定小數點後兩位完整呈現原始數值。
+
+---
+
 ## [v3.4.0] - 2026-10-26
 ### ✨ 新增功能与架構升級 (Added & Changed)
 * **解耦舊版 `ai_weather.py`，徹底拆分為獨立之 [`ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/ai_service.py) 與 [`weather_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/weather_service.py)**：

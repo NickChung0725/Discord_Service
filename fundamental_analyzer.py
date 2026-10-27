@@ -206,7 +206,7 @@ class FundamentalAnalyzer:
             show = df_wide[[c for c in cols_wide if c in df_wide.columns]].copy() if not df_wide.empty else pd.DataFrame()
             parts.append("\n■ 表 1：損益結構、營業費用率與本業/業外歸因 (近 8 季)")
             if not show.empty:
-                parts.append(show.to_markdown(index=False))
+                parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 2: CCC + contract liabilities + financial assets
         if not df_wide.empty or not df_bs.empty:
@@ -236,7 +236,7 @@ class FundamentalAnalyzer:
             show = base[[c for c in cols if c in base.columns]].copy() if not base.empty else pd.DataFrame()
             parts.append("\n■ 表 2：營運週轉效率 (CCC)、合約負債與金融資產配置 (近 8 季)")
             if not show.empty:
-                parts.append(show.to_markdown(index=False))
+                parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 3: cash flow breakdown
         if not df_cf.empty:
@@ -257,7 +257,7 @@ class FundamentalAnalyzer:
             ]
             show = df_cf[[c for c in cols if c in df_cf.columns]].copy()
             parts.append("\n■ 表 3：單季現金流量拆解、營運資金變動與含金量 (近 8 季)")
-            parts.append(show.to_markdown(index=False))
+            parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 4: leverage and solvency
         if not df_wide.empty or not df_bs.empty:
@@ -294,14 +294,14 @@ class FundamentalAnalyzer:
             show = base[show_cols].copy() if not base.empty else pd.DataFrame()
             parts.append("\n■ 表 4：財務槓桿、有息負債結構與償債能力 (近 8 季)")
             if not show.empty:
-                parts.append(show.to_markdown(index=False))
+                parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 5: monthly revenue momentum
         if not df_rev.empty:
             cols = ["rev_ym", "revenue", "mom_pct", "yoy_pct", "raw_date"]
             show = df_rev[[c for c in cols if c in df_rev.columns]].copy()
             parts.append("\n■ 表 5：近期月營收動能 (近 12 個月)")
-            parts.append(show.to_markdown(index=False))
+            parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 6: dividend + chip summary
         parts.append("\n■ 表 6：歷年股利政策與近期外資/投信/自營商法人籌碼動向")
@@ -319,7 +319,7 @@ class FundamentalAnalyzer:
             ]
             show = df_div[[c for c in cols if c in df_div.columns]].copy()
             parts.append("\n- 【股利政策 (近 5 年)】")
-            parts.append(show.to_markdown(index=False))
+            parts.append(show.to_markdown(index=False, floatfmt=".2f"))
         if not df_chip.empty:
             cols = [
                 "trade_week",
@@ -337,7 +337,7 @@ class FundamentalAnalyzer:
             ]
             show = df_chip[[c for c in cols if c in df_chip.columns]].copy()
             parts.append("\n- 【法人籌碼 (最新週)】")
-            parts.append(show.to_markdown(index=False))
+            parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 7: Optional latest prices.csv moving averages (if available locally)
         ma_context = self.build_latest_ma_context(stock_id)
@@ -511,7 +511,7 @@ class FundamentalAnalyzer:
             ]
             if vol_line:
                 lines.append(vol_line)
-            lines.append(recent_5d[display_cols].to_markdown(index=False))
+            lines.append(recent_5d[display_cols].to_markdown(index=False, floatfmt=".2f"))
             return "\n".join(lines)
         except Exception:
             return ""
