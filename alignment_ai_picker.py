@@ -736,7 +736,7 @@ async def run_pipeline(
     max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
     portfolio_model = get_vertex_model()
     call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
-    publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", False))
+    publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
     post_discord = bool(_cfg(config, "post_ai_picks_to_discord", True)) and not dry_run
     save_gsheet = bool(_cfg(config, "save_ai_picks_to_gsheet", True)) and not dry_run
     channel_id = str(config.get("stock_channel_id", ""))
@@ -816,24 +816,24 @@ async def run_pipeline(
     decision = parse_portfolio_json(raw_text, set(results.keys()), max_top)
     portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
-    # Publish war-room pages for final picks:
-    # 1. If newly analyzed today (not cached) or war_room_url is missing, generate and publish HTML.
-    # 2. Always persist war_room_url back into 00_Watchlist_Master.
-    if decision and not publish_all:
+    # 只要有經過 AI 分析，即確保所有完成深度分析的標的皆已生成戰情室 HTML 並發布至 GitHub，
+    # 且 war_room_url 確實寫入 00_Watchlist_Master（供後續寫入 AI_Daily_Picks 與 Discord 連結使用）。
+    if results:
         watchlist_sheet = cache._get_worksheet("00_Watchlist_Master")
-        for pick in decision["top_picks"]:
-            sid = str(pick["stock_id"])
-            report = results[sid]["report"]
-            need_publish = not bool(report.war_room_url) or not getattr(report, "cached", True)
+        for sid, res_data in results.items():
+            report = res_data.get("report")
+            if report is None:
+                continue
+            need_publish = not bool(getattr(report, "war_room_url", None))
             if need_publish:
                 try:
                     report.war_room_url = await analyzer.render_and_publish_war_room_html(
-                        sid, report.ai_text
+                        sid, getattr(report, "ai_text", "")
                     )
                 except Exception as error:  # noqa: BLE001
                     print(f"[warn] {sid} 戰情室發布失敗：{error}")
 
-            if report.war_room_url:
+            if getattr(report, "war_room_url", None):
                 try:
                     cache._update_watchlist_master(
                         watchlist_sheet,
@@ -1033,7 +1033,7 @@ async def run_rebound_pipeline(
         max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
         portfolio_model = get_vertex_model()
         call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
-        publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", False))
+        publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
 
         selected = rebound_df.head(max_candidates).reset_index(drop=True)
         skipped = max(0, len(rebound_df) - len(selected))
@@ -1079,20 +1079,22 @@ async def run_rebound_pipeline(
             decision = parse_portfolio_json(raw_text, set(ai_results.keys()), max_top)
             portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
-            if decision and not publish_all:
+            # 只要有經過 AI 分析，即確保所有反彈標的皆生成戰情室 HTML 並發布至 GitHub，且 war_room_url 寫入 00_Watchlist_Master
+            if ai_results:
                 watchlist_sheet = cache._get_worksheet("00_Watchlist_Master")
-                for pick in decision["top_picks"]:
-                    sid = str(pick["stock_id"])
-                    report = ai_results[sid]["report"]
-                    need_publish = not bool(report.war_room_url) or not getattr(report, "cached", True)
+                for sid, res_data in ai_results.items():
+                    report = res_data.get("report")
+                    if report is None:
+                        continue
+                    need_publish = not bool(getattr(report, "war_room_url", None))
                     if need_publish:
                         try:
                             report.war_room_url = await analyzer.render_and_publish_war_room_html(
-                                sid, report.ai_text
+                                sid, getattr(report, "ai_text", "")
                             )
                         except Exception as error:  # noqa: BLE001
                             print(f"[warn] {sid} 戰情室發布失敗：{error}")
-                    if report.war_room_url:
+                    if getattr(report, "war_room_url", None):
                         try:
                             cache._update_watchlist_master(
                                 watchlist_sheet,

@@ -242,13 +242,32 @@ class ReportTests(unittest.TestCase):
         decision = self._decision()
         decision["avoid"] = [{"stock_id": "2454", "reason": "x"}]
         results = {
-            sid: {"report": SimpleNamespace(war_room_url=""), "summary": json.dumps({"score": 77})}
+            sid: {"report": SimpleNamespace(war_room_url=f"https://example.com/{sid}_fund.html"), "summary": json.dumps({"score": 77})}
             for sid in ("2330", "2317", "2454")
         }
         rows = build_pick_rows(date(2026, 10, 16), decision, frame, results)
         self.assertEqual([r["category"] for r in rows], ["TOP_PICK", "WATCHLIST", "AVOID"])
         self.assertEqual(rows[0]["pk_key"], "2026-10-16_2330")
         self.assertEqual(rows[0]["fundamental_score"], 77)
+        for r in rows:
+            self.assertTrue(r["war_room_url"].startswith("https://example.com/"))
+
+    def test_war_room_url_populated_for_all_analyzed_candidates(self) -> None:
+        # 驗證即使非 TOP_PICK（包含 WATCHLIST 與 AVOID），只要經過 AI 深度分析皆具備戰情室網址
+        frame = _frame([{"stock_id": "2330"}, {"stock_id": "2317"}, {"stock_id": "2454"}])
+        decision = self._decision()
+        decision["watchlist"] = [{"stock_id": "2317", "reason": "次佳"}]
+        decision["avoid"] = [{"stock_id": "2454", "reason": "避開"}]
+        results = {
+            "2330": {"report": SimpleNamespace(war_room_url="https://example.com/2330_fund.html"), "summary": "{}"},
+            "2317": {"report": SimpleNamespace(war_room_url="https://example.com/2317_fund.html"), "summary": "{}"},
+            "2454": {"report": SimpleNamespace(war_room_url="https://example.com/2454_fund.html"), "summary": "{}"},
+        }
+        rows = build_pick_rows(date(2026, 10, 16), decision, frame, results)
+        url_map = {r["stock_id"]: r["war_room_url"] for r in rows}
+        self.assertEqual(url_map["2330"], "https://example.com/2330_fund.html")
+        self.assertEqual(url_map["2317"], "https://example.com/2317_fund.html")
+        self.assertEqual(url_map["2454"], "https://example.com/2454_fund.html")
 
     def test_dossier_contains_all_sections(self) -> None:
         row = _frame(

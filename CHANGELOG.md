@@ -21,6 +21,14 @@
   * 相關檔案：[`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py), [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py), [`stock_ai_command.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/stock_ai_command.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py)
 
 ### 🔧 優化與修正 (Changed)
+* **修正 22:00/22:30 候選股戰情室發布範圍：落實「只要經過 AI 分析即上傳戰情室 HTML 並回填 Google Sheets」**：
+  * **問題成因**：原先 `finmind_scanner.json` 中 `publish_war_room_for_all_candidates` 設為 `false`，且決策後僅對 `decision["top_picks"]`（5 檔）執行 HTML 生成與上傳，導致其餘完成 AI 深度分析的標的（如次佳名單 WATCHLIST、避開名單 AVOID 等 6 檔）未生成戰情室網頁，其 `war_room_url` 亦未寫入 `00_Watchlist_Master` 與 `AI_Daily_Picks`。
+  * **修正邏輯**：
+    1. 將 `finmind_scanner.json` 的 `publish_war_room_for_all_candidates` 預設值調整為 `true`，`alignment_ai_picker.py` 讀取 config 之 fallback 亦改為 `True`。
+    2. 深度分析階段讓所有進入個股診斷的標的皆自動發布戰情室 HTML 並上傳 GitHub。
+    3. 跨股決策後加入安全巡檢機制，遍歷 `results`（及 22:30 `ai_results`）中所有完成分析之標的，若尚未具備網址則自動補發布戰情室並同步回填 `00_Watchlist_Master`，確保寫入 `AI_Daily_Picks` / `Rebound_Watchlist` 時所有分析過個股均帶有完整 GitHub Pages URL。
+  * 相關檔案：[`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`finmind_scanner.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_scanner.json), [`README.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/README.md), [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py)
+
 * **22:00 AI 單股分析呼叫節流時間調整為 13 秒**：
   * `ai_picker_call_interval_seconds: 4.5 → 13.0`，避免連續多檔診斷觸發 429。
   * 相關檔案：[`finmind_scanner.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_scanner.json), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py)
