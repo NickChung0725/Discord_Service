@@ -29,6 +29,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "ai_cache_day",
         "ai_cached_period",
         "ai_summary_json",
+        "ai_model_version",
         "war_room_url",
         "last_accessed_at",
     ],
@@ -242,6 +243,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "volume_status",
         "market_light",
         "ai_summary_json",
+        "ai_model_version",
         "war_room_url",
     ],
 }

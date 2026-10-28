@@ -11,7 +11,7 @@
 | **每 6 小時** | **伺服器存活心跳** | `bot_server.py` (`scheduled_task`) | 向 `GCP_VM_SERVER_CHANNEL_ID` 發送系統時間心跳通知，確認 GCP VM 與 Bot 正常運作。 |
 | **每日 08:00** | **台北早安氣象報** | `bot_server.py` (`daily_weather_task`) | 串接 Open-Meteo API，自動推播當日台北即時溫度、體感、高低溫、降雨機率與紫外線指數至 `ANNOUNCE_CHANNEL_ID`。 |
 | **週一至週五 19:00** | **第一階段：台股五線均線＋黃金量能＋大盤紅綠燈掃描** | `systemd` (`finmind-scan.timer`) | 掃描五大重點產業日 K 線與加權指數（`TAIEX`），篩選符合 `MA3 >= 各線`、`MA45 > MA117 > MA189` 且處於 `17/45MA 即將金叉 (-1.5%~0%)` 或 `剛金叉起漲 (0%~+2.5%)` 之強勢股，並同步計算**黃金量能三指標**與**大盤環境紅綠燈（🟢綠燈 / 🟡黃燈 / 🔴紅燈）**：<br>1. 產出本地 CSV：`daily/{date}_prices.csv`、`daily/{date}_alignment_signals.csv`、`daily/{date}_failures.csv` 與 `daily/{date}_market_regime.json`<br>2. 同步至 Google Sheets `MA_Signal_Tracker`（設定鍵：`sync_alignment_to_gsheet`）<br>3. 推播精簡版均線快報（含大盤紅綠燈狀態）至 `STOCK_CHANNEL_ID`。 |
-| **週一至週五 22:00** | **第二階段：右側強勢股財報＋法說會驗證＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **增量同步財報與籌碼**：自動補齊月營收、三大財報、衍生財務比率、股利與法人買賣超<br>2. **法說展望擷取與吹牛檢測（免費版 Google AI Studio：`GEMINI_MODEL`）**：定向檢索近 180 天法說會報導並交叉佐證真實性，產出結構化 `ai_summary_json`<br>3. **跨股總決策嚴選（付費版 Vertex AI：`VERTEX_MODEL`）**：固定讀取 `.env` 之 `VERTEX_MODEL` 呼叫 GCP Vertex AI（僅在 Vertex AI 內自動重試，不降級至免費版以確保決策品質一致），結合**大盤紅綠燈風控宣告**、**戰術操作定位分流（波段/當沖/長線）**、**法人測幅三刀流（第一/第二目標價與 -4% 停損價）**與**法人賣超+負FCF強制排雷**，評選出 Top 進場標的<br>4. 寫入 `AI_Daily_Picks`、本地 JSON/MD，並發布全方位戰情室網頁後推播至 `STOCK_CHANNEL_ID`。 |
+| **週一至週五 22:00** | **第二階段：右側強勢股財報＋法說會驗證＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **增量同步財報與籌碼**：自動補齊月營收、三大財報、衍生財務比率、股利與法人買賣超<br>2. **法說展望擷取與吹牛檢測（免費版 Google AI Studio：優先 `gemini-flash-latest`，失敗降級 `gemini-flash-lite-latest`）**：定向檢索近 180 天法說會報導並交叉佐證真實性，產出結構化 `ai_summary_json`（內含 `model_version`）並在 Discord/戰情室顯示「分析模型」<br>3. **跨股總決策嚴選（付費版 Vertex AI：`VERTEX_MODEL`）**：固定讀取 `.env` 之 `VERTEX_MODEL` 呼叫 GCP Vertex AI（僅在 Vertex AI 內自動重試，不降級至免費版以確保決策品質一致），並在報告顯示 `response.model_version` 作為「分析模型」<br>4. **AI 呼叫日誌（`finmind_reports/logs/YYYY-MM-DD_ai_calls.log`）**：每次 AI 呼叫會以「單次一段」方式追加寫入完整 prompt 與完整 output，供事後追查與除錯<br>5. 寫入 `AI_Daily_Picks`、本地 JSON/MD，並發布全方位戰情室網頁後推播至 `STOCK_CHANNEL_ID`。 |
 | **週一至週五 22:30** | **第三階段：左側「型態 A 高點回跌回踩長均線反彈」掃描與彈性 AI 診斷** | `systemd` (`finmind-rebound-ai.timer`) | 從 `daily/{date}_prices.csv` 讀取近 60 個交易日數據，捕捉績優股急跌回踩長均線之均值回歸契機：<br>1. **型態 A 五大濾網**：`MA45 >= MA117 > MA189`、近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 `>= 10%`、收盤回踩 `45MA` 或 `117MA`（`-1.5% ~ +2.5%`）、反彈至 `17MA` 空間 `>= 5%`、K 線收盤強度 `(Close-Min)/(Max-Min) >= 0.55`<br>2. 產出本地 `daily/{date}_rebound_signals.csv` 與 `daily/{date}_rebound_failures.csv`<br>3. 寫入獨立 Google Sheets 工作表 `Rebound_Watchlist`<br>4. **彈性決策點**：先推播「今日符合反彈條件標的總數」與清單至 Discord；支援第一階段觀測標的數量（預設不自動跑 AI），或透過 `--run-ai` / `rebound_auto_run_ai`（當檔數落於 3~15 檔合理區間）無縫啟動 AI 深度診斷與推播。 |
 
 ---
@@ -20,7 +20,7 @@
  
 | 指令 | 參數說明 | 功能與產出說明 |
 | :--- | :--- | :--- |
-| **`/stock_ai`** | `symbol` (單股如 `2357` 或多股如 `2357,2330`，最多 4 檔)<br>`prompt` (選填，特定問題)<br>`force_refresh` (選填，預設 `False`) | **【📊 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）】**<br>• **手機好讀一鍵複製**：以純文字 Markdown 發送（長按 1 秒即可複製轉傳他人）。<br>• **單股體質診斷**：包含 0~100 體質評分、3 大亮點、2 大風險、三率/CCC/FCF 拆解、股利與法人籌碼、表 7 均線與量能結構、法說展望真實性佐證。<br>• **二合一戰情室網頁**：發布全新戰情室 (`charts/{stock_id}_fund.html`)，內嵌**近半年技術面 K 線與均線 (17/45/117/189MA) + 成交量 + KD + MACD**，以及**基本面六大財務趨勢圖（每張圖正上方皆有獨立圖例與白話名詞小抄）**。<br>• **多股橫向比較 (`2357,2330`)**：自動橫向提取多檔財報數據並給出優劣排序結論。<br>• **專題追問 (`prompt`)**：針對使用者問題引用財報數字精準解答。 |
+| **`/stock_ai`** | `symbol` (單股如 `2357` 或多股如 `2357,2330`，最多 4 檔)<br>`prompt` (選填，特定問題)<br>`force_refresh` (選填，預設 `False`) | **【📊 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）】**<br>• **手機好讀一鍵複製**：以純文字 Markdown 發送（長按 1 秒即可複製轉傳他人）。<br>• **單股體質診斷**：包含 0~100 體質評分、3 大亮點、2 大風險、三率/CCC/FCF 拆解、股利與法人籌碼、表 7 均線與量能結構、法說展望真實性佐證；並在首行顯示 **分析模型：{response.model_version}**。<br>• **二合一戰情室網頁**：發布全新戰情室 (`charts/{stock_id}_fund.html`)，內嵌**近半年技術面 K 線與均線 (17/45/117/189MA) + 成交量 + KD + MACD**，以及**基本面六大財務趨勢圖（每張圖正上方皆有獨立圖例與白話名詞小抄）**；戰情室頁面亦顯示「分析模型」。<br>• **多股橫向比較 (`2357,2330`)**：自動橫向提取多檔財報數據並給出優劣排序結論（同樣顯示「分析模型」）。<br>• **專題追問 (`prompt`)**：針對使用者問題引用財報數字精準解答（同樣顯示「分析模型」）。 |
 | **`/ai`** | `prompt` (問題內容) | **【Gemini AI 萬用問答】**<br>呼叫 Google Gemini 模型回答各式投資、程式或日常問題（超過 2,000 字自動分段回覆）。 |
 | **`/weather`** | 無 | **【台北即時天氣查詢】**<br>即時查詢 Open-Meteo 台北地區氣溫、體感、天氣狀況、風速、降雨機率與今日紫外線。 |
 | **`/card`** | 無 | **【系統狀態卡片】** 顯示機器人名稱、API 延遲 (ms) 與伺服器成員數。 |
@@ -98,6 +98,9 @@ GCP_VM_SERVER_CHANNEL_ID=每6小時心跳通知頻道ID
 GEMINI_API_KEY=你的_Gemini_API_Key
 GEMINI_MODEL=gemini-flash-lite-latest
 
+# （SASD v3.5.1）22:00 單股診斷會優先使用 gemini-flash-latest，遇到 429/503 再降級至 gemini-flash-lite-latest
+# 並且每次 AI 呼叫會把完整 Prompt/回覆寫入 finmind_reports/logs/YYYY-MM-DD_ai_calls.log
+
 # 2-2. GCP Vertex AI（付費版：專用於 22:00 / 22:30 跨股彙總決策選股，固定以 VERTEX_MODEL 為主）
 GOOGLE_CLOUD_PROJECT_ID=你的_GCP_Project_ID
 GOOGLE_CLOUD_LOCATION=us-central1
@@ -149,6 +152,8 @@ uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD --dry
 
 # 正式執行 22:00 AI 財報選股並推播至 Discord 與 Google Sheets
 uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD
+
+# ※ 22:00 單股診斷呼叫節流：ai_picker_call_interval_seconds 已調整為 13.0 秒（避免免費額度 429）
 
 # 手動預覽 22:30 型態 A 長均線回踩反彈清單（--dry-run 僅在終端機印出標的數量與清單）
 uv run python finmind_stock_scanner.py analyze-rebound --date YYYY-MM-DD --dry-run

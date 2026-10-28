@@ -2230,6 +2230,10 @@ def _cleanup_old_daily_reports(
         r"market_regime\.json"
         r")$"
     )
+
+    # SASD v3.5.1: also cleanup consolidated AI call logs (finmind_reports/logs/YYYY-MM-DD_ai_calls.log)
+    logs_dir = daily_directory.parent / "logs"
+    ai_log_pattern = re.compile(r"^(\d{4}-\d{2}-\d{2})_ai_calls\.log$")
     for path in daily_directory.iterdir():
         match = filename_pattern.fullmatch(path.name)
         if match is None or not path.is_file():
@@ -2237,6 +2241,20 @@ def _cleanup_old_daily_reports(
         file_date = date.fromisoformat(path.name[:10])
         if file_date < cutoff:
             path.unlink()
+
+    if logs_dir.is_dir():
+        for path in logs_dir.iterdir():
+            if not path.is_file():
+                continue
+            match = ai_log_pattern.fullmatch(path.name)
+            if match is None:
+                continue
+            try:
+                file_date = date.fromisoformat(match.group(1))
+            except ValueError:
+                continue
+            if file_date < cutoff:
+                path.unlink()
 
 
 def scan_rebound_from_prices(
@@ -2309,15 +2327,18 @@ def build_rebound_watchlist_rows(
         if not sid:
             continue
         ai_summary = ""
+        ai_model_version = ""
         war_room_url = ""
         if ai_results and sid in ai_results:
             item = ai_results[sid]
             ai_summary = str(item.get("summary", "") or "")
             report = item.get("report")
+            ai_model_version = str(getattr(report, "model_version", "") or item.get("model_version", "") or "")
             war_room_url = str(getattr(report, "war_room_url", "") or item.get("war_room_url", "") or "")
         elif existing_master_map and sid in existing_master_map:
             m_row = existing_master_map[sid]
             ai_summary = str(m_row.get("ai_summary_json", "") or "")
+            ai_model_version = str(m_row.get("ai_model_version", "") or "")
             war_room_url = str(m_row.get("war_room_url", "") or "")
 
         rows.append(
@@ -2342,6 +2363,7 @@ def build_rebound_watchlist_rows(
                 "volume_status": str(row.get("vol_status") or row.get("volume_status") or "-").strip(),
                 "market_light": market_light,
                 "ai_summary_json": ai_summary,
+                "ai_model_version": ai_model_version,
                 "war_room_url": war_room_url,
             }
         )

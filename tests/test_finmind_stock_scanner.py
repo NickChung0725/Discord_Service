@@ -742,10 +742,17 @@ class FinMindStockScannerTests(unittest.TestCase):
                 "stock_id,MA17_MA45_gap_percent\n2330,0.1\n", encoding="utf-8"
             )
 
+            logs = Path(tmp) / "logs"
+            logs.mkdir()
+            (logs / "2026-01-01_ai_calls.log").write_text("log\n", encoding="utf-8")
+            (logs / "2026-02-10_ai_calls.log").write_text("keep\n", encoding="utf-8")
+
             _cleanup_old_daily_reports(daily, as_of=date(2026, 2, 15), retention_days=30)
 
             self.assertTrue((daily / "2026-01-01_signals.csv").exists())
             self.assertFalse((daily / "2026-01-01_alignment_signals.csv").exists())
+            self.assertFalse((logs / "2026-01-01_ai_calls.log").exists())
+            self.assertTrue((logs / "2026-02-10_ai_calls.log").exists())
 
     def test_sync_alignment_to_gsheet_auto_creates_worksheet_and_writes_rows(self) -> None:
         signals_df = pd.DataFrame(

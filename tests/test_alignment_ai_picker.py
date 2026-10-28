@@ -167,6 +167,7 @@ class ReportTests(unittest.TestCase):
             total_signals=30,
             skipped=5,
             model="gemini-3.8-flash",
+            model_version="gemini-3.8-flash-001",
         )
         self.assertTrue(all(len(m) <= 2000 for m in messages))
         joined = "\n".join(messages)
@@ -175,6 +176,7 @@ class ReportTests(unittest.TestCase):
         self.assertIn("全方位戰情室（含財報+K線）", joined)
         self.assertIn("1234", joined)
         self.assertIn("5 檔因超過候選上限", joined)
+        self.assertIn("分析模型：gemini-3.8-flash-001", joined)
 
     def test_report_renders_tactical_type_and_target_prices_and_market_light(self) -> None:
         frame = _frame([{"stock_id": "2330", "stock_name": "台積電"}])
@@ -209,6 +211,7 @@ class ReportTests(unittest.TestCase):
             total_signals=5,
             skipped=0,
             model="gemini-3.8-flash",
+            model_version="gemini-3.8-flash-001",
             market_regime={"light": "🟡黃燈", "summary": "🟡黃燈｜0050 收盤 190.00"},
         )
         joined = "\n".join(messages)
@@ -221,7 +224,16 @@ class ReportTests(unittest.TestCase):
     def test_report_falls_back_to_raw_text_when_unparsed(self) -> None:
         frame = _frame([{"stock_id": "2330"}])
         messages = format_pick_report(
-            date(2026, 10, 16), None, "RAW MODEL TEXT", frame, {}, [], total_signals=1, skipped=0, model="m"
+            date(2026, 10, 16),
+            None,
+            "RAW MODEL TEXT",
+            frame,
+            {},
+            [],
+            total_signals=1,
+            skipped=0,
+            model="m",
+            model_version="",
         )
         self.assertIn("RAW MODEL TEXT", "\n".join(messages))
 
@@ -266,14 +278,16 @@ class SummaryTests(unittest.TestCase):
         human, parsed = self.analyzer._split_ai_output(raw)  # noqa: SLF001
         self.assertEqual(human, "長文分析...")
         self.assertEqual(parsed["score"], 88)
-        summary = self.analyzer._summarize_ai(raw)  # noqa: SLF001
+        summary = self.analyzer._summarize_ai(raw, model_version="gemini-test")  # noqa: SLF001
         self.assertEqual(json.loads(summary)["verdict"], "強")
+        self.assertEqual(json.loads(summary)["model_version"], "gemini-test")
         self.assertIn("體質評分 88", self.analyzer._render_summary_text(summary))  # noqa: SLF001
 
     def test_summary_falls_back_to_text_without_valid_json(self) -> None:
         raw = "x" * 3000 + "\n===SUMMARY_JSON===\n{bad json"
-        summary = self.analyzer._summarize_ai(raw)  # noqa: SLF001
+        summary = self.analyzer._summarize_ai(raw, model_version="gemini-test")  # noqa: SLF001
         self.assertEqual(len(summary), 2500)
+        self.assertIn("分析模型：gemini-test", summary)
         self.assertEqual(self.analyzer._render_summary_text("plain"), "plain")  # noqa: SLF001
 
 
@@ -281,7 +295,7 @@ class GeminiFallbackTests(unittest.TestCase):
     def test_default_call_signature_unchanged(self) -> None:
         with patch.object(ai_service, "_generate_ai_response", return_value="hi") as gen:
             self.assertEqual(asyncio.run(ai_service.ask_gemini("p")), "hi")
-        gen.assert_called_once_with("p")
+        gen.assert_called_once_with("p", None)
 
     def test_quota_error_degrades_to_fallback_model(self) -> None:
         calls: list[str | None] = []
@@ -307,8 +321,16 @@ class GeminiFallbackTests(unittest.TestCase):
     def test_portfolio_selection_uses_vertex_ai_and_env_vertex_model(self) -> None:
         with (
             patch.dict("os.environ", {"VERTEX_MODEL": "gemini-2.5-pro"}, clear=False),
-            patch("alignment_ai_picker.ask_vertex_ai", return_value='{"top_picks":[]}') as vertex_call,
+            patch("alignment_ai_picker.ask_vertex_ai_with_meta") as vertex_call,
         ):
+            vertex_call.return_value = ai_service.AIResponse(
+                provider="vertex_ai",
+                requested_model="gemini-2.5-pro",
+                model_version="gemini-2.5-pro-001",
+                text='{"top_picks":[]}',
+                prompt_tokens=1,
+                output_tokens=2,
+            )
             model = ai_service.get_vertex_model()
             res = asyncio.run(
                 run_portfolio_selection(
@@ -319,7 +341,7 @@ class GeminiFallbackTests(unittest.TestCase):
                 )
             )
         self.assertEqual(model, "gemini-2.5-pro")
-        self.assertEqual(res, '{"top_picks":[]}')
+        self.assertEqual(getattr(res, "text", None), '{"top_picks":[]}')
         vertex_call.assert_called_once()
         self.assertEqual(vertex_call.call_args.kwargs["model"], "gemini-2.5-pro")
 

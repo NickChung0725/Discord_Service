@@ -25,7 +25,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 from dotenv import load_dotenv
 
-from ai_service import DEFAULT_VERTEX_MODEL, ask_vertex_ai, get_vertex_model
+from ai_service import DEFAULT_VERTEX_MODEL, ask_vertex_ai_with_meta, get_vertex_model
 from finmind_stock_scanner import (
     DISCORD_API_BASE_URL,
     DISCORD_POST_PAUSE_SECONDS,
@@ -58,7 +58,7 @@ FINMIND_HOSTS = ("finmindtrade.com",)
 DEFAULT_MAX_CANDIDATES = 25
 DEFAULT_MAX_TOP_PICKS = 5
 DEFAULT_PORTFOLIO_MODEL = DEFAULT_VERTEX_MODEL
-DEFAULT_CALL_INTERVAL_SECONDS = 4.5
+DEFAULT_CALL_INTERVAL_SECONDS = 13.0
 DISCORD_CHUNK_LIMIT = 1800
 
 _VERDICT_EMOJI = {"高度可信": "🟢", "待驗證": "🟡", "存疑": "🔴"}
@@ -398,7 +398,7 @@ async def run_portfolio_selection(
     model: str | None = None,
     market_regime: Mapping[str, object] | None = None,
     strategy_context: str = "",
-) -> str:
+) -> object:
     market_light_str = (
         str(market_regime.get("summary") or market_regime.get("light") or "🟡黃燈")
         if market_regime
@@ -416,7 +416,8 @@ async def run_portfolio_selection(
         + f"【今日候選資料卡（共 {len(dossiers)} 檔）】\n\n"
         + "\n\n".join(dossiers)
     )
-    return await ask_vertex_ai(prompt, model=model)
+    meta = await ask_vertex_ai_with_meta(prompt, model=model, tag="portfolio_select")
+    return meta
 
 
 # --------------------------------------------------------------------------- #
@@ -456,6 +457,7 @@ def format_pick_report(
     total_signals: int,
     skipped: int,
     model: str,
+    model_version: str = "",
     market_regime: Mapping[str, object] | None = None,
     title_label: str = "22:00 AI 嚴選進場決策報告",
 ) -> list[str]:
@@ -466,6 +468,7 @@ def format_pick_report(
         f"🎯 【{title_label}】{target_date.isoformat()}"
         f"\n候選訊號股 {total_signals} 檔 ➔ 深度分析 {len(results)} 檔 ➔ 嚴選 {top_count} 檔"
         f"｜決策模型：Vertex AI ({model})"
+        + (f"｜分析模型：{model_version}" if model_version else "")
     )
     if market_regime and market_regime.get("summary"):
         heading += f"\n🚦 大盤紅綠燈：{market_regime['summary']}"
@@ -793,12 +796,13 @@ async def run_pipeline(
         for i, row in enumerate(analyzed.to_dict("records"), start=1)
     ]
     try:
-        raw_text = await run_portfolio_selection(
+        portfolio_meta = await run_portfolio_selection(
             dossiers,
             max_top=max_top,
             model=portfolio_model,
             market_regime=market_regime,
         )
+        raw_text = str(getattr(portfolio_meta, "text", "") or "")
     except Exception as error:  # noqa: BLE001
         message = (
             f"❌ {target_date.isoformat()} 22:00 AI 彙總選股失敗"
@@ -810,6 +814,7 @@ async def run_pipeline(
             post_messages_to_discord([message], channel_id, bot_token)
         return 1
     decision = parse_portfolio_json(raw_text, set(results.keys()), max_top)
+    portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
     # Publish war-room pages for final picks:
     # 1. If newly analyzed today (not cached) or war_room_url is missing, generate and publish HTML.
@@ -848,6 +853,7 @@ async def run_pipeline(
         total_signals=total_signals,
         skipped=skipped,
         model=portfolio_model,
+        model_version=portfolio_model_version,
         market_regime=market_regime,
     )
 
@@ -858,6 +864,7 @@ async def run_pipeline(
     payload = {
         "date": target_date.isoformat(),
         "portfolio_model": portfolio_model,
+        "portfolio_model_version": portfolio_model_version,
         "total_signals": total_signals,
         "analyzed": len(results),
         "skipped": skipped,
@@ -1061,14 +1068,16 @@ async def run_rebound_pipeline(
                 "請特別針對「均值回歸反彈空間（目標 17MA 與 +12% 正乖離）」、「長均線支撐防守力道」、"
                 "「法人近 5 日是否趁急跌逢低承接（或連續大賣需降級排雷）」及「自由現金流 FCF 品質」進行嚴選。"
             )
-            raw_text = await run_portfolio_selection(
+            portfolio_meta = await run_portfolio_selection(
                 dossiers,
                 max_top=max_top,
                 model=portfolio_model,
                 market_regime=market_regime,
                 strategy_context=rebound_context,
             )
+            raw_text = str(getattr(portfolio_meta, "text", "") or "")
             decision = parse_portfolio_json(raw_text, set(ai_results.keys()), max_top)
+            portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
             if decision and not publish_all:
                 watchlist_sheet = cache._get_worksheet("00_Watchlist_Master")
@@ -1103,6 +1112,7 @@ async def run_rebound_pipeline(
                 total_signals=total_rebounds,
                 skipped=skipped,
                 model=portfolio_model,
+                model_version=portfolio_model_version,
                 market_regime=market_regime,
                 title_label="22:30 型態 A 反彈 AI 嚴選決策報告",
             )
@@ -1111,6 +1121,7 @@ async def run_rebound_pipeline(
                     "date": target_date.isoformat(),
                     "market_regime": market_regime,
                     "portfolio_model": portfolio_model,
+                    "portfolio_model_version": portfolio_model_version,
                     "total_signals": total_rebounds,
                     "analyzed": len(ai_results),
                     "skipped": skipped,

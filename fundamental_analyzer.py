@@ -3,7 +3,7 @@
 Responsibilities:
 - Slice sliding windows for AI and charts
 - Build markdown context from cached Sheets data (using in-memory cache)
-- Call Gemini via ai_service.ask_gemini
+- Call Gemini via ai_service.ask_gemini_with_meta / ask_gemini_diagnosis_with_meta
 - Render Plotly war-room HTML and publish to GitHub Pages under /charts
 """
 
@@ -27,7 +27,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-from ai_service import ask_gemini
+from ai_service import ask_gemini, ask_gemini_diagnosis_with_meta, ask_gemini_with_meta
 from finmind_stock_scanner import (
     MOVING_AVERAGE_PERIODS,
     _extract_latest_volume_metrics,
@@ -52,6 +52,7 @@ class DiagnosisReport:
     cached: bool
     cache_period: str | None
     summary_json: str = ""
+    model_version: str = ""
 
 
 class FundamentalAnalyzer:
@@ -556,13 +557,18 @@ class FundamentalAnalyzer:
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Failed to render war room on cache hit for %s: %s", stock_id, exc)
+            cached_text = self._render_summary_text(cached_summary)
+            if row and str(row.get("ai_model_version", "")).strip():
+                cached_text = f"分析模型：{str(row.get('ai_model_version')).strip()}\n" + cached_text
+
             return DiagnosisReport(
                 stock_id=stock_id,
-                ai_text=self._render_summary_text(cached_summary),
+                ai_text=cached_text,
                 war_room_url=war_room_url,
                 cached=True,
                 cache_period=cache_period,
                 summary_json=cached_summary,
+                model_version=str(row.get("ai_model_version", "")).strip() if row else "",
             )
 
         context = self.build_markdown_context(stock_id, include_outlook=True)
@@ -572,8 +578,10 @@ class FundamentalAnalyzer:
             + "【任務】\n"
             + PROMPT_TEMPLATES["full_diagnosis"]
         )
-        raw_ai_text = await ask_gemini(prompt)
+        meta = await ask_gemini_diagnosis_with_meta(prompt, tag=f"stock_diag:{stock_id}")
+        raw_ai_text = meta.text
         human_text, _parsed = self._split_ai_output(raw_ai_text)
+        human_text = f"分析模型：{meta.model_version}\n" + human_text
 
         war_room_url = None
         if publish_war_room:
@@ -581,7 +589,7 @@ class FundamentalAnalyzer:
         elif row:
             war_room_url = str(row.get("war_room_url", "")).strip() or None
 
-        summary = self._summarize_ai(raw_ai_text)
+        summary = self._summarize_ai(raw_ai_text, model_version=meta.model_version)
         self.cache._update_watchlist_master(  # noqa: SLF001
             watchlist,
             stock_id,
@@ -589,17 +597,20 @@ class FundamentalAnalyzer:
                 "ai_cache_day": datetime.now(TAIPEI_TIMEZONE).date().isoformat(),
                 "ai_cached_period": cache_period or "",
                 "ai_summary_json": summary,
+                "ai_model_version": meta.model_version,
                 "war_room_url": war_room_url or "",
             },
         )
 
+        rendered = human_text[:3800] or self._render_summary_text(summary)
         return DiagnosisReport(
             stock_id=stock_id,
-            ai_text=human_text[:3800] or self._render_summary_text(summary),
+            ai_text=rendered,
             war_room_url=war_room_url,
             cached=False,
             cache_period=cache_period,
             summary_json=summary,
+            model_version=meta.model_version,
         )
 
     async def run_targeted_qa(self, stock_id: str, user_prompt: str) -> str:
@@ -612,7 +623,8 @@ class FundamentalAnalyzer:
             + "\n\n"
             + PROMPT_TEMPLATES["targeted_qa"]
         )
-        return await ask_gemini(prompt)
+        meta = await ask_gemini_with_meta(prompt, tag=f"stock_qa:{stock_id}")
+        return f"分析模型：{meta.model_version}\n" + meta.text
 
     async def render_and_publish_war_room_html(self, stock_id: str, ai_text: str) -> str:
         df_wide = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
@@ -912,6 +924,7 @@ class FundamentalAnalyzer:
             "<div class='container'>",
             "<section id='sec-ai' class='section-card'>",
             "<h3>🤖 AI 基本面與法說展望深度診斷</h3>",
+            f"<div style='color:#93c5fd;margin:6px 0 12px 0'>分析模型：{html.escape(str(ai_text).splitlines()[0].replace('分析模型：', '').strip()) if str(ai_text).lstrip().startswith('分析模型：') else ''}</div>",
             "<pre class='ai-pre'>",
             self._escape_html(clean_ai_text),
             "</pre>",
@@ -949,11 +962,21 @@ class FundamentalAnalyzer:
             return human.strip(), None
         return human.strip(), parsed if isinstance(parsed, dict) else None
 
-    def _summarize_ai(self, ai_text: str) -> str:
-        """產生寫入 00_Watchlist_Master.ai_summary_json 的內容：優先為結構化 JSON，否則退回較長的純文字。"""
+    def _summarize_ai(self, ai_text: str, *, model_version: str = "") -> str:
+        """產生寫入 00_Watchlist_Master.ai_summary_json 的內容：優先為結構化 JSON，否則退回較長的純文字。
+
+        SASD v3.5.1: 必須能在快取命中時仍顯示「分析模型」。
+        - 若 AI 回傳了 SUMMARY_JSON，將 model_version 填入 JSON 內的 model_version 欄位。
+        - 若回傳非 JSON 純文字，則直接把 "分析模型：..." 前綴寫入摘要文字。
+        """
         human, parsed = self._split_ai_output(ai_text)
         if parsed is not None:
+            if model_version:
+                parsed["model_version"] = model_version
             return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
+        if model_version:
+            return (f"分析模型：{model_version}\n" + human)[: self._SUMMARY_TEXT_FALLBACK_LIMIT]
         return human[: self._SUMMARY_TEXT_FALLBACK_LIMIT]
 
     def _parse_summary(self, summary: str) -> dict | None:
@@ -969,7 +992,10 @@ class FundamentalAnalyzer:
         if data is None:
             return summary
         guidance = data.get("guidance") if isinstance(data.get("guidance"), dict) else {}
-        lines = [f"**{data.get('verdict', '')}**（體質評分 {data.get('score', 'N/A')}）"]
+        prefix = ""
+        if data.get("model_version"):
+            prefix = f"分析模型：{data.get('model_version')}\n"
+        lines = [prefix + f"**{data.get('verdict', '')}**（體質評分 {data.get('score', 'N/A')}）"]
         for label, key in (("亮點", "highlights"), ("風險", "risks")):
             items = data.get(key) or []
             if isinstance(items, list) and items:

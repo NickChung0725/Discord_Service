@@ -4,6 +4,41 @@
 
 ---
 
+## [v3.5.1] - 2026-10-28
+### ✨ 新增功能與架構升級 (Added & Changed)
+* **Google AI Studio 呼叫升級為 `models.generate_content` + ThinkingConfig(128)，並新增單次 AI 呼叫日誌（每日單檔）**：
+  * Google AI Studio 由舊版 `client.interactions.create` 全面切換為 `client.models.generate_content(..., config=GenerateContentConfig(thinking_config=ThinkingConfig(thinking_budget=128)))`。
+  * 新增 `finmind_reports/logs/YYYY-MM-DD_ai_calls.log`：每次 AI 呼叫以「完整 Prompt + 完整 Output」寫入，並透過鎖定確保不互相穿插（供追查與除錯）。
+  * 相關檔案：[`ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/ai_service.py), [`deploy/finmind-ai-pick.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-ai-pick.service)
+
+* **22:00 單股診斷升級：主模型 `gemini-flash-latest` + 429/503 長等待重試 + 降級 `gemini-flash-lite-latest`**：
+  * 依 SASD v3.5.1 規格，將單股基本面診斷改為「主模型 → 重試 → 降級模型 → 重試」的策略，降低 free-tier 額度波動造成的失敗率。
+  * 相關檔案：[`ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/ai_service.py), [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py)
+
+* **「分析模型：{response.model_version}」全面寫入 Discord 回覆、戰情室與 Google Sheets 快取**：
+  * 單股診斷、專題問答、多股比較與 22:00/22:30 Vertex AI 決策報告皆會顯示實際 `model_version`。
+  * 新增 `00_Watchlist_Master.ai_model_version` 欄位，並將 `model_version` 寫入 `ai_summary_json`（快取命中仍可顯示）。
+  * 相關檔案：[`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py), [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py), [`stock_ai_command.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/stock_ai_command.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py)
+
+### 🔧 優化與修正 (Changed)
+* **22:00 AI 單股分析呼叫節流時間調整為 13 秒**：
+  * `ai_picker_call_interval_seconds: 4.5 → 13.0`，避免連續多檔診斷觸發 429。
+  * 相關檔案：[`finmind_scanner.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_scanner.json), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py)
+
+* **保留期清理擴充：同步刪除過期 AI 呼叫日誌**：
+  * `_cleanup_old_daily_reports` 會一併清理 `logs/*_ai_calls.log`（超過 retention_days）。
+  * 相關檔案：[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py)
+
+* **systemd service 日誌同步輸出到 Serial Console**：
+  * `StandardOutput=journal+console` / `StandardError=journal+console`，讓 GCP serial console 可看到每次 AI 呼叫的單行 telemetry。
+  * 相關檔案：[`deploy/finmind-scan.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-scan.service), [`deploy/finmind-ai-pick.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-ai-pick.service), [`deploy/finmind-rebound-ai.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-rebound-ai.service)
+
+* **單元測試同步更新**：
+  * 更新 AI 呼叫 mock（`interactions.create` → `models.generate_content`）與新增 log cleanup/model_version 相關測試。
+  * 相關檔案：[`tests/test_ai_weather.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_ai_weather.py), [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py), [`tests/test_fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_fundamental_analyzer.py), [`tests/test_finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_finmind_stock_scanner.py)
+
+---
+
 ## [v3.4.1] - 2026-10-27
 ### 🔧 優化與修正 (Changed)
 * **關閉財報 Markdown 表格科學記號顯示 ([`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py))**：

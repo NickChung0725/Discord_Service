@@ -14,7 +14,7 @@ import re
 import discord
 from discord import app_commands
 
-from ai_service import ask_gemini
+from ai_service import ask_gemini, ask_gemini_with_meta
 from fundamental_analyzer import FundamentalAnalyzer
 from fundamental_cache import FundamentalCacheError, FundamentalCacheManager
 from fundamental_config import PROMPT_TEMPLATES
@@ -151,7 +151,11 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                     + "\n\n"
                     + PROMPT_TEMPLATES["targeted_qa"]
                 )
-                answer = await ask_gemini(combined_prompt)
+                meta = await ask_gemini_with_meta(
+                    combined_prompt,
+                    tag=f"stock_compare:{','.join(stock_ids)}",
+                )
+                answer = meta.text
             except Exception:
                 logger.exception("Multi-stock QA failed for %s", stock_ids)
                 await interaction.followup.send("❌ 多股 AI 比較分析失敗，請稍後再試。")
@@ -159,7 +163,8 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
 
             titles_str = " vs ".join(_get_display_title(sid) for sid in stock_ids)
             header = f"⚖️ **{titles_str}｜財報跨股比較與解答**\n\n"
-            full_text = header + answer
+            answer_text = f"分析模型：{meta.model_version}\n" + answer
+            full_text = header + answer_text
             for chunk in _split_discord_chunks(full_text):
                 await interaction.followup.send(chunk)
             return

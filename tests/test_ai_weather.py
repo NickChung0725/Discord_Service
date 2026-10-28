@@ -65,9 +65,11 @@ class GoogleAiStudioTests(unittest.TestCase):
 
     def test_gemini_uses_configured_key_model_and_prompt(self) -> None:
         response = Mock()
-        response.output_text = "Hello!"
+        response.text = "Hello!"
+        response.model_version = "test-version"
+        response.usage_metadata = Mock(prompt_token_count=1, candidates_token_count=2)
         client = Mock()
-        client.interactions.create.return_value = response
+        client.models.generate_content.return_value = response
         with (
             patch.dict(
                 "os.environ",
@@ -80,15 +82,16 @@ class GoogleAiStudioTests(unittest.TestCase):
 
         self.assertEqual(answer, "Hello!")
         create_client.assert_called_once_with(api_key="test-key")
-        client.interactions.create.assert_called_once_with(
-            model="test-model",
-            input="hello",
-        )
+        call = client.models.generate_content.call_args.kwargs
+        self.assertEqual(call["model"], "test-model")
+        self.assertEqual(call["contents"], "hello")
+        self.assertIn("config", call)
 
     def test_gemini_uses_working_sample_default_model(self) -> None:
-        response = Mock(output_text="Answer from Gemini")
+        response = Mock(text="Answer from Gemini", model_version="test-version")
+        response.usage_metadata = Mock(prompt_token_count=1, candidates_token_count=2)
         client = Mock()
-        client.interactions.create.return_value = response
+        client.models.generate_content.return_value = response
         with (
             patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}, clear=True),
             patch("ai_service.genai.Client", return_value=client),
@@ -97,7 +100,7 @@ class GoogleAiStudioTests(unittest.TestCase):
 
         self.assertEqual(answer, "Answer from Gemini")
         self.assertEqual(
-            client.interactions.create.call_args.kwargs["model"],
+            client.models.generate_content.call_args.kwargs["model"],
             "gemini-flash-lite-latest",
         )
 
@@ -112,7 +115,7 @@ class GoogleAiStudioTests(unittest.TestCase):
     def test_gemini_retries_504_deadline_exceeded_even_without_fallback_model(self) -> None:
         attempts = 0
 
-        def fake_gen(prompt: str) -> str:
+        def fake_gen(prompt: str, model: str | None = None) -> str:
             nonlocal attempts
             attempts += 1
             if attempts < 2:
@@ -122,6 +125,7 @@ class GoogleAiStudioTests(unittest.TestCase):
             return "recovered free tier"
 
         with (
+            patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}, clear=False),
             patch.object(ai_service, "_generate_ai_response", side_effect=fake_gen),
             patch("ai_service.time.sleep", return_value=None) as sleep_mock,
         ):
@@ -180,6 +184,7 @@ class VertexAiTests(unittest.TestCase):
             return "recovered on vertex"
 
         with (
+            patch.dict("os.environ", {"GOOGLE_CLOUD_PROJECT_ID": "p"}, clear=False),
             patch.object(ai_service, "_generate_vertex_ai_response", side_effect=fake_vertex),
             patch("ai_service.time.sleep", return_value=None) as sleep_mock,
             patch.object(ai_service, "_generate_ai_response") as free_tier_mock,
@@ -204,6 +209,7 @@ class VertexAiTests(unittest.TestCase):
             return "recovered after 504"
 
         with (
+            patch.dict("os.environ", {"GOOGLE_CLOUD_PROJECT_ID": "p"}, clear=False),
             patch.object(ai_service, "_generate_vertex_ai_response", side_effect=fake_vertex),
             patch("ai_service.time.sleep", return_value=None) as sleep_mock,
         ):
@@ -215,6 +221,7 @@ class VertexAiTests(unittest.TestCase):
 
     def test_vertex_raises_when_all_retries_exhausted_and_never_falls_back_to_google_ai(self) -> None:
         with (
+            patch.dict("os.environ", {"GOOGLE_CLOUD_PROJECT_ID": "p"}, clear=False),
             patch.object(
                 ai_service,
                 "_generate_vertex_ai_response",

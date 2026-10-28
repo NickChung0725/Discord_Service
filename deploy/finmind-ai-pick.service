@@ -10,5 +10,7 @@ WorkingDirectory=/home/nick_chung0725/Discord_Service
 EnvironmentFile=/home/nick_chung0725/Discord_Service/.env
 Environment=PYTHONUNBUFFERED=1
 UMask=0077
+StandardOutput=journal+console
+StandardError=journal+console
 ExecStart=/home/nick_chung0725/Discord_Service/.venv/bin/python /home/nick_chung0725/Discord_Service/finmind_stock_scanner.py analyze-alignment --config /home/nick_chung0725/Discord_Service/finmind_scanner.json
 TimeoutStartSec=infinity

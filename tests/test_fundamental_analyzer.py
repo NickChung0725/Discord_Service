@@ -21,17 +21,19 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
                 "ai_cache_day": "2026-10-16",
                 "ai_cached_period": "2026Q2_2026-09_2026-08-01_2026-10-14",
                 "ai_summary_json": "cached summary",
+                "ai_model_version": "gemini-cached",
                 "war_room_url": "https://example.invalid/2330_fund.html",
             }
         ]
 
         analyzer = FundamentalAnalyzer(cache)
-        with patch("fundamental_analyzer.ask_gemini", new_callable=AsyncMock) as mock_ask:
+        with patch("fundamental_analyzer.ask_gemini_diagnosis_with_meta", new_callable=AsyncMock) as mock_ask:
             report = await analyzer.run_full_diagnosis("2330", force_ai=False)
 
         mock_ask.assert_not_awaited()
         self.assertTrue(report.cached)
-        self.assertEqual(report.ai_text, "cached summary")
+        self.assertTrue(report.ai_text.startswith("分析模型：gemini-cached"))
+        self.assertIn("cached summary", report.ai_text)
         self.assertEqual(report.war_room_url, "https://example.invalid/2330_fund.html")
 
     async def test_full_diagnosis_reruns_when_cached_summary_is_empty(self) -> None:
@@ -50,17 +52,21 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
         ]
         analyzer = FundamentalAnalyzer(cache)
         raw = 'text\n===SUMMARY_JSON===\n{"verdict":"v","score":70}'
+        meta = Mock(text=raw, model_version="gemini-test")
         with patch.object(analyzer, "build_markdown_context", return_value="ctx"), patch(
-            "fundamental_analyzer.ask_gemini", new_callable=AsyncMock, return_value=raw
+            "fundamental_analyzer.ask_gemini_diagnosis_with_meta", new_callable=AsyncMock, return_value=meta
         ) as mock_ask:
             report = await analyzer.run_full_diagnosis("2330", publish_war_room=False)
 
         mock_ask.assert_awaited_once()
         self.assertFalse(report.cached)
-        self.assertEqual(report.ai_text, "text")
+        self.assertTrue(report.ai_text.startswith("分析模型：gemini-test"))
+        self.assertIn("text", report.ai_text)
         self.assertEqual(json.loads(report.summary_json)["score"], 70)
+        self.assertEqual(json.loads(report.summary_json)["model_version"], "gemini-test")
         updates = cache._update_watchlist_master.call_args.args[2]  # noqa: SLF001
         self.assertEqual(updates["ai_cached_period"], "2026Q2_2026-09_2026-08-01_2026-10-14")
+        self.assertEqual(updates["ai_model_version"], "gemini-test")
 
     def test_build_latest_ma_context_reads_local_prices_csv_or_skips_when_missing(self) -> None:
         import tempfile
