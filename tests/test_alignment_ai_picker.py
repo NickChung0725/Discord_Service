@@ -15,9 +15,13 @@ import ai_service
 from alignment_ai_picker import (
     build_dossier,
     build_pick_rows,
+    enforce_sector_cap,
     enrich_with_tracker,
     format_pick_report,
+    hard_prefilter,
+    limit_stage2_candidates,
     load_alignment_candidates,
+    merge_pre_filtered_avoid,
     parse_portfolio_json,
     post_messages_to_discord,
     prefilter_candidates,
@@ -93,7 +97,7 @@ class PortfolioParsingTests(unittest.TestCase):
             {
                 "market_comment": "ok",
                 "top_picks": [
-                    {"stock_id": "2330", "score": 90, "thesis": "t", "risk": "r"},
+                    {"stock_id": "2330", "score": 90, "bull_thesis": "t", "bear_case_and_invalidation": "r"},
                     {"stock_id": "9999", "score": 80},
                     {"stock_id": "2330", "score": 70},
                     {"stock_id": "2317", "score": 60},
@@ -116,7 +120,7 @@ class PortfolioParsingTests(unittest.TestCase):
         # Realistic error: AI omitted closing bracket of avoid array and appended a stray word before closing brace
         raw = (
             '{"market_comment": "盤勢震盪", '
-            '"top_picks": [{"rank": 1, "stock_id": "2618", "score": 83, "outlook_verdict": "待驗證", "thesis": "營收成長", "risk": "油價"}], '
+            '"top_picks": [{"rank": 1, "stock_id": "2618", "score": 83, "outlook_verdict": "待驗證", "bull_thesis": "營收成長", "bear_case_and_invalidation": "油價"}], '
             '"watchlist": [{"stock_id": "6277", "reason": "毛利高"}], '
             '"avoid": [{"stock_id": "9912", "reason": "虧損"}, {"stock_id": "5450", "reason": "低量"} questionnaires}'
         )
@@ -131,7 +135,7 @@ class PortfolioParsingTests(unittest.TestCase):
     def test_parse_auto_repairs_trailing_commas(self) -> None:
         raw = (
             '{"market_comment": "好", '
-            '"top_picks": [{"rank": 1, "stock_id": "2330", "score": 95, "outlook_verdict": "高度可信", "thesis": "強", "risk": "無",},], '
+            '"top_picks": [{"rank": 1, "stock_id": "2330", "score": 95, "outlook_verdict": "高度可信", "bull_thesis": "強", "bear_case_and_invalidation": "無",},], '
             '"watchlist": [], '
             '"avoid": [],}'
         )
@@ -146,7 +150,7 @@ class ReportTests(unittest.TestCase):
         return {
             "market_comment": "整體偏多",
             "top_picks": [
-                {"rank": 1, "stock_id": "2330", "score": 90, "outlook_verdict": "高度可信", "thesis": "理由", "risk": "風險"}
+                {"rank": 1, "stock_id": "2330", "score": 90, "outlook_verdict": "高度可信", "bull_thesis": "理由", "bear_case_and_invalidation": "風險", "entry_zone_and_trigger": "拉回17MA低接"}
             ],
             "watchlist": [{"stock_id": "2317", "reason": "等突破"}],
             "avoid": [],
@@ -194,8 +198,9 @@ class ReportTests(unittest.TestCase):
                     "target_price_2": "1,100 元 (前高)",
                     "stop_loss_price": "950 元 (-4%)",
                     "outlook_verdict": "高度可信",
-                    "thesis": "基本面佳",
-                    "risk": "匯率",
+                    "entry_zone_and_trigger": "拉回 17MA 990~1000 元，或帶量突破 3MA",
+                    "bull_thesis": "基本面佳",
+                    "bear_case_and_invalidation": "匯率；跌破 45MA 退場",
                 }
             ],
             "watchlist": [],
@@ -220,6 +225,10 @@ class ReportTests(unittest.TestCase):
         self.assertIn("第一目標價 1,020 元 (17MA)", joined)
         self.assertIn("第二目標價 1,100 元 (前高)", joined)
         self.assertIn("嚴格停損 950 元 (-4%)", joined)
+        self.assertIn("進場觸發：拉回 17MA 990~1000 元，或帶量突破 3MA", joined)
+        self.assertIn("理由（藍軍）：基本面佳", joined)
+        self.assertIn("風險與失效（紅軍）：匯率；跌破 45MA 退場", joined)
+        self.assertNotIn("理由：", joined)
 
     def test_report_falls_back_to_raw_text_when_unparsed(self) -> None:
         frame = _frame([{"stock_id": "2330"}])
@@ -249,6 +258,8 @@ class ReportTests(unittest.TestCase):
         self.assertEqual([r["category"] for r in rows], ["TOP_PICK", "WATCHLIST", "AVOID"])
         self.assertEqual(rows[0]["pk_key"], "2026-10-16_2330")
         self.assertEqual(rows[0]["fundamental_score"], 77)
+        self.assertEqual(rows[0]["entry_thesis"], "【進場】拉回17MA低接｜理由")
+        self.assertEqual(rows[0]["risk_note"], "風險")
         for r in rows:
             self.assertTrue(r["war_room_url"].startswith("https://example.com/"))
 
@@ -286,6 +297,85 @@ class ReportTests(unittest.TestCase):
         self.assertIn("📈 溫和放量", describe_volume_status(1500, 1300, 1000))
         self.assertIn("💧 量縮整理", describe_volume_status(600, 900, 1000))
         self.assertIn("⚠️ 天量過熱", describe_volume_status(5000, 2000, 1000))
+
+
+class Stage0AndStage2GuardTests(unittest.TestCase):
+    def test_hard_prefilter_blocks_low_volume_and_loss_without_contract_liab(self) -> None:
+        frame = _frame(
+            [
+                {"stock_id": "1111", "vol_lots": 250},
+                {"stock_id": "2222", "vol_lots": 5000},
+                {"stock_id": "3333", "vol_lots": 5000},
+                {"stock_id": "4444", "vol_lots": 5000},
+                {"stock_id": "5555"},
+            ]
+        )
+        metrics = {
+            "2222": {"op_margin_pct": -3.0, "contract_liab": 0.2},
+            "3333": {"op_margin_pct": -3.0, "contract_liab": 12.0},
+            "4444": {"op_margin_pct": 8.0, "contract_liab": 0.0},
+        }
+        kept, avoid = hard_prefilter(frame, metrics)
+        self.assertEqual(list(kept["stock_id"]), ["3333", "4444", "5555"])
+        self.assertEqual([a["stock_id"] for a in avoid], ["1111", "2222"])
+        self.assertIn("< 300 張", avoid[0]["reason"])
+        self.assertIn("營益率", avoid[1]["reason"])
+
+    def test_merge_pre_filtered_avoid_appends_without_duplicates(self) -> None:
+        decision = {
+            "top_picks": [{"stock_id": "2330"}],
+            "watchlist": [{"stock_id": "2317"}],
+            "avoid": [{"stock_id": "9999", "reason": "ai"}],
+        }
+        merged = merge_pre_filtered_avoid(
+            decision,
+            [{"stock_id": "1111", "reason": "x"}, {"stock_id": "9999", "reason": "dup"}, {"stock_id": "2330", "reason": "dup"}],
+        )
+        self.assertEqual([a["stock_id"] for a in merged["avoid"]], ["1111", "9999"])
+
+    def test_enforce_sector_cap_demotes_third_pick_in_same_sector(self) -> None:
+        frame = _frame(
+            [
+                {"stock_id": "2603", "industry_category": "航運業"},
+                {"stock_id": "2609", "industry_category": "航運業"},
+                {"stock_id": "2615", "industry_category": "航運業"},
+                {"stock_id": "2330", "industry_category": "半導體業"},
+            ]
+        )
+        decision = {
+            "top_picks": [{"rank": i, "stock_id": s} for i, s in enumerate(["2603", "2609", "2615", "2330"], start=1)],
+            "watchlist": [],
+            "avoid": [],
+        }
+        result = enforce_sector_cap(decision, frame)
+        self.assertEqual([p["stock_id"] for p in result["top_picks"]], ["2603", "2609", "2330"])
+        self.assertEqual([p["rank"] for p in result["top_picks"]], [1, 2, 3])
+        self.assertEqual([w["stock_id"] for w in result["watchlist"]], ["2615"])
+        self.assertIn("同產業名額限制", result["watchlist"][0]["reason"])
+
+    def test_limit_stage2_candidates_only_trims_above_threshold(self) -> None:
+        ids = [f"{1000 + i}" for i in range(16)]
+        frame = _frame([{"stock_id": sid, "industry_category": "X"} for sid in ids])
+        results = {sid: {"summary": json.dumps({"score": i})} for i, sid in enumerate(ids)}
+        trimmed = limit_stage2_candidates(frame, results)
+        self.assertEqual(len(trimmed), 3)  # 同產業最多取 3 檔進入 Stage 2
+        self.assertEqual(len(limit_stage2_candidates(frame.head(15), results)), 15)
+
+    def test_limit_stage2_candidates_penalizes_overheated(self) -> None:
+        frame = _frame(
+            [
+                {"stock_id": "2330", "industry_category": "半導體", "close": 120.0, "MA17": 100.0},
+                {"stock_id": "2603", "industry_category": "航運", "close": 100.0, "MA17": 100.0},
+            ]
+        )
+        results = {
+            "2330": {"summary": json.dumps({"score": 90})},
+            "2603": {"summary": json.dumps({"score": 80})},
+        }
+        large = pd.concat([frame] * 8, ignore_index=True)  # 2 rows * 8 = 16 rows (> threshold)
+        trimmed = limit_stage2_candidates(large, results)
+        # 2330 超漲(>17MA+12%) 會被扣分，排序應落後 2603
+        self.assertEqual(trimmed.iloc[0]["stock_id"], "2603")
 
 
 class SummaryTests(unittest.TestCase):
@@ -357,6 +447,7 @@ class GeminiFallbackTests(unittest.TestCase):
                     max_top=5,
                     model=model,
                     market_regime={"light": "🟢綠燈", "summary": "🟢綠燈"},
+                    selection_mode="trend",
                 )
             )
         self.assertEqual(model, "gemini-2.5-pro")

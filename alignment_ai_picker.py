@@ -49,7 +49,7 @@ from finmind_stock_scanner import (
     scan_rebound_from_prices,
     sync_rebound_watchlist_to_gsheet,
 )
-from fundamental_analyzer import FundamentalAnalyzer
+from fundamental_analyzer import FundamentalAnalyzer, build_hard_warnings
 from fundamental_cache import FundamentalCacheError, FundamentalCacheManager
 from fundamental_config import PROMPT_TEMPLATES
 
@@ -290,7 +290,11 @@ async def analyze_candidates(
             report = await analyzer.run_full_diagnosis(
                 stock_id, force_ai=force_ai, publish_war_room=publish_all
             )
-            snapshot = await asyncio.to_thread(analyzer.build_quant_snapshot, stock_id)
+            snapshot = await asyncio.to_thread(
+                analyzer.build_quant_snapshot,
+                stock_id,
+                close=_parse_optional_num(getattr(row, "close", None)),
+            )
         except FundamentalCacheError as error:
             failures.append((stock_id, f"財報資料不足：{error}"))
             print(f"[{position}/{total}] {label} ✗ {error}")
@@ -391,6 +395,206 @@ def parse_portfolio_json(raw: str, valid_ids: set[str], max_top: int) -> dict | 
     }
 
 
+# --------------------------------------------------------------------------- #
+# SASD v4.0 Stage 0 硬性攔截 / Stage 2 候選上限 / 同產業限額
+# --------------------------------------------------------------------------- #
+STAGE2_TRIM_THRESHOLD = 15  # 候選股 > 15 檔時才裁剪
+STAGE2_MAX_CANDIDATES = 12  # 裁剪後交給 Stage 2 (ARGON) 的最大檔數
+SECTOR_PICK_CAP = 2  # 同產業最多入選 top_picks 檔數
+HARD_FILTER_TAG = "【Stage 0 硬性攔截】"
+
+
+def hard_prefilter(
+    frame: pd.DataFrame,
+    metrics_lookup: Mapping[str, Mapping[str, object]],
+) -> tuple[pd.DataFrame, list[dict[str, str]]]:
+    """Stage 0 硬性排雷：`vol_lots < 300` 或 `(op_margin_pct < 0 且 contract_liab < 1.0 億)` 直接歸入 avoid。
+
+    回傳 (保留的候選 frame, pre_filtered_avoid)。日量以 frame 的 `vol_lots` 為主，缺漏時改用 metrics_lookup；
+    兩者皆無資料者不判定（不誤殺）。被攔截者不進入 Stage 2 Prompt。
+    """
+    if frame.empty:
+        return frame.reset_index(drop=True), []
+    kept_index: list[int] = []
+    pre_filtered: list[dict[str, str]] = []
+    for position, row in enumerate(frame.to_dict("records")):
+        stock_id = str(row.get("stock_id", ""))
+        metrics = dict(metrics_lookup.get(stock_id, {}))
+        vol = _parse_optional_num(row.get("vol_lots"))
+        if vol is not None:
+            metrics["vol_lots"] = vol
+        warnings = build_hard_warnings(metrics)
+        if warnings:
+            pre_filtered.append({"stock_id": stock_id, "reason": HARD_FILTER_TAG + "；".join(warnings)})
+        else:
+            kept_index.append(position)
+    return frame.iloc[kept_index].reset_index(drop=True), pre_filtered
+
+
+def _stage1_score(results: Mapping[str, Mapping[str, object]], stock_id: str) -> float:
+    try:
+        parsed = json.loads(str(results.get(stock_id, {}).get("summary", "")))
+        return float(parsed.get("score", 0)) if isinstance(parsed, dict) else 0.0
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return 0.0
+
+
+def _volume_ratio_from_row(row: Mapping[str, object]) -> float | None:
+    """Try to parse volume ratio (today / 20MA) from vol_status like "... (4.52x...)"."""
+    text = str(row.get("vol_status") or "").strip()
+    if not text:
+        return None
+    match = re.search(r"\((\d+(?:\.\d+)?)x", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _is_overheated_candidate(row: Mapping[str, object]) -> bool:
+    """Stage 2 前置 Python 排雷：天量過熱或已超漲逼近 17MA+12%。
+
+    規則：
+    - 量比 > 4.5x（天量過熱）
+    - 或 收盤價 > 17MA * 1.12（短線超漲）
+
+    缺資料者不判定（避免誤殺）。
+    """
+
+    ratio = _volume_ratio_from_row(row)
+    close_val = _parse_optional_num(row.get("close"))
+    ma17_val = _parse_optional_num(row.get("MA17"))
+
+    if ratio is not None and ratio > 4.5:
+        return True
+    if close_val is not None and ma17_val is not None and ma17_val > 0 and close_val > ma17_val * 1.12:
+        return True
+    return False
+
+
+def _stage2_rank_score(row: Mapping[str, object], results: Mapping[str, Mapping[str, object]]) -> float:
+    base = _stage1_score(results, str(row.get("stock_id", "")))
+    penalty = 20.0 if _is_overheated_candidate(row) else 0.0
+    return base - penalty
+
+
+def limit_stage2_candidates(
+    frame: pd.DataFrame,
+    results: Mapping[str, Mapping[str, object]],
+    *,
+    threshold: int = STAGE2_TRIM_THRESHOLD,
+    keep: int = STAGE2_MAX_CANDIDATES,
+) -> pd.DataFrame:
+    """候選股 > threshold 檔時，以 Python 排序後保留前 keep 檔。
+
+    改良點（SASD v4.0）：
+    1) 不只看 Stage 1 score：天量過熱(>4.5x) 或 已超漲(>17MA+12%) 先扣 20 分。
+    2) 決賽名單產業多元：同產業最多取 3 檔進入 Stage 2 Prompt。
+
+    同分維持原順序；缺資料者不判定（避免誤殺）。
+    """
+
+    if len(frame) <= threshold:
+        return frame
+
+    # 以 industry_category 做 3 檔上限（保留多元產業）；缺資料者視為獨立類別。
+    rows = frame.to_dict("records")
+    ranked_rows = [
+        (i, row, _stage2_rank_score(row, results)) for i, row in enumerate(rows)
+    ]
+    ranked_rows.sort(key=lambda t: (-t[2], t[0]))
+
+    picked_positions: list[int] = []
+    sector_counts: dict[str, int] = {}
+    for position, row, _score in ranked_rows:
+        sector = str(row.get("industry_category") or "").strip() or f"__NO_SECTOR__:{row.get('stock_id')}"
+        if sector_counts.get(sector, 0) >= 3:
+            continue
+        sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        picked_positions.append(position)
+        if len(picked_positions) >= keep:
+            break
+
+    # 依挑選順序（已按 rank score 高→低）輸出，讓較高勝率候選優先進入 Stage 2 Prompt。
+    return frame.iloc[picked_positions].reset_index(drop=True)
+
+
+def enforce_sector_cap(
+    decision: dict,
+    frame: pd.DataFrame,
+    *,
+    cap: int = SECTOR_PICK_CAP,
+) -> dict:
+    """同產業 top_picks 最多 cap 檔；超額者（依 rank 後者）移入 watchlist 並重排 rank。"""
+    industries = {
+        str(r.get("stock_id")): str(r.get("industry_category", "") or "").strip()
+        for r in frame.to_dict("records")
+    }
+    counts: dict[str, int] = {}
+    kept: list[dict] = []
+    demoted: list[dict] = []
+    for pick in decision.get("top_picks", []):
+        sector = industries.get(pick["stock_id"]) or str(pick.get("sector", "") or "").strip() or pick["stock_id"]
+        if counts.get(sector, 0) >= cap:
+            demoted.append(
+                {
+                    "stock_id": pick["stock_id"],
+                    "reason": f"同產業名額限制（{sector} 已入選 {cap} 檔），移入觀察；待拉回或名額釋出再評估。",
+                }
+            )
+            continue
+        counts[sector] = counts.get(sector, 0) + 1
+        kept.append(pick)
+    for rank, pick in enumerate(kept, start=1):
+        pick["rank"] = rank
+    decision["top_picks"] = kept
+    decision["watchlist"] = [*decision.get("watchlist", []), *demoted]
+    return decision
+
+
+def merge_pre_filtered_avoid(decision: dict, pre_filtered_avoid: list[dict[str, str]]) -> dict:
+    """把 Stage 0 攔截名單併回最終 avoid（置於前段；AI 已列入其他分類者不重複）。"""
+    taken = {i["stock_id"] for i in decision.get("top_picks", [])} | {
+        i["stock_id"] for i in decision.get("watchlist", [])
+    }
+    existing = {i["stock_id"] for i in decision.get("avoid", [])}
+    merged = [i for i in pre_filtered_avoid if i["stock_id"] not in taken and i["stock_id"] not in existing]
+    decision["avoid"] = [*merged, *decision.get("avoid", [])]
+    return decision
+
+
+_PORTFOLIO_MA17_RULE = (
+    "2. 均線斜率與量價結構 (35%)：17MA 必須上揚或走平；若訊號雖標示金叉但「17MA 走勢持續下彎（5日斜率 < 0）」，"
+    "代表均線假金叉或動能衰退，強制扣減 15 分並優先移入 `watchlist`！"
+)
+
+_PORTFOLIO_REBOUND_RULE = (
+    "2. 均線斜率與量價結構 (35%)：本批次為『回踩 45MA/117MA 的均值回歸反彈』，"
+    "17MA 多數下彎屬正常現象，不因 17MA 下彎扣分。改請檢查："
+    "(a) 45MA/117MA 支撐守穩；(b) K 線收盤強度 close_strength >= 0.55；"
+    "(c) 反彈至 17MA 空間 potential_return_pct >= 5%。並且 `target_price_1` 優先設為「17MA 反壓」。"
+)
+
+
+def _apply_portfolio_prompt_overrides(prompt: str, *, selection_mode: str) -> str:
+    """依選股模式動態調整 Stage 2 Prompt 的關鍵規則。
+
+    - trend：22:00 順勢金叉（預設）
+    - rebound：22:30 型態 A 回踩長均線反彈
+    """
+
+    mode = (selection_mode or "").strip().lower()
+    if mode != "rebound":
+        return prompt
+
+    # 反彈模式不適用 17MA 下彎扣分條款，改用「長均線守穩 + 收盤強度 + 反彈空間」檢核。
+    if _PORTFOLIO_MA17_RULE in prompt:
+        return prompt.replace(_PORTFOLIO_MA17_RULE, _PORTFOLIO_REBOUND_RULE)
+    return prompt
+
+
 async def run_portfolio_selection(
     dossiers: list[str],
     *,
@@ -398,6 +602,7 @@ async def run_portfolio_selection(
     model: str | None = None,
     market_regime: Mapping[str, object] | None = None,
     strategy_context: str = "",
+    selection_mode: str = "trend",
 ) -> object:
     market_light_str = (
         str(market_regime.get("summary") or market_regime.get("light") or "🟡黃燈")
@@ -408,7 +613,10 @@ async def run_portfolio_selection(
         PROMPT_TEMPLATES["portfolio_selection"]
         .replace("{max_top}", str(max_top))
         .replace("{market_light}", market_light_str)
+        .replace("{MARKET_LIGHT_INFO}", market_light_str)
     )
+    prompt = _apply_portfolio_prompt_overrides(prompt, selection_mode=selection_mode)
+
     if strategy_context:
         prompt += f"\n\n【今日選股策略補充定位】\n{strategy_context}"
     prompt += (
@@ -513,6 +721,9 @@ def format_pick_report(
                     parts_tp.append(f"嚴格停損 {sl}")
                 tactical_lines.append("測幅：" + "｜".join(parts_tp))
 
+            entry_trigger = str(pick.get("entry_zone_and_trigger", "")).strip()
+            entry_lines = [f"進場觸發：{entry_trigger}"] if entry_trigger else []
+
             if row.get("support_ma") and row.get("high_60d") is not None:
                 price_line = (
                     f"收盤 {_num(row.get('close'))}｜60日高 {_num(row.get('high_60d'))}"
@@ -535,8 +746,9 @@ def format_pick_report(
                         price_line,
                         *vol_line,
                         *tactical_lines,
-                        f"理由：{pick.get('thesis', '')}",
-                        f"風險：{pick.get('risk', '')}",
+                        *entry_lines,
+                        f"理由（藍軍）：{pick.get('bull_thesis') or pick.get('thesis', '')}",
+                        f"風險與失效（紅軍）：{pick.get('bear_case_and_invalidation') or pick.get('risk', '')}",
                         _links(stock_id, getattr(report, "war_room_url", None)),
                     ]
                 ).rstrip()
@@ -679,6 +891,11 @@ def build_pick_rows(
         except (json.JSONDecodeError, ValueError):
             return ""
 
+    def entry_thesis(item: Mapping[str, object]) -> str:
+        bull = str(item.get("bull_thesis") or item.get("thesis") or item.get("reason") or "")
+        entry = str(item.get("entry_zone_and_trigger", "") or "").strip()
+        return f"【進場】{entry}｜{bull}" if entry else bull
+
     def build(category: str, rank: object, item: Mapping[str, object]) -> dict[str, object]:
         stock_id = str(item["stock_id"])
         row = rows.get(stock_id, {})
@@ -700,8 +917,8 @@ def build_pick_rows(
             "fundamental_score": fundamental_score(stock_id),
             "final_pick_score": item.get("score", ""),
             "outlook_verdict": item.get("outlook_verdict", ""),
-            "entry_thesis": item.get("thesis", item.get("reason", "")),
-            "risk_note": item.get("risk", ""),
+            "entry_thesis": entry_thesis(item),
+            "risk_note": item.get("bear_case_and_invalidation") or item.get("risk", ""),
             "war_room_url": getattr(report, "war_room_url", "") or "",
             "updated_at": now,
         }
@@ -758,6 +975,12 @@ async def run_pipeline(
     selected, skipped = prefilter_candidates(enriched, max_candidates)
     print(f"候選訊號股 {total_signals} 檔，進入深度分析 {len(selected)} 檔（略過 {skipped} 檔）。")
 
+    # Stage 0 硬性攔截（日量 < 300 張）：先於 Stage 1 剔除，不消耗 Token；財務類硬傷於財報同步後再判斷。
+    selected_all = selected
+    selected, pre_filtered_avoid = hard_prefilter(selected_all, {})
+    if pre_filtered_avoid:
+        print(f"Stage 0 硬性攔截（日量）{len(pre_filtered_avoid)} 檔：{[i['stock_id'] for i in pre_filtered_avoid]}")
+
     limiter = FinMindRequestLimiter(
         output_root / ".state" / "finmind_request_history.sqlite3",
         int(config["max_requests_per_hour"]),
@@ -784,36 +1007,62 @@ async def run_pipeline(
         )
 
     analyzed = selected.loc[selected["stock_id"].isin(results.keys())].reset_index(drop=True)
-    if analyzed.empty:
+    if analyzed.empty and not pre_filtered_avoid:
         message = f"❌ {target_date.isoformat()} 22:00 AI 選股失敗：所有候選股的財報分析皆失敗。"
         print(message)
         if post_discord:
             post_messages_to_discord([message], channel_id, bot_token)
         return 1
 
+    # Stage 0 硬性攔截（財務：本業虧損且合約負債 < 1 億）＋ Stage 2 候選上限（> 15 檔取 Stage 1 評分前 12 檔）
+    metrics_lookup = {
+        str(sid): await asyncio.to_thread(analyzer.get_hard_screen_metrics, str(sid)) for sid in results
+    }
+    analyzed, financial_avoid = hard_prefilter(analyzed, metrics_lookup)
+    pre_filtered_avoid = [*pre_filtered_avoid, *financial_avoid]
+    before_trim = len(analyzed)
+    analyzed = limit_stage2_candidates(analyzed, results)
+    if len(analyzed) < before_trim:
+        print(f"Stage 2 候選 {before_trim} 檔 > {STAGE2_TRIM_THRESHOLD}，依 Stage 1 評分保留前 {len(analyzed)} 檔。")
+
     dossiers = [
         build_dossier(i, row, str(results[str(row["stock_id"])]["snapshot"]), str(results[str(row["stock_id"])]["summary"]))
         for i, row in enumerate(analyzed.to_dict("records"), start=1)
     ]
-    try:
-        portfolio_meta = await run_portfolio_selection(
-            dossiers,
-            max_top=max_top,
-            model=portfolio_model,
-            market_regime=market_regime,
-        )
-        raw_text = str(getattr(portfolio_meta, "text", "") or "")
-    except Exception as error:  # noqa: BLE001
-        message = (
-            f"❌ {target_date.isoformat()} 22:00 AI 彙總選股失敗"
-            f"（Vertex AI 模型 `{portfolio_model}` 呼叫異常，為確保決策品質未降級至免費版）："
-            f"{type(error).__name__}: {error}"
-        )
-        print(message)
-        if post_discord:
-            post_messages_to_discord([message], channel_id, bot_token)
-        return 1
-    decision = parse_portfolio_json(raw_text, set(results.keys()), max_top)
+    portfolio_meta = None
+    raw_text = ""
+    if dossiers:
+        try:
+            portfolio_meta = await run_portfolio_selection(
+                dossiers,
+                max_top=max_top,
+                model=portfolio_model,
+                market_regime=market_regime,
+                selection_mode="trend",
+            )
+            raw_text = str(getattr(portfolio_meta, "text", "") or "")
+        except Exception as error:  # noqa: BLE001
+            message = (
+                f"❌ {target_date.isoformat()} 22:00 AI 彙總選股失敗"
+                f"（Vertex AI 模型 `{portfolio_model}` 呼叫異常，為確保決策品質未降級至免費版）："
+                f"{type(error).__name__}: {error}"
+            )
+            print(message)
+            if post_discord:
+                post_messages_to_discord([message], channel_id, bot_token)
+            return 1
+        decision = parse_portfolio_json(raw_text, set(analyzed["stock_id"].astype(str)), max_top)
+    else:
+        decision = {
+            "market_light": str((market_regime or {}).get("light", "")),
+            "market_comment": "今日候選股皆被 Stage 0 硬性排雷攔截，無符合條件之進場標的。",
+            "top_picks": [],
+            "watchlist": [],
+            "avoid": [],
+        }
+    if decision is not None:
+        decision = enforce_sector_cap(decision, analyzed)
+        decision = merge_pre_filtered_avoid(decision, pre_filtered_avoid)
     portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
     # 只要有經過 AI 分析，即確保所有完成深度分析的標的皆已生成戰情室 HTML 並發布至 GitHub，
@@ -847,7 +1096,7 @@ async def run_pipeline(
         target_date,
         decision,
         raw_text,
-        analyzed,
+        selected_all,
         results,
         failures,
         total_signals=total_signals,
@@ -888,7 +1137,7 @@ async def run_pipeline(
     if save_gsheet and decision is not None:
         try:
             cache.ensure_workbook_schema()
-            picks = pd.DataFrame(build_pick_rows(target_date, decision, analyzed, results))
+            picks = pd.DataFrame(build_pick_rows(target_date, decision, selected_all, results))
             if not picks.empty:
                 worksheet = cache._get_worksheet(PICKS_SHEET_NAME)  # noqa: SLF001
                 cache._upsert_delta(worksheet, picks, key_col="pk_key")  # noqa: SLF001
@@ -1074,6 +1323,7 @@ async def run_rebound_pipeline(
                 model=portfolio_model,
                 market_regime=market_regime,
                 strategy_context=rebound_context,
+                selection_mode="rebound",
             )
             raw_text = str(getattr(portfolio_meta, "text", "") or "")
             decision = parse_portfolio_json(raw_text, set(ai_results.keys()), max_top)

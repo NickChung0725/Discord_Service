@@ -4,6 +4,29 @@
 
 ---
 
+## [v4.0.0] - 2026-10-29
+### ✨ 新增功能與架構升級 (Added & Changed)
+* **SASD v4.0 實戰邏輯邊界補丁**：
+  * **Stage 2 Prompt 分流（22:30 反彈 vs 22:00 趨勢）**：反彈模式不再套用「17MA 持續下彎扣 15 分」條款，改以「45MA/117MA 守穩 + 收盤強度 >= 0.55 + 反彈至 17MA 空間 >= 5%」檢核，且第一目標價優先設為 17MA 反壓（[`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py)）。
+  * **Stage 2 前 12 檔 Python 排序改良**：裁剪不再僅依 Stage 1 score，新增「天量過熱(>4.5x) / 已超漲(>17MA+12%)」降權，並在進入 Stage 2 Prompt 前強制同產業最多 3 檔（[`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py)）。
+  * **舊快取自動升級（Schema Check）**：命中快取時若 `ai_summary_json` 缺少 `trade_plan` 或 `trend_tags`，視為 cache miss 重新呼叫 Stage 1 更新快取（[`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py), [`tests/test_fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_fundamental_analyzer.py)）。
+
+* **SASD v4.0 雙軌 AI 診斷與嚴選升級**（Stage 0 Python 預篩 → Stage 1 單股審計 → Stage 2 紅藍軍辯證）：
+  * **Stage 1 Prompt 全面改寫**：Step 1~7 先審計、最後才評分（避免錨定偏誤）；亮點/風險改為 1~4 點動態（重質不重量，天量過熱/法人倒貨/業外扭曲不得遺漏）；`SUMMARY_JSON` 新增 `trend_tags`（含 `fcf_nature` 區分戰略擴產 vs 結構性失血）與 `trade_plan`（進場觸發、目標價、停損、紅軍失效條件）。
+  * **Stage 0 RSS 清洗與 Sanitizer**：新增 `filter_and_clean_rss()`（剔除盤中標題黨、逾 180 天舊聞、標題與摘要重複 > 85% 之空殼並標註無內文）、`sanitize_stage1_json()`（法說無內容強制 `無/無資料`、亮點/風險 1~4 點、補齊結構、`2026Q9` → `2026-09`、目標價不高於收盤加註警示）。
+  * **Stage 0 硬性排雷**：`/stock_ai` 為軟性「🚨 系統硬傷警示」；22:00 排程對「日量 < 300 張」或「營益率 < 0 且合約負債 < 1 億」直接硬性攔截並併入最終 `avoid`（`hard_prefilter` / `merge_pre_filtered_avoid`，日量攔截於 Stage 1 之前執行以節省 Token）。
+  * **Stage 1 模型路由**：預設改為付費版 `gemini-3.8-flash`（`.env` `STAGE1_MODEL`），不再降級 flash-lite（`STAGE1_FALLBACK_MODEL` 可選填）。
+  * **`/stock_ai` 新增 `tier` 參數**：`標準 (3.8 Flash)`（預設）或 `大師 (ARGON)`（Vertex AI `VERTEX_MODEL`）；回覆最後附「交易計畫」Embed。
+  * **Stage 2 Prompt 改寫（CIO/CRO 紅藍軍）**：條件式進場觸發 `entry_zone_and_trigger`、目標價防呆、景氣循環股 P/E 上限、FCF 擴產豁免與一票否決；輸出欄位改為 `bull_thesis` / `bear_case_and_invalidation` / `sector`。Discord 推播與 `AI_Daily_Picks`（`entry_thesis` / `risk_note`）同步改讀新欄位（保留舊欄位 fallback）。
+  * **Stage 2 組合風控**：候選 > 15 檔時依 Stage 1 評分保留前 12 檔（`limit_stage2_candidates`）；**同產業最多入選 2 檔**由 Python 強制執行（`enforce_sector_cap`，超額移入 watchlist）。
+  * **資料卡 [B] 擴充**：新增 PE/PB、毛利率/營益率 QoQ·YoY、近 3 月平均營收 YoY 與動能判讀（`build_snapshot_trend_lines`）。
+  * 相關檔案：[`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py), [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py), [`ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/ai_service.py), [`stock_ai_command.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/stock_ai_command.py), [`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py), [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py), [`tests/test_stage_guards.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_stage_guards.py)
+
+### 🔧 優化與修正 (Changed)
+* `/stock_ai` 人類可讀診斷文字截斷上限由 3800 提高至 6000 字（Step 1~7 內容較長）。
+
+---
+
 ## [v3.5.1] - 2026-10-28
 ### ✨ 新增功能與架構升級 (Added & Changed)
 * **Google AI Studio 呼叫升級為 `models.generate_content` + ThinkingConfig(128)，並新增單次 AI 呼叫日誌（每日單檔）**：

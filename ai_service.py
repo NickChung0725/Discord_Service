@@ -53,10 +53,21 @@ DEFAULT_VERTEX_LOCATION = "us-central1"
 
 GOOGLE_AI_THINKING_BUDGET = 128
 
-# 22:00 單股基本面診斷：先用 gemini-flash-latest，配合較長等待以避免 free-tier quota
-DIAG_PRIMARY_MODEL = "gemini-flash-latest"
+# SASD v4.0 Stage 1 單股基本面診斷：改用付費版 gemini-3.8-flash（可由 .env STAGE1_MODEL 覆寫）。
+# 停用 flash-lite 降級（避免財報推論 JSON 欄位違規與期別錯亂）；如需降級可設定 STAGE1_FALLBACK_MODEL。
+DEFAULT_STAGE1_MODEL = "gemini-3.8-flash"
+DIAG_PRIMARY_MODEL = DEFAULT_STAGE1_MODEL
 DIAG_PRIMARY_RETRY_DELAYS_SECONDS = (15.0, 30.0, 45.0)
-DIAG_FALLBACK_MODEL = "gemini-flash-lite-latest"
+DIAG_FALLBACK_MODEL: str | None = None
+
+
+def get_stage1_model() -> str:
+    """Stage 1 model from .env STAGE1_MODEL (read lazily so load_dotenv ordering never matters)."""
+    return (os.getenv("STAGE1_MODEL") or DEFAULT_STAGE1_MODEL).strip()
+
+
+def get_stage1_fallback_model() -> str | None:
+    return (os.getenv("STAGE1_FALLBACK_MODEL") or "").strip() or None
 DIAG_FALLBACK_RETRY_DELAYS_SECONDS = (5.0, 10.0, 20.0)
 
 _RETRYABLE_ERROR_MARKERS = (
@@ -608,12 +619,20 @@ async def ask_gemini_with_meta(
     return await asyncio.to_thread(run)
 
 
-async def ask_gemini_diagnosis_with_meta(prompt: str, *, tag: str | None = None) -> AIResponse:
+async def ask_gemini_diagnosis_with_meta(
+    prompt: str,
+    *,
+    tag: str | None = None,
+    master: bool = False,
+) -> AIResponse:
+    """Stage 1 單股診斷。master=True（/stock_ai 大師模式）改走 Vertex AI 的 ARGON 決策模型 (VERTEX_MODEL)。"""
+    if master:
+        return await ask_vertex_ai_with_meta(prompt, tag=tag)
     return await ask_gemini_with_meta(
         prompt,
         tag=tag,
-        model=DIAG_PRIMARY_MODEL,
-        fallback_model=DIAG_FALLBACK_MODEL,
+        model=get_stage1_model(),
+        fallback_model=get_stage1_fallback_model(),
         retry_delays_seconds=DIAG_PRIMARY_RETRY_DELAYS_SECONDS,
         fallback_retry_delays_seconds=DIAG_FALLBACK_RETRY_DELAYS_SECONDS,
         retryable_predicate=_is_diag_retryable_error,

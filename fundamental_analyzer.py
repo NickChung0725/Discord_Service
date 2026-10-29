@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+import difflib
 import html
 import json
 import logging
@@ -42,6 +44,198 @@ from fundamental_config import PROMPT_TEMPLATES
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 _OUTPUT_DIR = Path(__file__).resolve().parent / "generated_charts"
 _DEFAULT_REPORTS_DIR = Path(__file__).resolve().parent / "finmind_reports"
+
+# --------------------------------------------------------------------------- #
+# SASD v4.0 Stage 0：Google News RSS 雜訊清洗（純 Python、0 Token）
+# --------------------------------------------------------------------------- #
+NOISE_TITLE_PATTERNS = [
+    "股市爆料同學會",
+    "今日股價與討論",
+    "盤中焦點",
+    "即時新聞】",
+    "亮燈漲停",
+    "股價走強",
+    "股價上攻",
+    "早盤",
+]
+RSS_MAX_AGE_DAYS = 180
+RSS_TITLE_SUMMARY_DUP_RATIO = 0.85
+RSS_NO_CONTENT_NOTE = "（僅有媒體標題，無公開具體展望數據，嚴禁據此推論）"
+
+# Stage 0 硬性排雷門檻（/stock_ai 軟性警示；22:00 排程硬性攔截）
+HARD_MIN_VOLUME_LOTS = 300
+HARD_MIN_CONTRACT_LIAB_YI = 1.0
+
+
+def _rss_item_too_old(item: dict, *, now: datetime | None = None) -> bool:
+    raw = str(item.get("pubDate", "") or "").strip()
+    if not raw:
+        return False
+    try:
+        published = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return False
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    return (reference - published) > timedelta(days=RSS_MAX_AGE_DAYS)
+
+
+def filter_and_clean_rss(
+    news_items: list[dict],
+    is_guidance: bool = False,
+    *,
+    now: datetime | None = None,
+) -> list[dict]:
+    """清洗 RSS 新聞，回傳最多 5 筆。
+
+    1. 剔除 CMoney 盤中自動生成的看圖說故事廢文與討論區連結（NOISE_TITLE_PATTERNS）。
+    2. 剔除發布時間超過 180 天之過期舊聞。
+    3. 摘要為空、或與標題重複度 > 85%（如富果空殼摘要）時，強制標註無內文，防止 AI 腦補。
+       （is_guidance=True 時，摘要為空或與標題完全相同亦視為空殼。）
+    摘要欄位優先使用 `summary`，其次為 RSS 解析出的 `description`。
+    """
+    valid_items: list[dict] = []
+    for original in news_items:
+        item = dict(original)
+        title = str(item.get("title", "") or "")
+        if any(pat in title for pat in NOISE_TITLE_PATTERNS):
+            continue
+        if _rss_item_too_old(item, now=now):
+            continue
+
+        key = "summary" if "summary" in item else "description"
+        summary = str(item.get(key, "") or "")
+        is_shell = False
+        if is_guidance and (not summary.strip() or summary.strip() == title.strip()):
+            is_shell = True
+        elif (
+            summary.strip()
+            and difflib.SequenceMatcher(None, title.strip(), summary.strip()).ratio()
+            > RSS_TITLE_SUMMARY_DUP_RATIO
+        ):
+            is_shell = True
+        if is_shell:
+            item[key] = RSS_NO_CONTENT_NOTE
+        valid_items.append(item)
+    return valid_items[:5]
+
+
+def build_hard_warnings(metrics: dict) -> list[str]:
+    """Stage 0 硬傷判斷（共用）：回傳觸發的警示文字清單；資料缺漏者不判定。
+
+    metrics 鍵：vol_lots、op_margin_pct、contract_liab（億）。
+    """
+    warnings: list[str] = []
+    vol = metrics.get("vol_lots")
+    if vol is not None and vol < HARD_MIN_VOLUME_LOTS:
+        warnings.append(f"最新日成交量 {vol:,.0f} 張 < {HARD_MIN_VOLUME_LOTS} 張（流動性陷阱）")
+    op_margin = metrics.get("op_margin_pct")
+    contract_liab = metrics.get("contract_liab")
+    if op_margin is not None and op_margin < 0 and (
+        contract_liab is None or contract_liab < HARD_MIN_CONTRACT_LIAB_YI
+    ):
+        cl_text = "N/A" if contract_liab is None else f"{contract_liab:,.2f} 億"
+        warnings.append(
+            f"最近一季本業虧損（營益率 {op_margin:.2f}%）且合約負債 {cl_text} < {HARD_MIN_CONTRACT_LIAB_YI:g} 億，無訂單保護"
+        )
+    return warnings
+
+
+# --------------------------------------------------------------------------- #
+# SASD v4.0 Stage 1 SUMMARY_JSON 強制防呆（Sanitizer）
+# --------------------------------------------------------------------------- #
+_NO_GUIDANCE_CLAIMS = {"", "無", "无", "無資料", "None", "none", "N/A", "null"}
+_BAD_QUARTER_RE = re.compile(r"(\d{4})\s*Q(0?[5-9]|1[0-2])(?!\d)")
+_MAX_LIST_ITEMS = 4
+_TREND_TAG_KEYS = ("margin_trend", "rev_momentum", "fcf_nature")
+_TRADE_PLAN_KEYS = (
+    "tactical_type",
+    "entry_trigger",
+    "target_price_1",
+    "target_price_2",
+    "stop_loss_price",
+    "invalidation",
+)
+_PRICE_RE = re.compile(r"\d[\d,]*\.?\d*")
+
+
+def _fix_bad_quarters(value: object) -> object:
+    """把模型誤將月份寫成季度（如 2026Q9）校正為 2026-09。"""
+    if isinstance(value, str):
+        return _BAD_QUARTER_RE.sub(lambda m: f"{m.group(1)}-{int(m.group(2)):02d}", value)
+    if isinstance(value, list):
+        return [_fix_bad_quarters(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _fix_bad_quarters(v) for k, v in value.items()}
+    return value
+
+
+def _first_price(text: object) -> float | None:
+    match = _PRICE_RE.search(str(text or ""))
+    if not match:
+        return None
+    try:
+        return float(match.group(0).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def sanitize_stage1_json(summary_json: dict, latest_close: float | None = None) -> dict:
+    """解析 SUMMARY_JSON 後的硬校正，避免小模型違規輸出污染快取。
+
+    - 法說無實質內容 → claims="無"、verdict="無資料"。
+    - highlights/risks 至少 1 筆、至多 4 筆。
+    - 補齊 trend_tags / trade_plan 結構；目標價不高於最新收盤價時加註警示。
+    - 期別防呆：2026Q9 → 2026-09。
+    """
+    summary_json = _fix_bad_quarters(summary_json)  # type: ignore[assignment]
+
+    guidance = summary_json.get("guidance")
+    guidance = dict(guidance) if isinstance(guidance, dict) else {}
+    claims = str(guidance.get("claims", "")).strip()
+    if claims in _NO_GUIDANCE_CLAIMS or "無公開" in claims or len(claims) < 6:
+        guidance["claims"] = "無"
+        guidance["verdict"] = "無資料"
+    summary_json["guidance"] = guidance
+
+    highlights = summary_json.get("highlights")
+    if not isinstance(highlights, list) or not highlights:
+        highlights = ["無顯著基本面亮點"]
+    summary_json["highlights"] = highlights[:_MAX_LIST_ITEMS]
+    risks = summary_json.get("risks")
+    if not isinstance(risks, list) or not risks:
+        risks = ["需留意大盤系統性波動風險"]
+    summary_json["risks"] = risks[:_MAX_LIST_ITEMS]
+
+    tags = summary_json.get("trend_tags")
+    tags = dict(tags) if isinstance(tags, dict) else {}
+    for key in _TREND_TAG_KEYS:
+        tags.setdefault(key, "")
+    summary_json["trend_tags"] = tags
+
+    plan = summary_json.get("trade_plan")
+    plan = dict(plan) if isinstance(plan, dict) else {}
+    for key in _TRADE_PLAN_KEYS:
+        plan.setdefault(key, "")
+    if latest_close and latest_close > 0:
+        for key in ("target_price_1", "target_price_2"):
+            price = _first_price(plan.get(key))
+            text = str(plan.get(key, ""))
+            if price is not None and price <= latest_close and not text.startswith("⚠️"):
+                plan[key] = f"⚠️目標價未高於最新收盤 {latest_close:,.2f}，視為無效｜{text}"
+    summary_json["trade_plan"] = plan
+    return summary_json
+
+
+def _to_float(value: object) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if pd.isna(number) else number
 
 
 @dataclass
@@ -126,6 +320,7 @@ class FundamentalAnalyzer:
             items = self._fetch_google_news_rss(query)
         except Exception:
             return "（本次新聞抓取失敗）"
+        items = filter_and_clean_rss(items)
 
         if not items:
             return "（本次沒有抓到相關新聞）"
@@ -156,6 +351,7 @@ class FundamentalAnalyzer:
             for it in items
             if any(k in f"{it.get('title', '')}{it.get('description', '')}" for k in self._OUTLOOK_KEYWORDS)
         ]
+        relevant = filter_and_clean_rss(relevant, is_guidance=True)
         if not relevant:
             return title_block + "\n（近期無公開法說展望：沒有找到相關報導）"
 
@@ -186,8 +382,6 @@ class FundamentalAnalyzer:
         df_chip = self.slice_sliding_window(df_chip, 8)
 
         parts: list[str] = []
-        parts.append(PROMPT_TEMPLATES["system_rules"])
-        parts.append("\n==================================================")
         parts.append(f"【標的：{stock_id} — Google Sheets 法人級深度財報與籌碼數據包】")
 
         # Table 1: IS structure + expense ratio + attribution
@@ -517,12 +711,45 @@ class FundamentalAnalyzer:
         except Exception:
             return ""
 
+    def get_hard_screen_metrics(self, stock_id: str) -> dict:
+        """Stage 0：取最新收盤/日量（本地 prices.csv）與最近一季營益率、合約負債（億）。缺資料者為 None。"""
+        metrics: dict = {"close": None, "vol_lots": None, "op_margin_pct": None, "contract_liab": None}
+        try:
+            prices = self._find_latest_prices_csv_for_stock(stock_id)
+            if not prices.empty:
+                prices = prices.copy()
+                prices["date"] = pd.to_datetime(prices["date"], errors="coerce")
+                prices["close"] = pd.to_numeric(prices["close"], errors="coerce")
+                prices = (
+                    prices.dropna(subset=["date", "close"])
+                    .sort_values("date")
+                    .drop_duplicates(subset=["date"], keep="last")
+                    .reset_index(drop=True)
+                )
+                if not prices.empty:
+                    metrics["close"] = float(prices.iloc[-1]["close"])
+                    metrics["vol_lots"] = _to_float(_extract_latest_volume_metrics(prices).get("vol_lots"))
+        except Exception:  # noqa: BLE001
+            logger.debug("hard-screen price metrics unavailable for %s", stock_id, exc_info=True)
+        try:
+            wide = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
+            if not wide.empty:
+                if "raw_date" in wide.columns:
+                    wide = wide.sort_values("raw_date")
+                latest = wide.iloc[-1].to_dict()
+                metrics["op_margin_pct"] = _to_float(latest.get("op_margin_pct"))
+                metrics["contract_liab"] = _to_float(latest.get("contract_liab_亿元"))
+        except Exception:  # noqa: BLE001
+            logger.debug("hard-screen wide metrics unavailable for %s", stock_id, exc_info=True)
+        return metrics
+
     async def run_full_diagnosis(
         self,
         stock_id: str,
         *,
         force_ai: bool = False,
         publish_war_room: bool = True,
+        master: bool = False,
     ) -> DiagnosisReport:
         watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
         records = self.cache._get_records_cached(watchlist)  # noqa: SLF001
@@ -543,7 +770,23 @@ class FundamentalAnalyzer:
 
         cached_summary = str(row.get("ai_summary_json", "")).strip() if row else ""
         cached_period = str(row.get("ai_cached_period", "")).strip() if row else ""
-        if row and not force_ai and cache_period and cached_summary and cached_period == cache_period:
+
+        # Schema check: 舊快取（缺 trade_plan / trend_tags）視為 cache miss，自動重新呼叫 Stage 1 更新。
+        cached_data = self._parse_summary(cached_summary) if cached_summary else None
+        schema_ok = bool(
+            isinstance(cached_data, dict)
+            and isinstance(cached_data.get("trade_plan"), dict)
+            and isinstance(cached_data.get("trend_tags"), dict)
+        )
+
+        if (
+            row
+            and not force_ai
+            and cache_period
+            and cached_summary
+            and cached_period == cache_period
+            and schema_ok
+        ):
             war_room_url = str(row.get("war_room_url", "")).strip() or None
             if publish_war_room and not war_room_url:
                 try:
@@ -572,15 +815,18 @@ class FundamentalAnalyzer:
             )
 
         context = self.build_markdown_context(stock_id, include_outlook=True)
-        prompt = (
-            context
-            + "\n\n==================================================\n"
-            + "【任務】\n"
-            + PROMPT_TEMPLATES["full_diagnosis"]
-        )
-        meta = await ask_gemini_diagnosis_with_meta(prompt, tag=f"stock_diag:{stock_id}")
+        # Stage 0 軟性警示：不擋股票，僅注入「系統硬傷警示」交由 AI 診斷。
+        hard_metrics = self.get_hard_screen_metrics(stock_id)
+        hard_warnings = build_hard_warnings(hard_metrics)
+        if hard_warnings:
+            context += "\n\n🚨 系統硬傷警示（Python 預篩，請於 Step 5~7 列入風險並反映於評分與操作定位）：\n" + "\n".join(
+                f"- {w}" for w in hard_warnings
+            )
+        latest_close = hard_metrics.get("close")
+        prompt = PROMPT_TEMPLATES["full_diagnosis"].replace("{DATA_PACKAGE_PLACEHOLDER}", context)
+        meta = await ask_gemini_diagnosis_with_meta(prompt, tag=f"stock_diag:{stock_id}", master=master)
         raw_ai_text = meta.text
-        human_text, _parsed = self._split_ai_output(raw_ai_text)
+        human_text, _parsed = self._split_ai_output(raw_ai_text, latest_close=latest_close)
         human_text = f"分析模型：{meta.model_version}\n" + human_text
 
         war_room_url = None
@@ -589,7 +835,7 @@ class FundamentalAnalyzer:
         elif row:
             war_room_url = str(row.get("war_room_url", "")).strip() or None
 
-        summary = self._summarize_ai(raw_ai_text, model_version=meta.model_version)
+        summary = self._summarize_ai(raw_ai_text, model_version=meta.model_version, latest_close=latest_close)
         self.cache._update_watchlist_master(  # noqa: SLF001
             watchlist,
             stock_id,
@@ -602,7 +848,7 @@ class FundamentalAnalyzer:
             },
         )
 
-        rendered = human_text[:3800] or self._render_summary_text(summary)
+        rendered = human_text[:6000] or self._render_summary_text(summary)
         return DiagnosisReport(
             stock_id=stock_id,
             ai_text=rendered,
@@ -615,8 +861,9 @@ class FundamentalAnalyzer:
 
     async def run_targeted_qa(self, stock_id: str, user_prompt: str) -> str:
         context = self.build_markdown_context(stock_id)
-        prompt = (
-            context
+        prompt = (PROMPT_TEMPLATES["system_rules"]
+            + "\n\n==================================================\n"
+            + context
             + "\n\n==================================================\n"
             + "【使用者詢問問題】\n"
             + user_prompt.strip()
@@ -947,8 +1194,13 @@ class FundamentalAnalyzer:
     _SUMMARY_MARKER = "===SUMMARY_JSON==="
     _SUMMARY_TEXT_FALLBACK_LIMIT = 2500
 
-    def _split_ai_output(self, ai_text: str) -> tuple[str, dict | None]:
-        """拆出 (人類可讀分析文字, 結構化摘要 dict)；解析失敗時 dict 為 None。"""
+    def _split_ai_output(
+        self, ai_text: str, *, latest_close: float | None = None
+    ) -> tuple[str, dict | None]:
+        """拆出 (人類可讀分析文字, 結構化摘要 dict)；解析失敗時 dict 為 None。
+
+        解析成功的 dict 會經 sanitize_stage1_json 強制防呆校正。
+        """
         cleaned = ai_text.strip()
         if self._SUMMARY_MARKER not in cleaned:
             return cleaned, None
@@ -960,16 +1212,20 @@ class FundamentalAnalyzer:
             parsed = json.loads(match.group(0))
         except (json.JSONDecodeError, ValueError):
             return human.strip(), None
-        return human.strip(), parsed if isinstance(parsed, dict) else None
+        if not isinstance(parsed, dict):
+            return human.strip(), None
+        return human.strip(), sanitize_stage1_json(parsed, latest_close)
 
-    def _summarize_ai(self, ai_text: str, *, model_version: str = "") -> str:
+    def _summarize_ai(
+        self, ai_text: str, *, model_version: str = "", latest_close: float | None = None
+    ) -> str:
         """產生寫入 00_Watchlist_Master.ai_summary_json 的內容：優先為結構化 JSON，否則退回較長的純文字。
 
         SASD v3.5.1: 必須能在快取命中時仍顯示「分析模型」。
         - 若 AI 回傳了 SUMMARY_JSON，將 model_version 填入 JSON 內的 model_version 欄位。
         - 若回傳非 JSON 純文字，則直接把 "分析模型：..." 前綴寫入摘要文字。
         """
-        human, parsed = self._split_ai_output(ai_text)
+        human, parsed = self._split_ai_output(ai_text, latest_close=latest_close)
         if parsed is not None:
             if model_version:
                 parsed["model_version"] = model_version
@@ -996,6 +1252,10 @@ class FundamentalAnalyzer:
         if data.get("model_version"):
             prefix = f"分析模型：{data.get('model_version')}\n"
         lines = [prefix + f"**{data.get('verdict', '')}**（體質評分 {data.get('score', 'N/A')}）"]
+        tags = data.get("trend_tags") if isinstance(data.get("trend_tags"), dict) else {}
+        tag_parts = [str(v) for v in (tags.get(k) for k in _TREND_TAG_KEYS) if v]
+        if tag_parts:
+            lines.append("趨勢標籤：" + "｜".join(tag_parts))
         for label, key in (("亮點", "highlights"), ("風險", "risks")):
             items = data.get(key) or []
             if isinstance(items, list) and items:
@@ -1013,17 +1273,108 @@ class FundamentalAnalyzer:
                 f"法說展望【{guidance.get('verdict', '無資料')}】：{guidance.get('claims', '')}"
                 f"｜佐證：{guidance.get('reality_check', '')}"
             )
+        plan = data.get("trade_plan") if isinstance(data.get("trade_plan"), dict) else {}
+        if any(plan.get(k) for k in _TRADE_PLAN_KEYS):
+            lines.append(
+                f"交易計畫：{plan.get('tactical_type', '')}｜進場：{plan.get('entry_trigger', '')}"
+                f"｜目標1：{plan.get('target_price_1', '')}｜目標2：{plan.get('target_price_2', '')}"
+                f"｜停損：{plan.get('stop_loss_price', '')}｜失效：{plan.get('invalidation', '')}"
+            )
         return "\n".join(lines)
 
-    def build_quant_snapshot(self, stock_id: str) -> str:
-        """由 Google Sheets 快取精確取出最新一期財務/領先指標/籌碼，供跨股決策資料卡 [B] 區使用（不經 AI）。"""
+    @staticmethod
+    def build_snapshot_trend_lines(
+        wide_df: pd.DataFrame,
+        rev_df: pd.DataFrame,
+        bs_latest: dict,
+        close: float | None,
+    ) -> list[str]:
+        """SASD v4.0 資料卡 [B] 跨期與估值錨點：PE/PB、毛利率/營益率 QoQ·YoY、近 3 月平均營收 YoY。"""
 
-        def _latest(sheet_name: str) -> dict:
+        def _f(value: object, suffix: str = "") -> str:
+            number = _to_float(value)
+            return "N/A" if number is None else f"{number:,.2f}{suffix}"
+
+        def _delta(cur: object, prev: object) -> str:
+            c, p = _to_float(cur), _to_float(prev)
+            return "N/A" if c is None or p is None else f"{c - p:+.2f}%"
+
+        lines: list[str] = []
+        latest: dict = {}
+        prev_q: dict = {}
+        prev_y: dict = {}
+        if wide_df is not None and not wide_df.empty:
+            rows = wide_df.to_dict("records")
+            latest = rows[-1]
+            prev_q = rows[-2] if len(rows) >= 2 else {}
+            match = re.fullmatch(r"(\d{4})Q([1-4])", str(latest.get("year_qtr", "")).strip())
+            if match:
+                target = f"{int(match.group(1)) - 1}Q{match.group(2)}"
+                prev_y = next((r for r in rows if str(r.get("year_qtr", "")).strip() == target), {})
+
+        ttm_eps = _to_float(latest.get("ttm_eps"))
+        if close is not None and ttm_eps is not None and ttm_eps > 0:
+            pe_text = f"{close / ttm_eps:,.2f} 倍（收盤 {close:,.2f} / TTM EPS {ttm_eps:,.2f}）"
+        elif close is None:
+            pe_text = "N/A（無最新收盤價）"
+        else:
+            pe_text = "N/A（TTM EPS <= 0 或缺漏）"
+        parent_equity = _to_float(bs_latest.get("parent_equity")) if bs_latest else None
+        capital_stock = _to_float(bs_latest.get("capital_stock")) if bs_latest else None
+        if close is not None and parent_equity and capital_stock and parent_equity > 0 and capital_stock > 0:
+            bps = parent_equity / (capital_stock / 10.0)
+            pb_text = f"{close / bps:,.2f} 倍（每股淨值 {bps:,.2f}）"
+        else:
+            pb_text = "N/A"
+        lines.append(f"  - 估值錨點：本益比 PE {pe_text}｜股價淨值比 PB {pb_text}")
+
+        if latest:
+            lines.append(
+                "  - 三率跨期變動（{q}）：毛利率 {g}（QoQ {gq}, YoY {gy}）｜營益率 {o}（QoQ {oq}, YoY {oy}）".format(
+                    q=latest.get("year_qtr", "N/A"),
+                    g=_f(latest.get("gross_margin_pct"), "%"),
+                    gq=_delta(latest.get("gross_margin_pct"), prev_q.get("gross_margin_pct")),
+                    gy=_delta(latest.get("gross_margin_pct"), prev_y.get("gross_margin_pct")),
+                    o=_f(latest.get("op_margin_pct"), "%"),
+                    oq=_delta(latest.get("op_margin_pct"), prev_q.get("op_margin_pct")),
+                    oy=_delta(latest.get("op_margin_pct"), prev_y.get("op_margin_pct")),
+                )
+            )
+
+        if rev_df is not None and not rev_df.empty and "yoy_pct" in rev_df.columns:
+            yoys = [v for v in (_to_float(x) for x in rev_df["yoy_pct"].tail(3).tolist()) if v is not None]
+            latest_yoy = _to_float(rev_df["yoy_pct"].iloc[-1])
+            if yoys and latest_yoy is not None:
+                avg3 = sum(yoys) / len(yoys)
+                if latest_yoy > avg3 + 5:
+                    trend = "加速成長"
+                elif latest_yoy < avg3 - 5:
+                    trend = "高檔鈍化／動能趨緩"
+                else:
+                    trend = "大致持平"
+                lines.append(
+                    f"  - 營收動能：近 {len(yoys)} 個月平均 YoY {avg3:,.2f}%｜最新單月 YoY {latest_yoy:,.2f}%（{trend}）"
+                )
+        return lines
+
+    def build_quant_snapshot(self, stock_id: str, *, close: float | None = None) -> str:
+        """由 Google Sheets 快取精確取出最新一期財務/領先指標/籌碼，供跨股決策資料卡 [B] 區使用（不經 AI）。
+
+        close：最新收盤價（供計算 PE/PB）；未提供時估值欄位標註 N/A。
+        """
+
+        def _history(sheet_name: str) -> pd.DataFrame:
             frame = self.cache._read_stock_rows(self.cache._get_worksheet(sheet_name), stock_id)  # noqa: SLF001
             if frame.empty:
-                return {}
+                return frame
             if "raw_date" in frame.columns:
                 frame = frame.sort_values("raw_date")
+            return frame.reset_index(drop=True)
+
+        def _latest(sheet_name: str) -> dict:
+            frame = _history(sheet_name)
+            if frame.empty:
+                return {}
             return frame.iloc[-1].to_dict()
 
         def _fmt(value: object, suffix: str = "") -> str:
@@ -1035,9 +1386,12 @@ class FundamentalAnalyzer:
                 return str(value)
             return f"{number:,.2f}{suffix}"
 
-        wide = _latest("05_AI_Metrics_Wide")
-        revenue = _latest("01_Monthly_Revenue")
+        wide_df = _history("05_AI_Metrics_Wide")
+        rev_df = _history("01_Monthly_Revenue")
+        wide = wide_df.iloc[-1].to_dict() if not wide_df.empty else {}
+        revenue = rev_df.iloc[-1].to_dict() if not rev_df.empty else {}
         chip = _latest("07_Chip_Summary")
+        bs_latest = _latest("03_Balance_Sheet")
 
         lines = [
             (
@@ -1066,6 +1420,7 @@ class FundamentalAnalyzer:
                 f"/{_fmt(chip.get('trust_net_buy_20d_lots'))} 張｜三大法人 5日 {_fmt(chip.get('three_inst_net_5d_lots'))} 張"
             ),
         ]
+        lines.extend(self.build_snapshot_trend_lines(wide_df, rev_df, bs_latest, close))
         return "\n".join(lines)
 
     def _escape_html(self, text: str) -> str:

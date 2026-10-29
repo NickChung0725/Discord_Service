@@ -20,7 +20,7 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
                 "max_chip_raw_date": "2026-10-14",
                 "ai_cache_day": "2026-10-16",
                 "ai_cached_period": "2026Q2_2026-09_2026-08-01_2026-10-14",
-                "ai_summary_json": "cached summary",
+                "ai_summary_json": json.dumps({"verdict": "v", "score": 80, "trend_tags": {}, "trade_plan": {}}),
                 "ai_model_version": "gemini-cached",
                 "war_room_url": "https://example.invalid/2330_fund.html",
             }
@@ -33,8 +33,36 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
         mock_ask.assert_not_awaited()
         self.assertTrue(report.cached)
         self.assertTrue(report.ai_text.startswith("分析模型：gemini-cached"))
-        self.assertIn("cached summary", report.ai_text)
+        self.assertIn("體質評分 80", report.ai_text)
         self.assertEqual(report.war_room_url, "https://example.invalid/2330_fund.html")
+
+    async def test_full_diagnosis_reruns_when_cached_summary_schema_is_old(self) -> None:
+        cache = Mock()
+        cache._get_worksheet.return_value = Mock()  # noqa: SLF001
+        cache._get_records_cached.return_value = [  # noqa: SLF001
+            {
+                "stock_id": "2330",
+                "last_fin_qtr": "2026Q2",
+                "last_rev_ym": "2026-09",
+                "max_div_raw_date": "2026-08-01",
+                "max_chip_raw_date": "2026-10-14",
+                "ai_cached_period": "2026Q2_2026-09_2026-08-01_2026-10-14",
+                "ai_summary_json": json.dumps({"verdict": "v", "score": 70}),
+            }
+        ]
+        analyzer = FundamentalAnalyzer(cache)
+        raw = 'text\n===SUMMARY_JSON===\n{"verdict":"v","score":70,"trend_tags":{},"trade_plan":{}}'
+        meta = Mock(text=raw, model_version="gemini-test")
+        with patch.object(analyzer, "build_markdown_context", return_value="ctx"), patch(
+            "fundamental_analyzer.ask_gemini_diagnosis_with_meta", new_callable=AsyncMock, return_value=meta
+        ) as mock_ask:
+            report = await analyzer.run_full_diagnosis("2330", publish_war_room=False)
+
+        mock_ask.assert_awaited_once()
+        self.assertFalse(report.cached)
+        self.assertTrue(report.ai_text.startswith("分析模型：gemini-test"))
+        self.assertIn("text", report.ai_text)
+        self.assertEqual(json.loads(report.summary_json)["score"], 70)
 
     async def test_full_diagnosis_reruns_when_cached_summary_is_empty(self) -> None:
         cache = Mock()

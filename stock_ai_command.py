@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import json
 import re
+from typing import Literal
 
 import discord
 from discord import app_commands
@@ -33,6 +35,40 @@ def _parse_symbols(raw_symbol: str) -> list[str]:
         if t not in unique_tokens:
             unique_tokens.append(t)
     return unique_tokens
+
+
+_TIER_STANDARD = "標準 (3.8 Flash)"
+_TIER_MASTER = "大師 (ARGON)"
+_EMBED_FIELD_LIMIT = 1000
+
+
+def _build_trade_plan_embed(summary_json: str, title: str) -> discord.Embed | None:
+    """將 Stage 1 SUMMARY_JSON 的 trade_plan 轉為 Discord Embed；無交易計畫（舊快取/解析失敗）則回傳 None。"""
+    try:
+        data = json.loads(summary_json)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    plan = data.get("trade_plan")
+    if not isinstance(plan, dict) or not any(str(v).strip() for v in plan.values()):
+        return None
+
+    def _clip(value: object) -> str:
+        text = str(value or "").strip() or "—"
+        return text if len(text) <= _EMBED_FIELD_LIMIT else text[: _EMBED_FIELD_LIMIT - 1] + "…"
+
+    embed = discord.Embed(title=f"📋 {title}｜交易計畫", color=discord.Color.blue())
+    embed.add_field(name="🎯 戰術定位", value=_clip(plan.get("tactical_type")), inline=False)
+    embed.add_field(name="🚪 進場觸發條件", value=_clip(plan.get("entry_trigger")), inline=False)
+    embed.add_field(
+        name="💰 目標價",
+        value=_clip(f"第一目標：{plan.get('target_price_1', '')}\n第二目標：{plan.get('target_price_2', '')}"),
+        inline=False,
+    )
+    embed.add_field(name="🛑 嚴格停損價", value=_clip(plan.get("stop_loss_price")), inline=False)
+    embed.add_field(name="🚨 紅軍失效退場條件", value=_clip(plan.get("invalidation")), inline=False)
+    return embed
 
 
 def _split_discord_chunks(text: str, max_len: int = 1900) -> list[str]:
@@ -90,12 +126,14 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
         symbol="台股代號（必填，單股如 2357，或多股比較如 2357,2330）",
         prompt="想詢問 AI 的特定財報問題（選填；若不填則產出完整體質診斷）",
         force_refresh="是否強制重抓最新資料並重跑 AI 分析（預設 False）",
+        tier="單股診斷模型：標準 (3.8 Flash) 或 大師 (ARGON，付費 Vertex AI)",
     )
     async def stock_ai(
         interaction: discord.Interaction,
         symbol: str,
         prompt: str | None = None,
         force_refresh: bool = False,
+        tier: Literal["標準 (3.8 Flash)", "大師 (ARGON)"] = _TIER_STANDARD,
     ) -> None:
         stock_ids = _parse_symbols(symbol)
         if not stock_ids or any(not _STOCK_ID_PATTERN.fullmatch(sid) for sid in stock_ids):
@@ -144,7 +182,9 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                     else "請針對以上多檔股票的獲利能力（三率與EPS）、CCC營運週轉效率、自由現金流含金量、股利政策與近期法人籌碼進行全方位橫向比較，並給出優劣排序結論。"
                 )
                 combined_prompt = (
-                    "\n\n".join(contexts)
+                    PROMPT_TEMPLATES["system_rules"]
+                    + "\n\n==================================================\n"
+                    + "\n\n==================================================\n".join(contexts)
                     + "\n\n==================================================\n"
                     + "【跨股比較與使用者詢問問題】\n"
                     + user_q
@@ -189,7 +229,9 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
 
         # 依需求：每次 /stock_ai 都重新呼叫 Gemini 產生最新診斷文字
         try:
-            report = await analyzer.run_full_diagnosis(stock_id, force_ai=True)
+            report = await analyzer.run_full_diagnosis(
+                stock_id, force_ai=True, master=(tier == _TIER_MASTER)
+            )
         except Exception:
             logger.exception("Full diagnosis failed for %s", stock_id)
             await interaction.followup.send("❌ AI 診斷失敗，請稍後再試。")
@@ -222,10 +264,17 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
             else None
         )
 
+        plan_embed = _build_trade_plan_embed(report.summary_json, stock_title)
+
         chunks = _split_discord_chunks(full_text)
         for i, chunk in enumerate(chunks):
-            # 互動按鈕掛載在最後一則訊息底下
-            if i == len(chunks) - 1 and view is not None:
-                await interaction.followup.send(chunk, view=view)
+            # 交易計畫 Embed 與互動按鈕掛載在最後一則訊息底下
+            if i == len(chunks) - 1:
+                kwargs: dict = {}
+                if view is not None:
+                    kwargs["view"] = view
+                if plan_embed is not None:
+                    kwargs["embed"] = plan_embed
+                await interaction.followup.send(chunk, **kwargs)
             else:
                 await interaction.followup.send(chunk)
