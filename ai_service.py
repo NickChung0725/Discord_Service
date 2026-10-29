@@ -625,26 +625,72 @@ async def ask_gemini_diagnosis_with_meta(
     tag: str | None = None,
     master: bool = False,
 ) -> AIResponse:
-    """Stage 1 單股診斷。master=True（/stock_ai 大師模式）改走 Vertex AI 的 ARGON 決策模型 (VERTEX_MODEL)。"""
+    """Stage 1 單股診斷。
+
+    Routing (2026-10):
+    - master=True（/stock_ai 大師模式）：直接走 Vertex AI（VERTEX_STAGE1_MODEL）。
+    - master=False：先走 Google AI Studio（STAGE1_MODEL）做長等待重試；若仍失敗，
+      自動升級至 Vertex AI（VERTEX_STAGE1_MODEL）確保 22:00 排程/手動診斷可完成。
+    """
+
+    vertex_stage1_model = get_vertex_stage1_model()
     if master:
-        return await ask_vertex_ai_with_meta(prompt, tag=tag)
-    return await ask_gemini_with_meta(
-        prompt,
-        tag=tag,
-        model=get_stage1_model(),
-        fallback_model=get_stage1_fallback_model(),
-        retry_delays_seconds=DIAG_PRIMARY_RETRY_DELAYS_SECONDS,
-        fallback_retry_delays_seconds=DIAG_FALLBACK_RETRY_DELAYS_SECONDS,
-        retryable_predicate=_is_diag_retryable_error,
-    )
+        return await ask_vertex_ai_with_meta(prompt, tag=tag, model=vertex_stage1_model)
+
+    try:
+        return await ask_gemini_with_meta(
+            prompt,
+            tag=tag,
+            model=get_stage1_model(),
+            fallback_model=get_stage1_fallback_model(),
+            retry_delays_seconds=DIAG_PRIMARY_RETRY_DELAYS_SECONDS,
+            fallback_retry_delays_seconds=DIAG_FALLBACK_RETRY_DELAYS_SECONDS,
+            retryable_predicate=_is_diag_retryable_error,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning(
+            "Stage 1 Google AI Studio failed; escalating to Vertex AI (%s): %s",
+            vertex_stage1_model,
+            error,
+        )
+        return await ask_vertex_ai_with_meta(prompt, tag=tag, model=vertex_stage1_model)
 
 
 # --------------------------------------------------------------------------- #
 # 2. Google Cloud Vertex AI (Paid Tier - for 22:00 / 22:30 Portfolio Decision)
 # --------------------------------------------------------------------------- #
 def get_vertex_model() -> str:
-    """Return configured Vertex AI model from .env VERTEX_MODEL (primary authority)."""
+    """Return configured Vertex AI model from .env VERTEX_MODEL.
+
+    NOTE: Newer routing prefers stage-specific env vars:
+    - VERTEX_STAGE1_MODEL: /stock_ai 專題問答、多股比較、以及 Stage 1 失敗時的付費備援
+    - VERTEX_STAGE2_MODEL: 22:00 / 22:30 跨股彙總決策（Stage 2）
+
+    This function remains for backward compatibility and as a fallback when stage-specific
+    vars are not configured.
+    """
+
     return (os.getenv("VERTEX_MODEL") or DEFAULT_VERTEX_MODEL).strip()
+
+
+def get_vertex_stage1_model() -> str:
+    """Return Vertex AI model for Stage 1 /stock_ai QA and fallback."""
+
+    return (
+        os.getenv("VERTEX_STAGE1_MODEL")
+        or os.getenv("VERTEX_MODEL")
+        or DEFAULT_VERTEX_MODEL
+    ).strip()
+
+
+def get_vertex_stage2_model() -> str:
+    """Return Vertex AI model for Stage 2 portfolio decision (22:00 / 22:30)."""
+
+    return (
+        os.getenv("VERTEX_STAGE2_MODEL")
+        or os.getenv("VERTEX_MODEL")
+        or DEFAULT_VERTEX_MODEL
+    ).strip()
 
 
 def _call_vertex_ai_once(prompt: str, *, model: str | None = None) -> AIResponse:

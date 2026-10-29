@@ -20,7 +20,7 @@
  
 | 指令 | 參數說明 | 功能與產出說明 |
 | :--- | :--- | :--- |
-| **`/stock_ai`** | `symbol` (單股如 `2357` 或多股如 `2357,2330`，最多 4 檔)<br>`prompt` (選填，特定問題)<br>`force_refresh` (選填，預設 `False`)<br>`tier` (選填：`標準 (3.8 Flash)`〔預設〕或 `大師 (ARGON)`〔走 Vertex AI `VERTEX_MODEL`〕) | **【📊 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）】**<br>• **手機好讀一鍵複製**：以純文字 Markdown 發送（長按 1 秒即可複製轉傳他人）。<br>• **單股體質診斷（SASD v4.0 Step 1~7，先審計後評分）**：包含 0~100 體質評分、1~4 點動態亮點與風險、趨勢標籤，並附 **交易計畫 Embed**（戰術定位、進場觸發條件、第一/二目標價、嚴格停損價、紅軍失效退場條件）；日量 < 300 張或本業虧損無合約負債者以「🚨 系統硬傷警示」注入診斷（軟性警示，不擋股票）、三率/CCC/FCF 拆解、股利與法人籌碼、表 7 均線與量能結構、法說展望真實性佐證；並在首行顯示 **分析模型：{response.model_version}**。<br>• **二合一戰情室網頁**：發布全新戰情室 (`charts/{stock_id}_fund.html`)，內嵌**近半年技術面 K 線與均線 (17/45/117/189MA) + 成交量 + KD + MACD**，以及**基本面六大財務趨勢圖（每張圖正上方皆有獨立圖例與白話名詞小抄）**；戰情室頁面亦顯示「分析模型」。<br>• **多股橫向比較 (`2357,2330`)**：自動橫向提取多檔財報數據並給出優劣排序結論（同樣顯示「分析模型」）。<br>• **專題追問 (`prompt`)**：針對使用者問題引用財報數字精準解答（同樣顯示「分析模型」）。 |
+| **`/stock_ai`** | `symbol` (單股如 `2357` 或多股如 `2357,2330`，最多 4 檔)<br>`prompt` (選填，特定問題)<br>`force_refresh` (選填，預設 `False`)<br>`tier` (選填：`標準 (3.8 Flash)`〔預設〕或 `大師 (ARGON)`〔強制走 Vertex AI Stage1：`VERTEX_STAGE1_MODEL`〕) | **【📊 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）】**<br>• **手機好讀一鍵複製**：以純文字 Markdown 發送（長按 1 秒即可複製轉傳他人）。<br>• **單股體質診斷（SASD v4.0 Step 1~7，先審計後評分）**：包含 0~100 體質評分、1~4 點動態亮點與風險、趨勢標籤，並附 **交易計畫 Embed**（戰術定位、進場觸發條件、第一/二目標價、嚴格停損價、紅軍失效退場條件）；日量 < 300 張或本業虧損無合約負債者以「🚨 系統硬傷警示」注入診斷（軟性警示，不擋股票）、三率/CCC/FCF 拆解、股利與法人籌碼、表 7 均線與量能結構、法說展望真實性佐證；並在首行顯示 **分析模型：{response.model_version}**。<br>• **二合一戰情室網頁**：發布全新戰情室 (`charts/{stock_id}_fund.html`)，內嵌**近半年技術面 K 線與均線 (17/45/117/189MA) + 成交量 + KD + MACD**，以及**基本面六大財務趨勢圖（每張圖正上方皆有獨立圖例與白話名詞小抄）**；戰情室頁面亦顯示「分析模型」。<br>• **多股橫向比較 (`2357,2330`)**：改走付費 Vertex AI（Stage1：`VERTEX_STAGE1_MODEL`）進行橫向比較與結論輸出（同樣顯示「分析模型」）。<br>• **專題追問 (`prompt`)**：改走付費 Vertex AI（Stage1：`VERTEX_STAGE1_MODEL`）針對使用者問題引用財報數字精準解答（同樣顯示「分析模型」）。 |
 | **`/ai`** | `prompt` (問題內容) | **【Gemini AI 萬用問答】**<br>呼叫 Google Gemini 模型回答各式投資、程式或日常問題（超過 2,000 字自動分段回覆）。 |
 | **`/weather`** | 無 | **【台北即時天氣查詢】**<br>即時查詢 Open-Meteo 台北地區氣溫、體感、天氣狀況、風速、降雨機率與今日紫外線。 |
 | **`/card`** | 無 | **【系統狀態卡片】** 顯示機器人名稱、API 延遲 (ms) 與伺服器成員數。 |
@@ -98,16 +98,22 @@ GCP_VM_SERVER_CHANNEL_ID=每6小時心跳通知頻道ID
 GEMINI_API_KEY=你的_Gemini_API_Key
 GEMINI_MODEL=gemini-flash-lite-latest
 
-# （SASD v4.0）Stage 1 單股診斷（/stock_ai 標準模式與 22:00 批次）改用付費版 gemini-3.8-flash，停用 flash-lite 降級
+# （SASD v4.0）Stage 1 單股診斷（22:00 排程）預設先走 Google AI Studio（可能排隊），使用 STAGE1_MODEL；
+# 若重試後仍失敗，會自動升級改走 Vertex AI（VERTEX_STAGE1_MODEL）以確保排程可完成。
 STAGE1_MODEL=gemini-3.8-flash
-# STAGE1_FALLBACK_MODEL=            # （選填）預設不降級；如需備援模型再填入
+# STAGE1_FALLBACK_MODEL=            # （選填）Google AI Studio 端的備援模型；如不填則只重試不降級
 # 並且每次 AI 呼叫會把完整 Prompt/回覆寫入 finmind_reports/logs/YYYY-MM-DD_ai_calls.log
 
-# 2-2. GCP Vertex AI（付費版：專用於 22:00 / 22:30 跨股彙總決策選股，固定以 VERTEX_MODEL 為主）
+# 2-2. GCP Vertex AI（付費版）
+# - Stage 1（/stock_ai 專題問答、多股比較、以及 22:00 單股診斷在免費層失敗時的升級備援）：VERTEX_STAGE1_MODEL
+# - Stage 2（22:00 / 22:30 跨股彙總決策選股）：VERTEX_STAGE2_MODEL
+# - VERTEX_MODEL：相容舊版設定，當 stage 專用變數未設定時才會 fallback
 GOOGLE_CLOUD_PROJECT_ID=你的_GCP_Project_ID
 GOOGLE_CLOUD_LOCATION=us-central1
 VERTEX_API_KEY=你的_Vertex_API_Key
 VERTEX_MODEL=gemini-2.5-flash-lite
+VERTEX_STAGE1_MODEL=gemini-3.8-flash
+VERTEX_STAGE2_MODEL=gemini-2.5-pro
 
 # 3. FinMind 台股數據 API 設定
 FINMIND_API_TOKEN=你的_FinMind_API_Token

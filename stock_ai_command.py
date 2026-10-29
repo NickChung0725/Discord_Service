@@ -16,7 +16,7 @@ from typing import Literal
 import discord
 from discord import app_commands
 
-from ai_service import ask_gemini, ask_gemini_with_meta
+from ai_service import ask_vertex_ai_with_meta, get_vertex_stage1_model
 from fundamental_analyzer import FundamentalAnalyzer
 from fundamental_cache import FundamentalCacheError, FundamentalCacheManager
 from fundamental_config import PROMPT_TEMPLATES
@@ -191,9 +191,10 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                     + "\n\n"
                     + PROMPT_TEMPLATES["targeted_qa"]
                 )
-                meta = await ask_gemini_with_meta(
+                meta = await ask_vertex_ai_with_meta(
                     combined_prompt,
                     tag=f"stock_compare:{','.join(stock_ids)}",
+                    model=get_vertex_stage1_model(),
                 )
                 answer = meta.text
             except Exception:
@@ -215,7 +216,21 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
 
         if prompt and prompt.strip():
             try:
-                answer = await analyzer.run_targeted_qa(stock_id, prompt)
+                prompt_ctx = analyzer.build_markdown_context(stock_id)
+                combined_prompt = (
+                    prompt_ctx
+                    + "\n\n==================================================\n"
+                    + "【使用者詢問問題】\n"
+                    + prompt.strip()
+                    + "\n\n"
+                    + PROMPT_TEMPLATES["targeted_qa"]
+                )
+                meta = await ask_vertex_ai_with_meta(
+                    combined_prompt,
+                    tag=f"stock_qa:{stock_id}",
+                    model=get_vertex_stage1_model(),
+                )
+                answer = f"分析模型：{meta.model_version}\n" + meta.text
             except Exception:
                 logger.exception("Targeted QA failed for %s", stock_id)
                 await interaction.followup.send("❌ AI 分析失敗，請稍後再試。")

@@ -429,7 +429,7 @@ class GeminiFallbackTests(unittest.TestCase):
 
     def test_portfolio_selection_uses_vertex_ai_and_env_vertex_model(self) -> None:
         with (
-            patch.dict("os.environ", {"VERTEX_MODEL": "gemini-2.5-pro"}, clear=False),
+            patch.dict("os.environ", {"VERTEX_STAGE2_MODEL": "gemini-2.5-pro"}, clear=False),
             patch("alignment_ai_picker.ask_vertex_ai_with_meta") as vertex_call,
         ):
             vertex_call.return_value = ai_service.AIResponse(
@@ -440,7 +440,7 @@ class GeminiFallbackTests(unittest.TestCase):
                 prompt_tokens=1,
                 output_tokens=2,
             )
-            model = ai_service.get_vertex_model()
+            model = ai_service.get_vertex_stage2_model()
             res = asyncio.run(
                 run_portfolio_selection(
                     ["dossier-1"],

@@ -25,7 +25,11 @@ from urllib.request import Request, urlopen
 import pandas as pd
 from dotenv import load_dotenv
 
-from ai_service import DEFAULT_VERTEX_MODEL, ask_vertex_ai_with_meta, get_vertex_model
+from ai_service import (
+    DEFAULT_VERTEX_MODEL,
+    ask_vertex_ai_with_meta,
+    get_vertex_stage2_model,
+)
 from finmind_stock_scanner import (
     DISCORD_API_BASE_URL,
     DISCORD_POST_PAUSE_SECONDS,
@@ -951,7 +955,7 @@ async def run_pipeline(
     daily_dir = output_root / "daily"
     max_candidates = int(_cfg(config, "ai_picker_max_candidates", DEFAULT_MAX_CANDIDATES))
     max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
-    portfolio_model = get_vertex_model()
+    portfolio_model = get_vertex_stage2_model()
     call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
     publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
     post_discord = bool(_cfg(config, "post_ai_picks_to_discord", True)) and not dry_run
@@ -1280,7 +1284,7 @@ async def run_rebound_pipeline(
     if should_run_ai and not rebound_df.empty:
         max_candidates = int(_cfg(config, "ai_picker_max_candidates", DEFAULT_MAX_CANDIDATES))
         max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
-        portfolio_model = get_vertex_model()
+        portfolio_model = get_vertex_stage2_model()
         call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
         publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
 
