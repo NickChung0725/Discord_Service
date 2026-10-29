@@ -262,7 +262,10 @@ def _call_google_ai_once(
     if not api_key:
         raise MissingGeminiApiKeyError("GEMINI_API_KEY is not configured.")
 
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=420000),  # 例如 420 秒超時 (毫秒)
+    )
     resolved_model = (model or get_gemini_model()).strip()
     config = types.GenerateContentConfig(
         thinking_config=types.ThinkingConfig(thinking_budget=GOOGLE_AI_THINKING_BUDGET)
