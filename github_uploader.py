@@ -3,21 +3,55 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import quote
 
 import requests
 
+logger = logging.getLogger(__name__)
+
 _API_ROOT = "https://api.github.com"
 _REQUEST_TIMEOUT_SECONDS = 20
 _CHART_DIRECTORY = "charts"
 _STOCK_ID_PATTERN = re.compile(r"^\d{4,6}$")
+_RETRYABLE_STATUS_CODES = (429, 500, 502, 503, 504)
+_RETRY_DELAYS_SECONDS = (2.0, 4.0, 8.0)
 
 
 class GitHubUploadError(RuntimeError):
     """Raised when GitHub cannot accept or publish a chart page."""
+
+
+def _request_with_retry(method, url: str, **kwargs) -> requests.Response:
+    """Execute a requests call with exponential backoff on 429/5xx or transient network errors."""
+    last_exc: Exception | None = None
+    for delay in (*_RETRY_DELAYS_SECONDS, None):
+        try:
+            response = method(url, **kwargs)
+        except requests.RequestException as exc:
+            last_exc = exc
+            if delay is None:
+                raise GitHubUploadError(f"GitHub API 網路連線失敗：{exc}") from exc
+            logger.warning("GitHub API network error (%s), retrying in %.1fs...", exc, delay)
+            time.sleep(delay)
+            continue
+
+        if response.status_code in _RETRYABLE_STATUS_CODES and delay is not None:
+            logger.warning(
+                "GitHub API HTTP %s for %s, retrying in %.1fs...",
+                response.status_code,
+                url,
+                delay,
+            )
+            time.sleep(delay)
+            continue
+        return response
+
+    raise GitHubUploadError(f"GitHub API 呼叫失敗：{last_exc}")  # pragma: no cover
 
 
 def upload_to_github(
@@ -57,7 +91,8 @@ def upload_to_github(
         "User-Agent": "discord-stock-chart-bot",
     }
 
-    current_file = requests.get(
+    current_file = _request_with_retry(
+        requests.get,
         contents_url,
         headers=headers,
         params={"ref": branch},
@@ -82,7 +117,8 @@ def upload_to_github(
     if file_sha:
         payload["sha"] = file_sha
 
-    response = requests.put(
+    response = _request_with_retry(
+        requests.put,
         contents_url,
         headers=headers,
         json=payload,

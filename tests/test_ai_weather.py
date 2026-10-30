@@ -81,7 +81,10 @@ class GoogleAiStudioTests(unittest.TestCase):
             answer = ai_service._generate_ai_response("hello")
 
         self.assertEqual(answer, "Hello!")
-        create_client.assert_called_once_with(api_key="test-key")
+        create_client.assert_called_once_with(
+            api_key="test-key",
+            http_options=ai_service.types.HttpOptions(timeout=ai_service.GOOGLE_AI_HTTP_TIMEOUT_MS),
+        )
         call = client.models.generate_content.call_args.kwargs
         self.assertEqual(call["model"], "test-model")
         self.assertEqual(call["contents"], "hello")

@@ -440,13 +440,24 @@ class FundamentalCacheManager:
         max_div_raw = _parse_iso_date(
             str(df_div_sheet["raw_date"].max()) if not df_div_sheet.empty else None
         )
+        max_div_updated = _parse_iso_date(
+            str(df_div_sheet["updated_at"].dropna().astype(str).max())[:10]
+            if not df_div_sheet.empty and "updated_at" in df_div_sheet.columns
+            else None
+        )
+        div_ttl_ref = max_div_updated or max_div_raw
         max_chip_raw = _parse_iso_date(
             str(df_chip_sheet["raw_date"].max()) if not df_chip_sheet.empty else None
         )
 
         need_rev = force_refresh or (max_rev_raw is None) or (max_rev_raw < expected_rev_date)
         need_fin = force_refresh or (max_fin_raw is None) or (max_fin_raw < expected_fin_date)
-        need_div = force_refresh or (max_div_raw is None) or (today - max_div_raw >= timedelta(days=30))
+        need_div = (
+            force_refresh
+            or (max_div_raw is None)
+            or (div_ttl_ref is None)
+            or (today - div_ttl_ref >= timedelta(days=30))
+        )
         need_chip = force_refresh or (max_chip_raw is None) or (today - max_chip_raw >= timedelta(days=1))
 
         if cooldown_active and (need_rev or need_fin or need_div or need_chip):
@@ -562,6 +573,11 @@ class FundamentalCacheManager:
             if not df_div_delta.empty:
                 self._upsert_delta(div_sheet, df_div_delta, key_col="pk_key")
             else:
+                if not df_div_full.empty:
+                    # 30 天 TTL 到期重查後若無新配息變動，更新最新一筆的 updated_at 以重置下個 30 天冷卻
+                    touch_row = df_div_full.tail(1).copy()
+                    touch_row["updated_at"] = _now_in_taipei().isoformat(timespec="seconds")
+                    self._upsert_delta(div_sheet, touch_row, key_col="pk_key")
                 warnings.append("no_new_dividend_policy")
 
         # Chip track.
@@ -1184,6 +1200,44 @@ class FundamentalCacheManager:
                 "long_term_debt",
             ):
                 out[zero_col] = out[zero_col].fillna(0.0)
+
+            out["parent_equity"] = out["parent_equity"].combine_first(out["total_equity"])
+
+            # 控股／金控／特殊產業防呆：若資產與負債總額皆有值，但權益總額缺漏或因非控制權益／特殊科目差異不平衡，
+            # 自動以 (資產總額 - 負債總額) 校正 total_equity（保留原 parent_equity 供母公司 ROE 計算）。
+            assets_s = pd.to_numeric(out["total_assets"], errors="coerce")
+            liab_s = pd.to_numeric(out["total_liabilities"], errors="coerce")
+            eq_s = pd.to_numeric(out["total_equity"], errors="coerce")
+
+            implied_eq = assets_s - liab_s
+            diff_abs = (assets_s - (liab_s + eq_s)).abs()
+            diff_ratio = diff_abs / assets_s.replace({0: pd.NA})
+            need_eq_fix = assets_s.notna() & liab_s.notna() & (
+                eq_s.isna() | ((diff_abs > BALANCE_TOLERANCE_ABS) & (diff_ratio > BALANCE_TOLERANCE_RATIO))
+            )
+            if need_eq_fix.fillna(False).any():
+                bad_mask = need_eq_fix.fillna(False)
+                bad_qtrs = out.loc[bad_mask, "year_qtr"].tolist()
+                logger.warning(
+                    "BS total_equity reconciled via (total_assets - total_liabilities) for %s quarters %s",
+                    stock_id,
+                    bad_qtrs,
+                )
+                out.loc[bad_mask, "total_equity"] = implied_eq[bad_mask]
+                eq_s = pd.to_numeric(out["total_equity"], errors="coerce")
+
+            # 若負債總額缺漏但資產總額與權益總額皆有值，則以 (資產總額 - 權益總額) 補齊
+            need_liab_fix = assets_s.notna() & eq_s.notna() & liab_s.isna()
+            if need_liab_fix.fillna(False).any():
+                liab_mask = need_liab_fix.fillna(False)
+                out.loc[liab_mask, "total_liabilities"] = (assets_s - eq_s)[liab_mask]
+                liab_s = pd.to_numeric(out["total_liabilities"], errors="coerce")
+
+            # 若資產總額缺漏但負債總額與權益總額皆有值，則以 (負債總額 + 權益總額) 補齊
+            need_assets_fix = liab_s.notna() & eq_s.notna() & assets_s.isna()
+            if need_assets_fix.fillna(False).any():
+                assets_mask = need_assets_fix.fillna(False)
+                out.loc[assets_mask, "total_assets"] = (liab_s + eq_s)[assets_mask]
 
             out["parent_equity"] = out["parent_equity"].combine_first(out["total_equity"])
             out["updated_at"] = updated_at

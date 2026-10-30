@@ -144,6 +144,21 @@ class StockChartTests(unittest.TestCase):
         self.assertEqual(result.loc[0, "Trading_Volume"], 31_855_287)
         self.assertEqual(result.loc[0, "Regular_Trading_Volume"], 17_216_484)
 
+    def test_finmind_loader_reused_across_calls_with_same_token(self) -> None:
+        loader_instance = Mock()
+        fake_cls = Mock(return_value=loader_instance)
+        with (
+            patch.dict("os.environ", {"FINMIND_API_TOKEN": "token-abc"}, clear=True),
+            patch.object(chart_generator, "DataLoader", fake_cls),
+            patch.object(chart_generator, "_CACHED_LOADER", None),
+        ):
+            first = chart_generator._get_finmind_loader()
+            second = chart_generator._get_finmind_loader()
+
+        self.assertIs(first, second)
+        fake_cls.assert_called_once_with()
+        loader_instance.login_by_token.assert_called_once_with(api_token="token-abc")
+
 
 class GitHubUploaderTests(unittest.TestCase):
     def test_upload_supports_suffix_fund_html(self) -> None:
@@ -244,6 +259,33 @@ class GitHubUploaderTests(unittest.TestCase):
             put_request.call_args.args[0],
             "https://api.github.com/repos/example/stock-charts/contents/charts/2330.html",
         )
+
+    def test_upload_retries_on_http_500_then_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            chart_file = Path(directory) / "2834_fund.html"
+            chart_file.write_text("<html>fund</html>", encoding="utf-8")
+            put_responses = [Mock(status_code=500, text="Internal Server Error"), Mock(status_code=201)]
+            with (
+                patch.dict(
+                    "os.environ",
+                    {
+                        "GITHUB_TOKEN": "test-token",
+                        "GITHUB_REPO": "example/stock-charts",
+                    },
+                    clear=True,
+                ),
+                patch("github_uploader.requests.get", return_value=Mock(status_code=404)),
+                patch("github_uploader.requests.put", side_effect=put_responses) as put_request,
+                patch("github_uploader.time.sleep", return_value=None) as sleep_mock,
+            ):
+                pages_url = upload_to_github(str(chart_file), "2834", filename_suffix="_fund")
+
+        self.assertEqual(
+            pages_url,
+            "https://example.github.io/stock-charts/charts/2834_fund.html",
+        )
+        self.assertEqual(put_request.call_count, 2)
+        sleep_mock.assert_called_once_with(2.0)
 
 
 if __name__ == "__main__":

@@ -241,15 +241,31 @@ def _fetch_yahoo_volume(stock_id: str, start_date: str, end_date: str) -> pd.Dat
     )
 
 
+_CACHED_LOADER: tuple[object, str, DataLoader] | None = None
+
+
+def _get_finmind_loader() -> DataLoader:
+    """Return a logged-in FinMind DataLoader, reusing it across calls when class and token match."""
+    global _CACHED_LOADER
+    api_token = os.getenv("FINMIND_API_TOKEN", "").strip()
+    if _CACHED_LOADER is not None:
+        cached_cls, cached_token, cached_instance = _CACHED_LOADER
+        if cached_cls is DataLoader and cached_token == api_token:
+            return cached_instance
+
+    loader = DataLoader()
+    if api_token:
+        loader.login_by_token(api_token=api_token)
+    _CACHED_LOADER = (DataLoader, api_token, loader)
+    return loader
+
+
 def _fetch_stock_data(stock_id: str) -> pd.DataFrame:
     today = date.today()
     start_date = (
         pd.Timestamp(today) - pd.DateOffset(months=_INDICATOR_HISTORY_MONTHS)
     ).strftime("%Y-%m-%d")
-    loader = DataLoader()
-    api_token = os.getenv("FINMIND_API_TOKEN", "").strip()
-    if api_token:
-        loader.login_by_token(api_token=api_token)
+    loader = _get_finmind_loader()
 
     frame = loader.taiwan_stock_daily(
         stock_id=stock_id,

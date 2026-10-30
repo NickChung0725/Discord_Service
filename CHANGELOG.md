@@ -4,6 +4,22 @@
 
 ---
 
+## [v5.0.1] - 2026-10-30
+### 🔧 優化與修正 (Changed & Fixed)
+* **GitHub Pages 戰情室上傳自動重試與單股診斷容錯隔離**：
+  * [`github_uploader.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/github_uploader.py) 新增 `_request_with_retry()`，針對 GitHub Contents API 的 `429/500/502/503/504` 與網路瞬斷自動執行指數退避重試（`2s, 4s, 8s`）。
+  * [`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py) 的 `run_full_diagnosis()` 將 `render_and_publish_war_room_html()` 包覆於 `try...except` 中，確保偶發上傳失敗時仍能將 `ai_summary_json` 寫入 `00_Watchlist_Master` 並保留該股參與 Stage 2 決選（解決 `2834 臺企銀` 因 GitHub HTTP 500 整檔報廢的問題）。
+* **控股／金控／特殊產業資產負債表總權益自動校正與科目別名擴充**：
+  * [`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py) 的 `ACCOUNT_ANCHOR_MAP` 調整將 `"TotalEquity"` 與 `"TotalLiabilities"` 優先於 `"Equity"` 與 `"Liabilities"`，並補齊 `資產合計`、`負債合計`、`權益合計`、`股東權益總計` 等別名。
+  * [`fundamental_cache.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_cache.py) 的 `_normalize_quarterly_statement()` 在處理資產負債表時，若資產與負債總額皆有效但 `total_equity` 缺漏或因非控制權益差額導致失衡（如 `2905 三商`），自動以 `total_assets - total_liabilities` 校正 `total_equity`（同時保留原始 `parent_equity` 供母公司 ROE 計算）。
+* **股利政策表 30 天 TTL 判定修正與 `DataLoader` 登入複用**：
+  * [`fundamental_cache.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_cache.py) 的 `need_div` 改以 `06_Dividend_Policy.updated_at`（上次同步時間）判定 30 天 TTL，並在到期重查無新配息時刷新最新一筆 `updated_at`，解決除息旺季過後每日重複下載 `TaiwanStockDividend` 的問題。
+  * [`chart_generator.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/chart_generator.py) 新增 `_get_finmind_loader()` 複用已登入的 `DataLoader` 實例，消除每檔股票繪製戰情室 K 線時重複呼叫 `login_by_token` 與觸發限流等待的額外耗時。
+* **Google AI Studio 請求逾時調整**：
+  * [`ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/ai_service.py) 將 `GOOGLE_AI_HTTP_TIMEOUT_MS` 設定為 `300_000`（300 秒），並同步更新 [`tests/test_ai_weather.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_ai_weather.py)、[`tests/test_stock_features.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_stock_features.py)、[`tests/test_fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_fundamental_analyzer.py)、[`tests/test_fundamental_cache.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_fundamental_cache.py) 單元測試。
+
+---
+
 ## [v5.0.0] - 2026-10-29
 ### ✨ 新增功能 (Added)
 * **SASD v5.0 全市場動態掃描與雙軌量能守門員**：

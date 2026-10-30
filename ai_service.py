@@ -52,6 +52,7 @@ DEFAULT_VERTEX_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_VERTEX_LOCATION = "us-central1"
 
 GOOGLE_AI_THINKING_BUDGET = 128
+GOOGLE_AI_HTTP_TIMEOUT_MS = 300_000
 
 # SASD v4.0 Stage 1 單股基本面診斷：改用付費版 gemini-3.8-flash（可由 .env STAGE1_MODEL 覆寫）。
 # 停用 flash-lite 降級（避免財報推論 JSON 欄位違規與期別錯亂）；如需降級可設定 STAGE1_FALLBACK_MODEL。
@@ -263,8 +264,8 @@ def _call_google_ai_once(
         raise MissingGeminiApiKeyError("GEMINI_API_KEY is not configured.")
 
     client = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(timeout=420000),  # 例如 420 秒超時 (毫秒)
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=GOOGLE_AI_HTTP_TIMEOUT_MS),  # 300 秒超時 (毫秒)
     )
     resolved_model = (model or get_gemini_model()).strip()
     config = types.GenerateContentConfig(

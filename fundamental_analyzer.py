@@ -876,11 +876,12 @@ class FundamentalAnalyzer:
         human_text, _parsed = self._split_ai_output(raw_ai_text, latest_close=latest_close)
         human_text = f"分析模型：{meta.model_version}\n" + human_text
 
-        war_room_url = None
+        war_room_url = str(row.get("war_room_url", "")).strip() or None if row else None
         if publish_war_room:
-            war_room_url = await self.render_and_publish_war_room_html(stock_id, human_text)
-        elif row:
-            war_room_url = str(row.get("war_room_url", "")).strip() or None
+            try:
+                war_room_url = await self.render_and_publish_war_room_html(stock_id, human_text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to render/publish war room for %s: %s", stock_id, exc)
 
         summary = self._summarize_ai(raw_ai_text, model_version=meta.model_version, latest_close=latest_close)
         self.cache._update_watchlist_master(  # noqa: SLF001

@@ -96,6 +96,45 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updates["ai_cached_period"], "2026Q2_2026-09_2026-08-01_2026-10-14")
         self.assertEqual(updates["ai_model_version"], "gemini-test")
 
+    async def test_full_diagnosis_persists_ai_summary_even_if_war_room_upload_fails(self) -> None:
+        cache = Mock()
+        cache._get_worksheet.return_value = Mock()  # noqa: SLF001
+        cache._get_records_cached.return_value = [  # noqa: SLF001
+            {
+                "stock_id": "2834",
+                "last_fin_qtr": "2026Q2",
+                "last_rev_ym": "2026-09",
+                "max_div_raw_date": "2026-08-01",
+                "max_chip_raw_date": "2026-10-30",
+                "ai_cached_period": "",
+                "ai_summary_json": "",
+                "war_room_url": "https://example.invalid/old_2834_fund.html",
+            }
+        ]
+        analyzer = FundamentalAnalyzer(cache)
+        raw = 'text\n===SUMMARY_JSON===\n{"verdict":"v","score":75,"trend_tags":{},"trade_plan":{}}'
+        meta = Mock(text=raw, model_version="gemini-3.8-flash")
+        with (
+            patch.object(analyzer, "build_markdown_context", return_value="ctx"),
+            patch.object(
+                analyzer,
+                "render_and_publish_war_room_html",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("GitHub 上傳失敗（HTTP 500）"),
+            ),
+            patch(
+                "fundamental_analyzer.ask_gemini_diagnosis_with_meta",
+                new_callable=AsyncMock,
+                return_value=meta,
+            ),
+        ):
+            report = await analyzer.run_full_diagnosis("2834", publish_war_room=True)
+
+        self.assertFalse(report.cached)
+        self.assertEqual(json.loads(report.summary_json)["score"], 75)
+        self.assertEqual(report.war_room_url, "https://example.invalid/old_2834_fund.html")
+        cache._update_watchlist_master.assert_called_once()  # noqa: SLF001
+
     def test_build_latest_ma_context_reads_local_prices_csv_or_skips_when_missing(self) -> None:
         import tempfile
         from pathlib import Path

@@ -42,6 +42,25 @@ class FundamentalConfigTests(unittest.TestCase):
 
         self.assertEqual(result.tolist(), [1.0, 2.0])
 
+    def test_normalize_balance_sheet_reconciles_total_equity_when_noncontrolling_differs(self) -> None:
+        from fundamental_cache import FundamentalCacheManager, validate_balance_sheet_rows
+
+        mgr = FundamentalCacheManager.__new__(FundamentalCacheManager)
+        df_raw = pd.DataFrame(
+            [
+                {"stock_id": "2905", "date": "2026-06-30", "type": "TotalAssets", "value": 1_000_000.0, "origin_name": "資產總計"},
+                {"stock_id": "2905", "date": "2026-06-30", "type": "Liabilities", "value": 700_000.0, "origin_name": "負債總計"},
+                {"stock_id": "2905", "date": "2026-06-30", "type": "EquityAttributableToOwnersOfParent", "value": 200_000.0, "origin_name": "歸屬於母公司業主之權益合計"},
+                {"stock_id": "2905", "date": "2026-06-30", "type": "Equity", "value": 200_000.0, "origin_name": "歸屬於母公司業主之權益合計"},
+            ]
+        )
+        normalized = mgr._normalize_quarterly_statement(df_raw, "2905", statement="BS")
+        validate_balance_sheet_rows(normalized)
+        self.assertEqual(float(normalized.loc[0, "total_assets"]), 1_000_000.0)
+        self.assertEqual(float(normalized.loc[0, "total_liabilities"]), 700_000.0)
+        self.assertEqual(float(normalized.loc[0, "parent_equity"]), 200_000.0)
+        self.assertEqual(float(normalized.loc[0, "total_equity"]), 300_000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

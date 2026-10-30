@@ -337,31 +337,31 @@ ACCOUNT_ANCHOR_MAP: dict[str, AnchorSpec] = {
     ),
     "total_assets": _a(
         types=["TotalAssets", "Assets"],
-        origins=["資產總額", "資產總計"],
+        origins=["資產總額", "資產總計", "資產合計"],
     ),
     "total_liabilities": _a(
-        types=["Liabilities", "TotalLiabilities"],
-        origins=["負債總額", "負債總計"],
+        types=["TotalLiabilities", "Liabilities"],
+        origins=["負債總額", "負債總計", "負債合計"],
     ),
     "current_liabilities": _a(
         types=["CurrentLiabilities", "TotalCurrentLiabilities"],
-        origins=["流動負債合計"],
+        origins=["流動負債合計", "流動負債總計"],
     ),
     "capital_stock": _a(
         types=["CapitalStock", "OrdinaryShare"],
-        origins=["股本合計", "普通股股本"],
+        origins=["股本合計", "普通股股本", "股本"],
     ),
     "retained_earnings": _a(
-        types=["RetainedEarnings"],
-        origins=["保留盈餘合計"],
+        types=["RetainedEarnings", "TotalRetainedEarnings"],
+        origins=["保留盈餘合計", "保留盈餘"],
     ),
     "parent_equity": _a(
         types=["EquityAttributableToOwnersOfParent"],
-        origins=["歸屬於母公司業主之權益合計"],
+        origins=["歸屬於母公司業主之權益合計", "歸屬於母公司業主之權益"],
     ),
     "total_equity": _a(
-        types=["Equity", "TotalEquity"],
-        origins=["權益總額", "權益總計"],
+        types=["TotalEquity", "Equity"],
+        origins=["權益總額", "權益總計", "權益合計", "股東權益總計", "股東權益合計"],
     ),
     "inventory": _a(types=["Inventories", "Inventory"], origins=["存貨", "存貨合計"]),
     "prepayments": _a(types=["Prepayments", "OtherPrepayments"], origins=["預付款項", "預付款項合計"]),
