@@ -2288,6 +2288,21 @@ def _configured_universe(
             universe[(market, industry)] = (
                 selected.drop_duplicates(subset=["stock_id"]).reset_index(drop=True)
             )
+
+    # SASD v5.0: 全市場掃描時（ALL 或包含多產業），避免同一檔個股在不同群組重複掃描
+    if len(target_industries) > 1:
+        seen_stock_ids: set[str] = set()
+        dedup_universe: dict[tuple[str, str], pd.DataFrame] = {}
+        for key, df in universe.items():
+            if df.empty:
+                dedup_universe[key] = df
+                continue
+            mask = ~df["stock_id"].astype(str).str.strip().isin(seen_stock_ids)
+            filtered = df.loc[mask].reset_index(drop=True)
+            seen_stock_ids.update(filtered["stock_id"].astype(str).str.strip())
+            dedup_universe[key] = filtered
+        return dedup_universe
+
     return universe
 
 
@@ -2650,46 +2665,49 @@ def scan_configured_universe(
                 if paths[2] is not None:
                     all_failures.append(paths[2])
 
+        raw_prices = _combine_csvs(
+            all_prices,
+            [
+                "stock_id",
+                "stock_name",
+                "industry_category",
+                "market",
+                "date",
+                "close",
+                *(f"MA{period}" for period in MOVING_AVERAGE_PERIODS),
+            ],
+        )
+        raw_signals = _combine_csvs(
+            all_alignments,
+            [
+                "market",
+                "industry_category",
+                "stock_id",
+                "stock_name",
+                "date",
+                "close",
+                "MA3",
+                "MA17",
+                "MA45",
+                "MA117",
+                "MA189",
+                "MA17_MA45_gap_percent",
+                "signal",
+                "ma17_trend",
+                "vol_lots",
+                "vol_ma5_lots",
+                "vol_ma20_lots",
+                "vol_status",
+            ],
+        )
         report_files = {
-            "prices": _combine_csvs(
-                all_prices,
-                [
-                    "stock_id",
-                    "stock_name",
-                    "industry_category",
-                    "market",
-                    "date",
-                    "close",
-                    *(f"MA{period}" for period in MOVING_AVERAGE_PERIODS),
-                ],
-            ),
-            "alignment_signals": _combine_csvs(
-                all_alignments,
-                [
-                    "market",
-                    "industry_category",
-                    "stock_id",
-                    "stock_name",
-                    "date",
-                    "close",
-                    "MA3",
-                    "MA17",
-                    "MA45",
-                    "MA117",
-                    "MA189",
-                    "MA17_MA45_gap_percent",
-                    "signal",
-                    "ma17_trend",
-                    "vol_lots",
-                    "vol_ma5_lots",
-                    "vol_ma20_lots",
-                    "vol_status",
-                ],
-            ),
+            "prices": raw_prices.drop_duplicates(subset=["stock_id", "date"]).reset_index(drop=True),
+            "alignment_signals": raw_signals.drop_duplicates(subset=["stock_id"]).reset_index(drop=True),
             "failures": _combine_csvs(
                 all_failures, ["stock_id", "stock_name", "error"]
-            ),
+            ).drop_duplicates(subset=["stock_id"]).reset_index(drop=True),
         }
+
         # 若設定了大盤基準（例如 TAIEX），在掃描完成後一併抓取並快取大盤日線，同時追加進 prices.csv
         market_regime: dict[str, object] | None = None
         if config.get("enable_market_regime"):

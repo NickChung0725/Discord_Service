@@ -14,7 +14,7 @@
 * **報表整合**：19:00 / 22:30 Discord 快報、22:00 Stage 2 dossier 與 AI 嚴選報告附加「🏷️ 細分產業｜🔗 相似同業」；`/stock_ai` 報告首段與 `{stock_id}_fund.html` 戰情室標頭同步顯示（[`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py)、[`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py)）。
 
 ### 🔧 優化與修正 (Changed & Fixed)
-* `_configured_universe()` 支援 `ALL` / `*`、4 碼普通股過濾與 Stage 1 預篩，不再因 `ALL` 拋出 `ValueError`；所有 FinMind 限流 context 統一加上 `only_hosts=("finmindtrade.com",)`，避免 TWSE/TPEx/Yahoo 呼叫誤耗配額（[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py)）。
+* `_configured_universe()` 支援 `ALL` / `*`、4 碼普通股過濾與 Stage 1 預篩，並加入**跨產業全域去重 (seen_stock_ids)**，徹底消除 FinMind 電子工業與細分次產業重複掛名導致的個股雙重掃描；所有 FinMind 限流 context 統一加上 `only_hosts=("finmindtrade.com",)`，避免 TWSE/TPEx/Yahoo 呼叫誤耗配額（[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py)）。
 * `limit_stage2_candidates()`（同細分最多 3 檔）與 `enforce_sector_cap()`（同細分最多 2 檔）改以 `sub_industry` 為優先分群鍵，缺值退回官方 `industry_category`。
 * 新增測試 [`tests/test_taxonomy_and_prefilter.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_taxonomy_and_prefilter.py)。
 
