@@ -165,6 +165,69 @@ def enrich_with_tracker(frame: pd.DataFrame, daily_dir: Path, target_date: date)
     return result
 
 
+def enrich_with_taxonomy(
+    frame: pd.DataFrame,
+    config: Mapping[str, object],
+    target_date: date,
+) -> pd.DataFrame:
+    """為候選股補齊 08_Stock_Taxonomy 的細分次產業 (sub_industry)、主被動元件屬性與同業標籤。"""
+    result = frame.copy()
+    if "industry_category" in result.columns:
+        result["sub_industry"] = result["industry_category"]
+    else:
+        result["sub_industry"] = ""
+    result["component_nature"] = ""
+    result["taxonomy_badge"] = ""
+    if result.empty:
+        return result
+
+    try:
+        from taxonomy_service import (
+            TaxonomyService,
+            format_taxonomy_badge,
+            load_registry_stock_map,
+        )
+
+        tax_path = Path(
+            str(config.get("taxonomy_cache_path", "finmind_reports/.state/stock_taxonomy.json"))
+        )
+        tax_tab = str(config.get("taxonomy_gsheet_tab_name", "08_Stock_Taxonomy"))
+        tax_svc = TaxonomyService(
+            cache_path=tax_path,
+            ttl_days=int(config.get("taxonomy_ttl_days", 90)),
+            sheet_tab_name=tax_tab,
+        )
+        tax_map = tax_svc.load()
+
+        # 建立 valid_stock_map (先用本地已快取 + 候選股名單)
+        valid_map = load_registry_stock_map(
+            Path(
+                str(
+                    config.get(
+                        "universe_registry_path",
+                        "finmind_reports/.state/stock_universe_registry.json",
+                    )
+                )
+            )
+        )
+        valid_map.update({k: str(v.get("stock_name", k)) for k, v in tax_map.items()})
+        for r in result.itertuples(index=False):
+            valid_map[str(r.stock_id).strip()] = str(getattr(r, "stock_name", "")).strip()
+
+        tax_svc.ensure_batch(result, valid_map, as_of=target_date, sync_sheet=True)
+        for idx, sid in result["stock_id"].items():
+            rec = tax_svc.get_cached(str(sid))
+            if rec:
+                result.at[idx, "sub_industry"] = (
+                    str(rec.get("sub_industry") or result.at[idx, "sub_industry"]).strip()
+                )
+                result.at[idx, "component_nature"] = str(rec.get("component_nature", "")).strip()
+                result.at[idx, "taxonomy_badge"] = format_taxonomy_badge(rec)
+    except Exception as error:  # noqa: BLE001
+        print(f"[warn] 無法載入細分產業知識庫，退回使用官方分類：{error}")
+    return result
+
+
 def prefilter_candidates(frame: pd.DataFrame, max_candidates: int) -> tuple[pd.DataFrame, int]:
     """Cap candidates: fresh/breakout first, then rising 17MA, then smallest 17/45 gap."""
     if len(frame) <= max_candidates:
@@ -254,6 +317,9 @@ def build_dossier(index: int, row: Mapping[str, object], snapshot: str, summary:
         )
 
     tech_lines.append(f"  - 量能結構：{_fmt_volume_line(row)}")
+    tax_badge = str(row.get("taxonomy_badge", "") or "").strip()
+    if tax_badge:
+        tech_lines.insert(0, f"  - {tax_badge}")
     tech_lines.append(
         f"  - 法人測幅參考錨點：17MA={_num(ma17_val)}｜17MA正乖離極值(+12%)={ma17_plus_12}"
         f"｜45MA防守={_num(ma45_val)}｜收盤-4%停損={stop_minus_4}"
@@ -484,6 +550,15 @@ def _stage2_rank_score(row: Mapping[str, object], results: Mapping[str, Mapping[
     return base - penalty
 
 
+def _effective_sector_key(row: Mapping[str, object]) -> str:
+    """優先回傳細分次產業 sub_industry（如『被動元件-MLCC』），若無才退回官方 industry_category。"""
+    sub = str(row.get("sub_industry") or "").strip()
+    if sub:
+        return sub
+    ind = str(row.get("industry_category") or "").strip()
+    return ind or f"__NO_SECTOR__:{row.get('stock_id')}"
+
+
 def limit_stage2_candidates(
     frame: pd.DataFrame,
     results: Mapping[str, Mapping[str, object]],
@@ -503,7 +578,7 @@ def limit_stage2_candidates(
     if len(frame) <= threshold:
         return frame
 
-    # 以 industry_category 做 3 檔上限（保留多元產業）；缺資料者視為獨立類別。
+    # 以 sub_industry（細分次產業，缺值退回 industry_category）做 3 檔上限；缺資料者視為獨立類別。
     rows = frame.to_dict("records")
     ranked_rows = [
         (i, row, _stage2_rank_score(row, results)) for i, row in enumerate(rows)
@@ -513,7 +588,7 @@ def limit_stage2_candidates(
     picked_positions: list[int] = []
     sector_counts: dict[str, int] = {}
     for position, row, _score in ranked_rows:
-        sector = str(row.get("industry_category") or "").strip() or f"__NO_SECTOR__:{row.get('stock_id')}"
+        sector = _effective_sector_key(row)
         if sector_counts.get(sector, 0) >= 3:
             continue
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
@@ -533,7 +608,7 @@ def enforce_sector_cap(
 ) -> dict:
     """同產業 top_picks 最多 cap 檔；超額者（依 rank 後者）移入 watchlist 並重排 rank。"""
     industries = {
-        str(r.get("stock_id")): str(r.get("industry_category", "") or "").strip()
+        str(r.get("stock_id")): _effective_sector_key(r)
         for r in frame.to_dict("records")
     }
     counts: dict[str, int] = {}
@@ -727,6 +802,7 @@ def format_pick_report(
 
             entry_trigger = str(pick.get("entry_zone_and_trigger", "")).strip()
             entry_lines = [f"進場觸發：{entry_trigger}"] if entry_trigger else []
+            tax_line = [str(row["taxonomy_badge"])] if row.get("taxonomy_badge") else []
 
             if row.get("support_ma") and row.get("high_60d") is not None:
                 price_line = (
@@ -748,6 +824,7 @@ def format_pick_report(
                         f"{_RANK_EMOJI.get(pick['rank'], '🏅')} #{pick['rank']} {name_of(stock_id)}"
                         f"｜推薦分 {pick.get('score', 'N/A')}｜法說展望 {emoji}{verdict}",
                         price_line,
+                        *tax_line,
                         *vol_line,
                         *tactical_lines,
                         *entry_lines,
@@ -977,6 +1054,7 @@ async def run_pipeline(
     total_signals = len(candidates)
     enriched = enrich_with_tracker(candidates, daily_dir, target_date)
     selected, skipped = prefilter_candidates(enriched, max_candidates)
+    selected = enrich_with_taxonomy(selected, config, target_date)
     print(f"候選訊號股 {total_signals} 檔，進入深度分析 {len(selected)} 檔（略過 {skipped} 檔）。")
 
     # Stage 0 硬性攔截（日量 < 300 張）：先於 Stage 1 剔除，不消耗 Token；財務類硬傷於財報同步後再判斷。
@@ -1290,6 +1368,7 @@ async def run_rebound_pipeline(
 
         selected = rebound_df.head(max_candidates).reset_index(drop=True)
         skipped = max(0, len(rebound_df) - len(selected))
+        selected = enrich_with_taxonomy(selected, config, target_date)
 
         cache = FundamentalCacheManager()
         cache.enable_batch_mode()

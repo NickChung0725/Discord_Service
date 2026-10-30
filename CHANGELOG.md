@@ -4,6 +4,22 @@
 
 ---
 
+## [v5.0.0] - 2026-10-29
+### ✨ 新增功能 (Added)
+* **SASD v5.0 全市場動態掃描與雙軌量能守門員**：
+  * 新增 [`taxonomy_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taxonomy_service.py)：`fetch_twse_tpex_daily_snapshot`（TWSE/TPEx 盤後快照）、`update_registry_with_daily_snapshot`（20 日滾動均量＋連續缺漏自動標記 DELISTED）、`passes_dual_track_liquidity`（當日量 / 20 日均量 / 成交金額任一達標即放行）。
+  * `finmind_scanner.json` 改為 `industries: ["ALL"]` 並新增量能門檻、Taxonomy / Registry 路徑等設定鍵（[`finmind_scanner.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_scanner.json)）。
+  * 新增 CLI 子命令 `init-universe`：以 FinMind 近 30 日日線初始化 `stock_universe_registry.json`（7 天內已處理者跳過，支援斷點續傳；無近期日線標記下市）。
+* **細分產業與同業知識庫**：新增第 12 張工作表 `08_Stock_Taxonomy`（[`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py)）與本地快取 `finmind_reports/.state/stock_taxonomy.json`（TTL 90 天）；Yahoo 業務簡介 RAG ＋ `GEMINI_MODEL` 產生標籤，同業代號經真實股票字典防幻覺校驗；AI 失敗時不寫入快取。
+* **報表整合**：19:00 / 22:30 Discord 快報、22:00 Stage 2 dossier 與 AI 嚴選報告附加「🏷️ 細分產業｜🔗 相似同業」；`/stock_ai` 報告首段與 `{stock_id}_fund.html` 戰情室標頭同步顯示（[`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_analyzer.py)、[`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/alignment_ai_picker.py)）。
+
+### 🔧 優化與修正 (Changed & Fixed)
+* `_configured_universe()` 支援 `ALL` / `*`、4 碼普通股過濾與 Stage 1 預篩，不再因 `ALL` 拋出 `ValueError`；所有 FinMind 限流 context 統一加上 `only_hosts=("finmindtrade.com",)`，避免 TWSE/TPEx/Yahoo 呼叫誤耗配額（[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py)）。
+* `limit_stage2_candidates()`（同細分最多 3 檔）與 `enforce_sector_cap()`（同細分最多 2 檔）改以 `sub_industry` 為優先分群鍵，缺值退回官方 `industry_category`。
+* 新增測試 [`tests/test_taxonomy_and_prefilter.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_taxonomy_and_prefilter.py)。
+
+---
+
 ## [v4.0.0] - 2026-10-29
 ### ✨ 新增功能與架構升級 (Added & Changed)
 * **SASD v4.0 實戰邏輯邊界補丁**：

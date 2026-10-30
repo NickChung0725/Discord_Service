@@ -761,6 +761,39 @@ def fetch_or_load_market_regime(
     return evaluate_market_regime(pd.DataFrame(), benchmark_label=benchmark_id)
 
 
+TAXONOMY_CACHE_DEFAULT_PATH = Path("finmind_reports/.state/stock_taxonomy.json")
+
+
+def _load_taxonomy_cache_readonly(
+    path: Path = TAXONOMY_CACHE_DEFAULT_PATH,
+) -> dict[str, dict[str, object]]:
+    """唯讀載入本地細分產業快取（不觸發網路），失敗時回傳空字典。"""
+    try:
+        if path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:  # noqa: BLE001
+        logger.warning("無法讀取細分產業快取 %s", path, exc_info=True)
+    return {}
+
+
+def _taxonomy_report_line(
+    stock_id: object, taxonomy_map: Mapping[str, Mapping[str, object]]
+) -> str:
+    """回傳報表行尾縮排的細分產業與同業標籤（無資料回傳空字串）。"""
+    rec = taxonomy_map.get(str(stock_id).strip())
+    if not rec:
+        return ""
+    try:
+        from taxonomy_service import format_taxonomy_badge
+
+        badge = format_taxonomy_badge(rec)
+    except Exception:  # noqa: BLE001
+        return ""
+    return f"\n  └─ {badge}" if badge else ""
+
+
 def format_alignment_report(
     alignment_signals: pd.DataFrame,
     as_of: date | None = None,
@@ -780,6 +813,7 @@ def format_alignment_report(
     if alignment_signals.empty:
         return [heading + "\n今日沒有符合條件的股票。"]
 
+    taxonomy_map = _load_taxonomy_cache_readonly()
     chunks: list[str] = []
     current = heading
     for row in alignment_signals.itertuples(index=False):
@@ -816,6 +850,7 @@ def format_alignment_report(
             f"\n{row.stock_id} {row.stock_name}{signal_part} | 收盤 {float(row.close):,.2f}"
             f"{vol_part}"
             f"{trend_part}"
+            f"{_taxonomy_report_line(row.stock_id, taxonomy_map)}"
         )
         if len(current) + len(line) > 1800:
             chunks.append(current)
@@ -953,6 +988,7 @@ def format_rebound_report(
     if rebound_signals.empty:
         return [heading + "\n今日沒有符合型態 A 反彈條件的股票。"]
 
+    taxonomy_map = _load_taxonomy_cache_readonly()
     chunks: list[str] = []
     current = heading
     for row in rebound_signals.itertuples(index=False):
@@ -966,6 +1002,7 @@ def format_rebound_report(
             f"｜回踩 {row.support_ma} {float(row.support_price):,.2f}（{float(row.support_gap_pct):+.2f}%）"
             f"｜17MA目標 {float(row.target_ma17):,.2f}（空間 +{float(row.potential_return_pct):.1f}%）"
             f"｜收盤強度 {float(row.close_strength):.2f}{vol_str}"
+            f"{_taxonomy_report_line(row.stock_id, taxonomy_map)}"
         )
         if len(current) + len(line) > 1800:
             chunks.append(current)
@@ -2171,42 +2208,85 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
 
 
 def _configured_universe(
-    stock_info: pd.DataFrame, config: Mapping[str, object]
+    stock_info: pd.DataFrame,
+    config: Mapping[str, object],
+    daily_snapshot: Mapping[str, Mapping[str, float]] | None = None,
+    registry_stocks: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[tuple[str, str], pd.DataFrame]:
     _validate_stock_info(stock_info)
-    excluded_ids = {
-        item["stock_id"] for item in config["excluded_stocks"]
-    }
+    excluded_ids = {item["stock_id"] for item in config["excluded_stocks"]}
+    if registry_stocks:
+        for sid, info in registry_stocks.items():
+            if isinstance(info, Mapping) and info.get("status") == "DELISTED":
+                excluded_ids.add(str(sid))
+
     excluded_categories = EXCLUDED_INDUSTRY_CATEGORIES.union(
         config["excluded_industry_categories"]
     )
-    configured_industries = config["industries"]
-    configured_markets = config["markets"]
-    available_industries = set(
-        stock_info["industry_category"].dropna().astype(str)
+    only_4digits = bool(config.get("only_common_stocks_4digits", False))
+    enable_prefilter = bool(config.get("enable_twse_tpex_prefilter", False))
+    min_lots = int(config.get("min_trading_volume_lots", 1000))
+    min_turnover = float(config.get("min_turnover_twd", 100_000_000.0))
+    vol_mode = str(config.get("volume_filter_mode", "today_or_ma20_or_turnover"))
+
+    configured_industries = list(config["industries"])
+    available_industries = sorted(
+        set(stock_info["industry_category"].dropna().astype(str).str.strip())
+        - excluded_categories
     )
-    missing_industries = sorted(set(configured_industries).difference(available_industries))
-    if missing_industries:
-        raise ValueError(
-            "FinMind 股票清單不存在設定的產業："
-            + "、".join(missing_industries)
+    if "ALL" in configured_industries or "*" in configured_industries:
+        target_industries = available_industries
+    else:
+        missing_industries = sorted(
+            set(configured_industries).difference(
+                set(stock_info["industry_category"].dropna().astype(str))
+            )
         )
+        if missing_industries:
+            raise ValueError(
+                "FinMind 股票清單不存在設定的產業：" + "、".join(missing_industries)
+            )
+        target_industries = configured_industries
+
+    from taxonomy_service import FOUR_DIGIT_RE, passes_dual_track_liquidity
 
     universe: dict[tuple[str, str], pd.DataFrame] = {}
-    for market in configured_markets:
+    for market in config["markets"]:
         market_stocks = _filter_market(stock_info, market)
-        market_stocks = market_stocks.loc[
+        sid_series = market_stocks["stock_id"].astype(str).str.strip()
+        mask = (
             ~market_stocks["industry_category"].isin(excluded_categories)
-            & ~market_stocks["stock_id"].astype(str).isin(excluded_ids)
-        ]
-        for industry in configured_industries:
+            & ~sid_series.isin(excluded_ids)
+        )
+        if only_4digits:
+            mask = mask & sid_series.str.match(FOUR_DIGIT_RE)
+        market_stocks = market_stocks.loc[mask].copy()
+
+        if enable_prefilter and (daily_snapshot is not None or registry_stocks is not None):
+            snap = daily_snapshot or {}
+            reg_map = registry_stocks or {}
+            keep_ids = {
+                str(sid).strip()
+                for sid in market_stocks["stock_id"]
+                if passes_dual_track_liquidity(
+                    str(sid).strip(),
+                    snap,
+                    reg_map,
+                    min_lots=min_lots,
+                    min_turnover_twd=min_turnover,
+                    mode=vol_mode,
+                )
+            }
+            market_stocks = market_stocks.loc[
+                market_stocks["stock_id"].astype(str).str.strip().isin(keep_ids)
+            ].copy()
+
+        for industry in target_industries:
             selected = market_stocks.loc[
-                market_stocks["industry_category"].astype(str).str.strip()
-                == industry
+                market_stocks["industry_category"].astype(str).str.strip() == industry
             ].copy()
             universe[(market, industry)] = (
-                selected.drop_duplicates(subset=["stock_id"])
-                .reset_index(drop=True)
+                selected.drop_duplicates(subset=["stock_id"]).reset_index(drop=True)
             )
     return universe
 
@@ -2508,7 +2588,36 @@ def scan_configured_universe(
         int(config["max_requests_per_hour"]),
         float(config["min_request_interval_seconds"]),
     )
-    universe = _configured_universe(stock_info, config)
+    daily_snapshot: dict[str, dict[str, float]] | None = None
+    registry_stocks: dict[str, dict[str, object]] | None = None
+    if config.get("enable_twse_tpex_prefilter"):
+        try:
+            from taxonomy_service import (
+                fetch_twse_tpex_daily_snapshot,
+                update_registry_with_daily_snapshot,
+            )
+
+            daily_snapshot = fetch_twse_tpex_daily_snapshot()
+            registry = update_registry_with_daily_snapshot(
+                Path(
+                    str(
+                        config.get(
+                            "universe_registry_path",
+                            output_root / ".state" / "stock_universe_registry.json",
+                        )
+                    )
+                ),
+                stock_info,
+                daily_snapshot,
+                today,
+                int(config.get("delisted_missing_days_threshold", 5)),
+            )
+            registry_stocks = registry.get("stocks", {})
+        except Exception:
+            logger.warning("Stage 1 全市場快照預篩失敗，退回不預篩", exc_info=True)
+    universe = _configured_universe(
+        stock_info, config, daily_snapshot, registry_stocks
+    )
 
     all_prices: list[Path] = []
     all_alignments: list[Path] = []
@@ -2517,7 +2626,7 @@ def scan_configured_universe(
 
     with tempfile.TemporaryDirectory(prefix="finmind-daily-") as temp_path:
         temporary_output = Path(temp_path)
-        with _rate_limit_finmind_http_requests(limiter):
+        with _rate_limit_finmind_http_requests(limiter, only_hosts=("finmindtrade.com",)):
             for (market, industry), stocks in universe.items():
                 if stocks.empty:
                     logger.warning("No eligible stocks for %s / %s", market, industry)
@@ -2585,7 +2694,7 @@ def scan_configured_universe(
         market_regime: dict[str, object] | None = None
         if config.get("enable_market_regime"):
             benchmark_id = str(config.get("market_benchmark_id") or "TAIEX")
-            with _rate_limit_finmind_http_requests(limiter):
+            with _rate_limit_finmind_http_requests(limiter, only_hosts=("finmindtrade.com",)):
                 market_regime = fetch_or_load_market_regime(
                     daily_directory=daily_directory,
                     as_of=today,
@@ -2620,6 +2729,34 @@ def scan_configured_universe(
     failures = report_files["failures"]
     alignment_signals = report_files["alignment_signals"]
 
+    # Stage 3: 為入榜訊號股補齊細分產業與同業標籤（失敗不影響主流程）
+    if not alignment_signals.empty:
+        try:
+            from taxonomy_service import TaxonomyService
+
+            valid_stock_map = dict(
+                zip(
+                    stock_info["stock_id"].astype(str).str.strip(),
+                    stock_info["stock_name"].astype(str).str.strip(),
+                )
+            )
+            TaxonomyService(
+                cache_path=Path(
+                    str(
+                        config.get(
+                            "taxonomy_cache_path",
+                            output_root / ".state" / "stock_taxonomy.json",
+                        )
+                    )
+                ),
+                ttl_days=int(config.get("taxonomy_ttl_days", 90)),
+                sheet_tab_name=str(
+                    config.get("taxonomy_gsheet_tab_name", "08_Stock_Taxonomy")
+                ),
+            ).ensure_batch(alignment_signals, valid_stock_map, as_of=today)
+        except Exception:
+            logger.warning("細分產業知識庫補齊失敗", exc_info=True)
+
     if config.get("sync_alignment_to_gsheet") or config.get("sync_signals_to_gsheet"):
         tab_name = str(config.get("gsheet_tab_name") or SIGNAL_TRACKER_SHEET_NAME)
         sync_alignment_to_gsheet(
@@ -2633,7 +2770,7 @@ def scan_configured_universe(
     market_regime: dict[str, object] | None = None
     if config.get("enable_market_regime"):
         benchmark_id = str(config.get("market_benchmark_id") or "TAIEX")
-        with _rate_limit_finmind_http_requests(limiter):
+        with _rate_limit_finmind_http_requests(limiter, only_hosts=("finmindtrade.com",)):
             market_regime = fetch_or_load_market_regime(
                 daily_directory=daily_directory,
                 as_of=today,
@@ -2804,6 +2941,132 @@ def recalc_from_cache(
     return alignments
 
 
+def init_universe_registry(
+    loader: DataLoader,
+    stock_info: pd.DataFrame,
+    config: Mapping[str, object],
+    *,
+    output_dir: Path | None = None,
+    as_of: date | None = None,
+    request_limiter: FinMindRequestLimiter | None = None,
+    skip_recent_days: int = 7,
+    stale_days: int = 15,
+) -> dict[str, object]:
+    """以 FinMind 近 30 日日線初始化 stock_universe_registry.json（支援中斷續傳）。
+
+    - registry 內 last_seen 在 skip_recent_days 內者自動跳過。
+    - 無日線或最後交易日距今 > stale_days 者標記為 DELISTED。
+    - 計算近 20 日均量寫入 vol_ma20_lots 與 vol_history_20d。
+    """
+    from taxonomy_service import (
+        FOUR_DIGIT_RE,
+        _atomic_write_json,
+        load_universe_registry,
+    )
+
+    today = as_of or _today_in_taipei()
+    output_root = output_dir or Path(str(config["output_directory"]))
+    registry_path = Path(
+        str(
+            config.get(
+                "universe_registry_path",
+                output_root / ".state" / "stock_universe_registry.json",
+            )
+        )
+    )
+    limiter = request_limiter or FinMindRequestLimiter(
+        output_root / ".state" / "finmind_request_history.sqlite3",
+        int(config["max_requests_per_hour"]),
+        float(config["min_request_interval_seconds"]),
+    )
+    registry = load_universe_registry(registry_path)
+    stocks_map: dict[str, dict[str, object]] = registry.setdefault("stocks", {})
+    start_date = (pd.Timestamp(today) - pd.Timedelta(days=45)).strftime("%Y-%m-%d")
+
+    candidates = stock_info.drop_duplicates(subset=["stock_id"])
+    processed = skipped = delisted = 0
+    with _rate_limit_finmind_http_requests(limiter, only_hosts=("finmindtrade.com",)):
+        for row in candidates.itertuples(index=False):
+            sid = str(row.stock_id).strip()
+            if not FOUR_DIGIT_RE.match(sid):
+                continue
+            if str(row.industry_category).strip() in EXCLUDED_INDUSTRY_CATEGORIES.union(
+                config.get("excluded_industry_categories", [])
+            ):
+                continue
+            entry = stocks_map.get(sid)
+            last_seen = str((entry or {}).get("last_seen", "")).strip()
+            if last_seen:
+                try:
+                    if (today - date.fromisoformat(last_seen)).days <= skip_recent_days:
+                        skipped += 1
+                        continue
+                except ValueError:
+                    pass
+            try:
+                prices = _fetch_stock_prices(loader, sid, start_date, today.isoformat())
+            except Exception:
+                logger.warning("init-universe 抓取 %s 失敗", sid, exc_info=True)
+                continue
+            entry = stocks_map.setdefault(
+                sid,
+                {
+                    "stock_name": str(row.stock_name).strip(),
+                    "industry_category": str(row.industry_category).strip(),
+                    "status": "ACTIVE",
+                    "missing_count": 0,
+                    "vol_history_20d": [],
+                    "vol_ma20_lots": 0.0,
+                    "latest_vol_lots": 0.0,
+                    "latest_turnover_twd": 0.0,
+                    "last_seen": "",
+                },
+            )
+            entry["stock_name"] = str(row.stock_name).strip()
+            entry["industry_category"] = str(row.industry_category).strip()
+            last_trade: date | None = None
+            if prices is not None and not prices.empty:
+                frame = prices.sort_values("date")
+                last_trade = pd.Timestamp(frame["date"].iloc[-1]).date()
+            if last_trade is None or (today - last_trade).days > stale_days:
+                entry["status"] = "DELISTED"
+                entry["reason"] = "init-universe：無近期日線（判定下市/終止買賣）"
+                delisted += 1
+            else:
+                volumes = (
+                    pd.to_numeric(frame["Trading_Volume"], errors="coerce")
+                    .fillna(0.0)
+                    .div(1000.0)
+                    .round(2)
+                    .tolist()
+                )[-20:]
+                entry["status"] = "ACTIVE"
+                entry["missing_count"] = 0
+                entry["vol_history_20d"] = volumes
+                entry["vol_ma20_lots"] = round(sum(volumes) / len(volumes), 1)
+                entry["latest_vol_lots"] = volumes[-1]
+                if "Trading_money" in frame.columns:
+                    entry["latest_turnover_twd"] = float(
+                        pd.to_numeric(frame["Trading_money"], errors="coerce")
+                        .fillna(0.0)
+                        .iloc[-1]
+                    )
+                entry["last_seen"] = last_trade.isoformat()
+            processed += 1
+            if processed % 25 == 0:
+                registry["updated_at"] = datetime.now(TAIPEI_TIMEZONE).isoformat()
+                _atomic_write_json(registry_path, registry)  # 斷點續傳
+
+    registry["updated_at"] = datetime.now(TAIPEI_TIMEZONE).isoformat()
+    _atomic_write_json(registry_path, registry)
+    return {
+        "path": registry_path,
+        "processed": processed,
+        "skipped": skipped,
+        "delisted": delisted,
+    }
+
+
 def _make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="使用 FinMind 列出台股市場／產業，並掃描 MA45 與 MA17。"
@@ -2893,6 +3156,18 @@ def _make_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--force-ai", action="store_true", help="忽略單股 AI 快取，強制重新診斷")
     analyze_parser.add_argument("--dry-run", action="store_true", help="不寫入 Sheets、不推播 Discord，只輸出結果")
 
+    init_parser = subparsers.add_parser(
+        "init-universe",
+        help="初始化全市場 stock_universe_registry.json（近 30 日日線、20 日均量、下市標記；支援斷點續傳）",
+    )
+    init_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("finmind_scanner.json"),
+        help="JSON 設定檔路徑（預設：finmind_scanner.json）",
+    )
+    init_parser.add_argument("--output-dir", type=Path, help="覆寫設定檔的 output_directory")
+
     rebound_parser = subparsers.add_parser(
         "analyze-rebound",
         help="22:30 流程：執行型態 A（高點回跌回踩長均線反彈）掃描、寫入 Rebound_Watchlist 並彈性決定是否啟動 AI 嚴選",
@@ -2965,6 +3240,34 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+        if args.command == "init-universe":
+            config = load_scan_config(args.config)
+            output_dir = args.output_dir or Path(config["output_directory"])
+            request_limiter = FinMindRequestLimiter(
+                output_dir / ".state" / "finmind_request_history.sqlite3",
+                int(config["max_requests_per_hour"]),
+                float(config["min_request_interval_seconds"]),
+            )
+            with _rate_limit_finmind_http_requests(
+                request_limiter, only_hosts=("finmindtrade.com",)
+            ):
+                loader = DataLoader(token=api_token)
+                stock_info = loader.taiwan_stock_info(timeout=REQUEST_TIMEOUT_SECONDS)
+            if stock_info.empty:
+                raise RuntimeError("FinMind 股票總覽沒有回傳任何資料。")
+            result = init_universe_registry(
+                loader,
+                stock_info,
+                config,
+                output_dir=output_dir,
+                request_limiter=request_limiter,
+            )
+            print(
+                f"init-universe 完成：處理 {result['processed']} 檔、"
+                f"跳過 {result['skipped']} 檔、標記下市 {result['delisted']} 檔 → {result['path']}"
+            )
+            return 0
+
         if args.command == "scan-all":
             config = load_scan_config(args.config)
             output_dir = args.output_dir or Path(config["output_directory"])
@@ -2973,7 +3276,7 @@ def main(argv: list[str] | None = None) -> int:
                 int(config["max_requests_per_hour"]),
                 float(config["min_request_interval_seconds"]),
             )
-            with _rate_limit_finmind_http_requests(request_limiter):
+            with _rate_limit_finmind_http_requests(request_limiter, only_hosts=("finmindtrade.com",)):
                 loader = DataLoader(token=api_token)
                 stock_info = loader.taiwan_stock_info(
                     timeout=REQUEST_TIMEOUT_SECONDS

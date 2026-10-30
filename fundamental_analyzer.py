@@ -743,6 +743,44 @@ class FundamentalAnalyzer:
             logger.debug("hard-screen wide metrics unavailable for %s", stock_id, exc_info=True)
         return metrics
 
+    @staticmethod
+    def _taxonomy_badge_sync(
+        stock_id: str,
+        stock_name: str = "",
+        official_industry: str = "",
+        *,
+        cached_only: bool = False,
+    ) -> str:
+        """取得單股「🏷️ 細分產業｜🔗 相似同業」標籤；任何失敗皆回傳空字串，不影響診斷主流程。"""
+        try:
+            from taxonomy_service import TaxonomyService, format_taxonomy_badge
+
+            service = TaxonomyService()
+            if cached_only:
+                rec = service.get_cached(stock_id)
+            else:
+                rec = service.get_or_create_sync(
+                    stock_id,
+                    stock_name=stock_name,
+                    official_industry=official_industry,
+                    sync_sheet=True,
+                )
+            return format_taxonomy_badge(rec) if rec else ""
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Taxonomy lookup failed for %s: %s", stock_id, exc)
+            return ""
+
+    @staticmethod
+    def _inject_taxonomy_badge(text: str, badge: str) -> str:
+        """把細分產業標籤插在『分析模型：』行下一行（無該行則置於最前）。"""
+        if not badge:
+            return text
+        lines = text.split("\n", 1)
+        if lines and lines[0].startswith("分析模型："):
+            rest = lines[1] if len(lines) > 1 else ""
+            return f"{lines[0]}\n{badge}\n{rest}"
+        return f"{badge}\n{text}"
+
     async def run_full_diagnosis(
         self,
         stock_id: str,
@@ -767,6 +805,13 @@ class FundamentalAnalyzer:
             max_chip = str(row.get("max_chip_raw_date", "")).strip()
             if last_fin and last_rev:
                 cache_period = f"{last_fin}_{last_rev}_{max_div}_{max_chip}"
+
+        tax_badge = await asyncio.to_thread(
+            self._taxonomy_badge_sync,
+            stock_id,
+            str(row.get("stock_name", "")).strip() if row else "",
+            str(row.get("industry_category", "")).strip() if row else "",
+        )
 
         cached_summary = str(row.get("ai_summary_json", "")).strip() if row else ""
         cached_period = str(row.get("ai_cached_period", "")).strip() if row else ""
@@ -803,6 +848,8 @@ class FundamentalAnalyzer:
             cached_text = self._render_summary_text(cached_summary)
             if row and str(row.get("ai_model_version", "")).strip():
                 cached_text = f"分析模型：{str(row.get('ai_model_version')).strip()}\n" + cached_text
+
+            cached_text = self._inject_taxonomy_badge(cached_text, tax_badge)
 
             return DiagnosisReport(
                 stock_id=stock_id,
@@ -849,6 +896,7 @@ class FundamentalAnalyzer:
         )
 
         rendered = human_text[:6000] or self._render_summary_text(summary)
+        rendered = self._inject_taxonomy_badge(rendered, tax_badge)
         return DiagnosisReport(
             stock_id=stock_id,
             ai_text=rendered,
@@ -1122,6 +1170,14 @@ class FundamentalAnalyzer:
 
         generated_at = datetime.now(TAIPEI_TIMEZONE).strftime("%Y-%m-%d %H:%M")
         clean_ai_text, _ = self._split_ai_output(ai_text)
+        tax_badge = self._taxonomy_badge_sync(stock_id, cached_only=True)
+        tax_banner_html = (
+            "<div style='width:100%;margin-top:4px'><span style='display:inline-block;"
+            "background:#1e3a5f;color:#bfdbfe;border:1px solid #3b82f6;border-radius:999px;"
+            f"padding:3px 12px;font-size:13px'>{html.escape(tax_badge)}</span></div>"
+            if tax_badge
+            else ""
+        )
 
         fund_cards_html: list[str] = []
         for idx, (_, glossary_html, card_fig) in enumerate(chart_blocks):
@@ -1162,6 +1218,7 @@ class FundamentalAnalyzer:
             "</head><body>",
             "<div class='topbar'>",
             f"<h2>📊 {stock_id} 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）<small>更新：{generated_at}</small></h2>",
+            tax_banner_html,
             "<div class='nav-links'>",
             "<a class='nav-btn' href='#sec-ai'>🤖 AI 深度診斷</a>",
             "<a class='nav-btn' href='#sec-tech'>📈 技術面 K 線與均線</a>",

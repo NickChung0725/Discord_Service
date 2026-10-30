@@ -178,6 +178,19 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "three_inst_net_20d_lots",
         "updated_at",
     ],
+    "08_Stock_Taxonomy": [
+        "stock_id",  # 股票代號 (PK, 4碼字串如 "2327")
+        "stock_name",  # 股票名稱
+        "official_industry",  # L1 證交所/FinMind 官方大類
+        "sector_group",  # L2 六大板塊分群 (Enum)
+        "sub_industry",  # L3 細分次產業（用於 22:00 同業限額分群）
+        "component_nature",  # 主動元件/被動元件/機構與模組周邊/系統與終端設備/非電子/不適用
+        "supply_chain_role",  # 價值鏈位置 (Enum)
+        "core_products",  # 主力產品與業務簡述 (50字內)
+        "theme_tags",  # 概念題材標籤 (JSON Array 字串)
+        "peers",  # 台股直接競爭同業 (JSON Array 字串)
+        "updated_at",  # 更新日期 YYYY-MM-DD (TTL 90天)
+    ],
     "MA_Signal_Tracker": [
         "執行日期",
         "K線日期",

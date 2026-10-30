@@ -4,15 +4,20 @@
     "上櫃"
   ],
   "industries": [
-    "半導體業",
-    "電子通路業",
-    "綠能環保",
-    "航運業",
-    "電腦及週邊設備業",
-    "玻璃陶瓷",
-    "電子通路業",
-    "化學工業"
+    "ALL"
   ],
+  "only_common_stocks_4digits": true,
+  "enable_twse_tpex_prefilter": true,
+  "min_trading_volume_lots": 1000,
+  "highlight_volume_lots": 3000,
+  "min_turnover_twd": 100000000,
+  "volume_filter_mode": "today_or_ma20_or_turnover",
+  "delisted_missing_days_threshold": 5,
+  "dormant_recheck_days": 14,
+  "taxonomy_ttl_days": 90,
+  "taxonomy_cache_path": "finmind_reports/.state/stock_taxonomy.json",
+  "universe_registry_path": "finmind_reports/.state/stock_universe_registry.json",
+  "taxonomy_gsheet_tab_name": "08_Stock_Taxonomy",
   "excluded_industry_categories": [
     "ETF",
     "ETN",
@@ -22,7 +27,9 @@
     "受益證券",
     "上櫃ETF",
     "上櫃指數股票型基金(ETF)",
-    "指數投資證券(ETN)"
+    "指數投資證券(ETN)",
+    "存託憑證",
+    "創新板"
   ],
   "excluded_stocks": [
     {
@@ -272,4 +279,3 @@
   "rebound_ai_min_candidates": 3,
   "rebound_ai_max_candidates": 15
 }
-
