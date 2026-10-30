@@ -112,28 +112,100 @@ def fetch_twse_tpex_daily_snapshot(timeout: int = 15) -> dict[str, dict[str, flo
     snapshot: dict[str, dict[str, float]] = {}
     headers = {"User-Agent": "Mozilla/5.0 (compatible; DiscordStockAssistant/5.0)"}
 
-    # 1. 上市 (TWSE) 全市場當日收盤表
-    twse_url = "https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX_ALL"
+    # 1. 上市 (TWSE) 全市場當日收盤表（多軌備援：MI_INDEX -> STOCK_DAY_ALL -> OpenAPI）
+    headers_browser = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+    }
+    twse_loaded = False
+
+    # 備援軌 A：TWSE 官網全市場盤後收盤總表 (MI_INDEX)
     try:
-        resp = requests.get(twse_url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-        for row in resp.json():
-            code = str(row.get("Code", "")).strip()
-            if not FOUR_DIGIT_RE.match(code):
-                continue
-            shares = _parse_int_clean(row.get("TradeVolume"))
-            turnover = _parse_float_clean(row.get("TradeValue"))
-            close_price = _parse_float_clean(row.get("ClosingPrice"))
-            if turnover <= 0 and shares > 0 and close_price > 0:
-                turnover = shares * close_price
-            snapshot[code] = {
-                "vol_lots": round(shares / 1000.0, 2),
-                "turnover_twd": turnover,
-                "close": close_price,
-                "market": "上市",
-            }
+        url_mi = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?response=json&type=ALL"
+        resp_mi = requests.get(url_mi, headers=headers_browser, timeout=timeout)
+        if resp_mi.status_code == 200:
+            data_json = resp_mi.json()
+            tables = data_json.get("tables", [])
+            target_table = next(
+                (t for t in tables if "每日收盤行情" in t.get("title", "")),
+                None,
+            )
+            if target_table:
+                fields = target_table.get("fields", [])
+                code_idx = fields.index("證券代號") if "證券代號" in fields else 0
+                vol_idx = fields.index("成交股數") if "成交股數" in fields else 2
+                amt_idx = fields.index("成交金額") if "成交金額" in fields else 4
+                close_idx = fields.index("收盤價") if "收盤價" in fields else 8
+                for row_data in target_table.get("data", []):
+                    code = str(row_data[code_idx]).strip()
+                    if not FOUR_DIGIT_RE.match(code):
+                        continue
+                    shares = _parse_int_clean(row_data[vol_idx])
+                    turnover = _parse_float_clean(row_data[amt_idx])
+                    close_price = _parse_float_clean(row_data[close_idx])
+                    if turnover <= 0 and shares > 0 and close_price > 0:
+                        turnover = shares * close_price
+                    snapshot[code] = {
+                        "vol_lots": round(shares / 1000.0, 2),
+                        "turnover_twd": turnover,
+                        "close": close_price,
+                        "market": "上市",
+                    }
+                if len(snapshot) >= 800:
+                    twse_loaded = True
     except Exception as exc:  # noqa: BLE001
-        logger.warning("TWSE OpenAPI 快照抓取失敗: %s", exc)
+        logger.debug("TWSE MI_INDEX 抓取失敗: %s", exc)
+
+    # 備援軌 B：TWSE OpenAPI STOCK_DAY_ALL
+    if not twse_loaded:
+        try:
+            url_sda = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+            resp_sda = requests.get(url_sda, headers=headers_browser, timeout=timeout)
+            if resp_sda.status_code == 200:
+                for row in resp_sda.json():
+                    code = str(row.get("Code", "")).strip()
+                    if not FOUR_DIGIT_RE.match(code):
+                        continue
+                    shares = _parse_int_clean(row.get("TradeVolume"))
+                    turnover = _parse_float_clean(row.get("TradeValue"))
+                    close_price = _parse_float_clean(row.get("ClosingPrice"))
+                    if turnover <= 0 and shares > 0 and close_price > 0:
+                        turnover = shares * close_price
+                    snapshot[code] = {
+                        "vol_lots": round(shares / 1000.0, 2),
+                        "turnover_twd": turnover,
+                        "close": close_price,
+                        "market": "上市",
+                    }
+                if len(snapshot) >= 800:
+                    twse_loaded = True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("TWSE STOCK_DAY_ALL 抓取失敗: %s", exc)
+
+    # 備援軌 C：TWSE OpenAPI MI_INDEX_ALL (原始規格路徑)
+    if not twse_loaded:
+        try:
+            twse_url = "https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX_ALL"
+            resp = requests.get(twse_url, headers=headers_browser, timeout=timeout)
+            resp.raise_for_status()
+            for row in resp.json():
+                code = str(row.get("Code", "")).strip()
+                if not FOUR_DIGIT_RE.match(code):
+                    continue
+                shares = _parse_int_clean(row.get("TradeVolume"))
+                turnover = _parse_float_clean(row.get("TradeValue"))
+                close_price = _parse_float_clean(row.get("ClosingPrice"))
+                if turnover <= 0 and shares > 0 and close_price > 0:
+                    turnover = shares * close_price
+                snapshot[code] = {
+                    "vol_lots": round(shares / 1000.0, 2),
+                    "turnover_twd": turnover,
+                    "close": close_price,
+                    "market": "上市",
+                }
+                twse_loaded = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TWSE 所有快照管道皆抓取失敗: %s", exc)
 
     # 2. 上櫃 (TPEx) 全市場當日收盤表
     tpex_url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
