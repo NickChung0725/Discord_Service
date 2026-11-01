@@ -4,6 +4,7 @@ import json
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+import tests  # noqa: F401
 from fundamental_analyzer import FundamentalAnalyzer
 
 

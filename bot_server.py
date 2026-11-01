@@ -6,6 +6,7 @@ import os
 import logging
 from datetime import datetime, time as datetime_time, timedelta, timezone
 from dotenv import load_dotenv
+import services  # noqa: F401 - registers services/, quant/, taishin/ on sys.path
 from ai_service import register_ai_command
 from weather_service import get_weather_report, register_weather_command
 from stock_ai_command import register_stock_ai_command

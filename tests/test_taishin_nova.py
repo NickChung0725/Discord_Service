@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 from gspread.exceptions import APIError
 import pandas as pd
 
+import tests  # noqa: F401
 import fundamental_config
 from taishin_client import (
     BSAction,
@@ -81,7 +82,7 @@ class TestTaishinNova(unittest.TestCase):
             self.assertNotIn(tab, fundamental_config.SHEET_SCHEMAS)
 
         # Guardrail 6: Ensure github_uploader is never referenced in Taishin modules
-        for mod_name in ("taishin_config.py", "taishin_client.py", "taishin_portfolio_service.py"):
+        for mod_name in ("taishin/taishin_config.py", "taishin/taishin_client.py", "taishin_portfolio_service.py"):
             with open(mod_name, encoding="utf-8") as fh:
                 source = fh.read()
             self.assertNotIn("github_uploader", source)

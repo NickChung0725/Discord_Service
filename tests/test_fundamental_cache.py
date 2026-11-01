@@ -5,6 +5,7 @@ from datetime import date
 
 import pandas as pd
 
+import tests  # noqa: F401
 from fundamental_config import get_expected_watermarks
 from fundamental_cache import _anchor_pick
 

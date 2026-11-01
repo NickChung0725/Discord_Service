@@ -26,6 +26,7 @@ import requests
 from dotenv import load_dotenv
 from FinMind.data import DataLoader
 
+import quant  # noqa: F401 - registers services/, quant/, taishin/ on sys.path
 from fundamental_config import SHEET_SCHEMAS
 
 logger = logging.getLogger(__name__)

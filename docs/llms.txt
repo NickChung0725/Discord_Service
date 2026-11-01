@@ -1,0 +1,111 @@
+# Nova API
+
+> Nova API
+
+
+## FugleSDK
+
+- [SDK 下載](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/download/download-sdk.md): SDK 下載
+- [Corporate Actions Capital Changes](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/corporate-actions/captital-changes.md): 上市櫃股票及 ETF 之資本變動資料（面額變更、減資、分割）
+- [Corporate Actions Dividends](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/corporate-actions/dividends.md): 上市、櫃公司除權息資料 (含增資)
+- [Corporate Actions Listing Applicants](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/corporate-actions/listing-applicants.md): 上市、櫃公司上市申請資料
+- [開始使用](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/getting-started.md): 台新行情 Web API 提供開發者友善的 API 服務。您可以查詢台股的日內行情、行情快照與歷史行情等數據。
+- [Historical Candles](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/historical/candles.md): 查詢上市櫃、興櫃及指數歷史股價（依代碼查詢）。單次查詢區間須小於 1 年；上市櫃個股日資料最遠可回溯至 2010 年，指數部分最遠可回溯至 2015 年，興櫃則可回溯至 2024 年。
+- [Historical Stats](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/historical/stats.md): 取得近 52 週股價數據（依代碼查詢）
+- [Intraday Candles](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/intraday/candles.md): 股票價格Ｋ線（依代碼查詢）
+- [Intraday Quote](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/intraday/quote.md): 股票即時報價（依代碼查詢）
+- [Intraday Ticker](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/intraday/ticker.md): 取得股票資訊 (依股票代碼查詢)
+- [Intraday Tickers](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/intraday/tickers.md): 股票或指數列表（依條件查詢）
+- [Intraday Trades](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/intraday/trades.md): 股票成交明細（依代碼查詢）
+- [Intraday Volumes](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/intraday/volumes.md): 股票分價量表（依代碼查詢）
+- [Snapshot Actives](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/snapshot/actives.md): 股票成交量值排行（依市場別）
+- [Snapshot Movers](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/snapshot/movers.md): 股票漲跌幅排行（依市場別）
+- [Snapshot Quotes](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/snapshot/quotes.md): 股票行情快照（依市場別）
+- [Technical Bbands](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/technical/bbands.md): 取得特定股票在指定時間範圍內的布林通通 (Bollinger Bands)
+- [Technical KDJ](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/technical/kdj.md): 取得特定股票在指定時間範圍內的隨機指標 (KDJ)
+- [Technical MACD](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/technical/macd.md): 取得特定股票在指定時間範圍內的指數平滑異同移動平均線 (MACD)
+- [Technical RSI](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/technical/rsi.md): 取得特定股票在指定時間範圍內的相對強弱指標 (RSI)
+- [Technical SMA](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/http-api/technical/sma.md): 取得特定股票在指定時間範圍內的簡單移動平均 (SMA)
+- [台新行情 API](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/intro.md): 台新證券行情 Web API 提供開發者友善的  API 服務。您可以查詢台股的日內行情、行情快照與歷史行情等數據。
+- [速率限制](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/rate-limit.md): 行情 API 速率限制
+- [開始使用](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/websocket-api/getting-started.md): 台新行情 WebSocket API 提供台股即時行情服務。透過 WebSocket API 可以滿足您想要接收即時行情的需求。
+- [Aggregates](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/websocket-api/market-data-channels/aggregates.md): 接收訂閱股票聚合數據的行情資訊
+- [Books](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/websocket-api/market-data-channels/books.md): 接收訂閱股票最新最佳五檔委買委賣資訊
+- [Candles](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/websocket-api/market-data-channels/candles.md): 接收訂閱股票最新分鐘Ｋ
+- [Indices](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/websocket-api/market-data-channels/indices.md): 接收訂閱股票最新指數行情資料
+- [Trades](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data/websocket-api/market-data-channels/trades.md): 接收訂閱股票最新成交資訊
+- [開始使用](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/http-api/getting-started.md): 台新期貨行情 Web API 提供開發者友善的 API 服務。您可以查詢期貨日內行情、行情快照與歷史行情等數據。
+- [Intraday Candles](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/http-api/intraday/candles.md): 期權價格Ｋ線（依商品查詢）
+- [Products List](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/http-api/intraday/products.md): 期權契約清單（依條件查詢）
+- [Intraday Quote](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/http-api/intraday/quote.md): 期權即時報價（依商品代碼查詢）
+- [Intraday Ticker](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/http-api/intraday/ticker.md): 期權基本資料（依條件查詢）
+- [Intraday Tickers](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/http-api/intraday/tickers.md): 期權商品列表（依條件查詢）
+- [Intraday Trades](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/http-api/intraday/trades.md): 期權成交明細（依代碼查詢）
+- [Intraday Volumes](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/http-api/intraday/volumes.md): 期權分價量表（依代碼查詢）
+- [台新行情 API](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/intro.md): 台新期貨行情 Web API 提供開發者友善的 API 服務。您可以查詢期貨的日內行情數據。
+- [期貨選擇權月份代碼對照表](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/month-codes.md): 期貨選擇權月份代碼對照表
+- [速率限制](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/rate-limit.md): 行情 API 速率限制
+- [開始使用](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/websocket-api/getting-started.md): 台新行情 WebSocket API 提供台股即時行情服務。透過 WebSocket API 可以滿足您想要接收即時行情的需求。
+- [Aggregates](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/websocket-api/market-data-channels/aggregates.md): 接收訂閱期權聚合數據的行情資訊
+- [Books](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/websocket-api/market-data-channels/books.md): 接收訂閱期權商品最新最佳五檔委買委賣資訊
+- [Candles](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/websocket-api/market-data-channels/candles.md): 接收訂閱期權商品最新分鐘Ｋ
+- [Trades](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/market-data-future/websocket-api/market-data-channels/trades.md): 接收訂閱期權商品最新成交資訊
+- [以 LLM 輔助 SDK 串接開發](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/build-with-llm.md): 利用大型語言模型協助完成 SDK 的整合與實作。
+- [主動回報](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/guide/report_example.md): 詳細回傳內容，可參照Ack Object
+- [交易](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/guide/trade_example.md): 此篇教學將示範如何進行一個完整的買賣流程
+- [Nova API](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/introduction.md): Nova API 是專為程式交易與量化交易設計的台股 API 解決方案，由 Fugle 技術團隊攜手台新證券共同打造。提供跨平台 SDK (Windows / Mac / Linux)，支援台灣股票市場的自動交易，讓您的股票交易策略快速上線。適用於台股交易 API
+- [錯誤代碼](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/error.md): 錯誤代碼參考
+- [對帳單查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/AccountStatement.md): 透過 accountStatement 來查詢對帳單
+- [帳戶損益速查](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/AccountTotalPnL.md): 透過 accountTotalPnl 來查詢帳戶損益速查
+- [分戶帳銀行餘額查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/Balance.md): 透過 bankBalance 來查詢分戶帳銀行餘額
+- [庫存與未實現損益查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/Inventories.md): 透過 inventories 來查詢庫存與未實現損益
+- [歷史交割款查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/QueryHistorySettlement.md): 透過 historySettlement 來查詢歷史交割款
+- [今日交割款查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/QueryTodaySettlement.md): 透過 todaySettlement 來查詢今日交割款
+- [已實現損益查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/RealizedPnLDetail.md): 透過 realizedProfitAndLoses 來查詢已實現損益
+- [新光銀行餘額查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/SKBankBalance.md): 透過 skbankBalance 來查詢新光銀行餘額
+- [今日買賣日報與即時庫存](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/accountManagement/TodayTradeSummary.md): 透過 todayTradeSummary 來查詢今日買賣日報與即時庫存
+- [參數對照表](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/EnumMatrix.md): Enum、物件參數對照
+- [取得交易日](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/GetMarketTime.md): 透過 getMarketTime 來取得交易日資訊
+- [登入](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/login.md): 透過 login 來登入
+- [API 資格開通](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/RegisterApi.md): 透過 registerApiAuth 來開通 API 資格
+- [查詢歷史成交明細](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/FilledHistory.md): 透過 filledHistoryDetail 來查詢歷史成交明細
+- [查詢歷史成交](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/FilledHistoryDetail.md): 透過 filledHistory 來查詢歷史成交明細
+- [查詢今日成交彙總](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/GetFilled.md): 透過 getFilled 來查詢今日成交彙總
+- [查詢今日成交明細](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/GetFilledDetail.md): 透過 getFilledDetail 來查詢今日成交明細
+- [取得委託單結果](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/GetOrderResults.md): 透過 getOrderResults 來取得委託單結果
+- [資券配額查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/MarginQuota.md): 透過 marginQuota 來查詢資券配額
+- [修改委託價格](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/ModifyPrice.md): 透過 modifyPrice 來修改委託價格
+- [刪、改委託單數量](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/ModifyQuantity.md): 透過 modifyVolume 來刪除或修改委託單數量
+- [查詢歷史委託](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/OrderHistory.md): 透過 orderHistory 來查詢歷史委託
+- [建立委託單](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/PlaceOrder.md): 透過 placeOrder 來建立委託單
+- [警示股票查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/QueryAttentionStock.md): 透過 queryAttentionStock 來查詢警示股票
+- [處置股票查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/QueryDispositionStock.md): 透過 queryDispositionStock 來查詢處置股票
+- [現沖券餘額查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/nodejs/trade/ShortDayTradeQuota.md): 透過 shortDaytradeQuota 來查詢現沖券餘額
+- [對帳單查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/AccountStatement.md): 透過 account_statment 來取得對帳單資訊
+- [帳戶損益速查](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/AccountTotalPnL.md): 透過 account_total_pnl 來取得帳戶損益速查資訊
+- [分戶帳銀行餘額查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/Balance.md): 透過 bank_balance 來取得分戶帳銀行餘額資訊
+- [庫存與未實現損益查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/Inventories.md): 透過 inventories 來取得庫存與未實現損益資訊
+- [歷史交割款查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/QueryHistorySettlement.md): 透過 history_settlement 來取得歷史交割款資訊
+- [今日交割款查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/QueryTodaySettlement.md): 透過 today_settlement 來取得今日交割款資訊
+- [已實現損益查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/RealizedPnLDetail.md): 透過 realized_profit_and_loses 來取得已實現損益資訊
+- [新光銀行餘額查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/SKBankBalance.md): 透過 skbank_balance 來取得新光銀行餘額資訊
+- [今日買賣日報與即時庫存](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/accountManagement/TodayTradeSummary.md): 透過 today_trade_summary 來取得今日買賣日報與即時庫存資訊
+- [參數對照表](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/EnumMatrix.md): Enum、物件參數對照表
+- [取得交易日](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/GetMarketTime.md): 透過 get_market_time 取得交易日 API
+- [登入](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/login.md): 透過 login 來取得帳號資訊
+- [API 資格開通](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/RegisterApi.md): 透過 register_api_auth 來開通 API 資格
+- [查詢歷史成交](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/FilledHistory.md): 透過 filled_history 來取得歷史成交資訊
+- [查詢歷史成交明細](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/FilledHistoryDetail.md): 透過 filled_history_detail 來取得歷史成交明細資訊
+- [查詢今日成交彙總](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/GetFilled.md): 透過 get_filled 來取得今日成交彙總資訊
+- [查詢今日成交明細](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/GetFilledDetail.md): 透過 get_filled_detail 來取得今日成交明細資訊
+- [取得委託單結果](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/GetOrderResults.md): 透過 get_order_results 來取得委託單結果資訊
+- [資券配額查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/MarginQuota.md): 透過 margin_quota 來取得資券配額資訊
+- [修改委託價格](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/ModifyPrice.md): 透過 modify_price 來修改委託價格
+- [刪、改委託單數量](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/ModifyQuantity.md): 透過 modify_volume 來修改委託單數量
+- [查詢歷史委託](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/OrderHistory.md): 透過 order_history 來取得歷史委託資訊
+- [建立委託單](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/PlaceOrder.md): 透過 place_order 來建立委託單
+- [警示股票查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/QueryAttentionStock.md): 透過 query_attention_stock 來查詢警示股票
+- [處置股票查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/QueryDispositionStock.md): 透過 query_disposition_stock 來查詢處置股票
+- [現冲券餘額查詢](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/library/python/trade/ShortDayTradeQuota.md): 透過 short_daytrade_quota 來查詢現沖券餘額
+- [事前準備](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/prepare.md): 開始使用台新證券 Nova API 前的四個準備步驟：線上開戶、以憑證e管家申請並匯出憑證（.pfx）、簽署 API 使用風險暨聲明書、完成首次 API 認證。
+- [快速開始](https://ml-fugle-api.tssco.com.tw/FugleSDK/docs/trading/quickstart.md): 快速開始

@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 import pandas as pd
 import requests
 
+import tests  # noqa: F401
 from alignment_ai_picker import (
     _effective_sector_key,
     enforce_sector_cap,

@@ -16,6 +16,14 @@ from typing import Literal
 import discord
 from discord import app_commands
 
+from pathlib import Path
+import sys
+
+_ROOT = Path(__file__).resolve().parent.parent
+for _sub in (_ROOT, _ROOT / "services", _ROOT / "quant", _ROOT / "taishin"):
+    if str(_sub) not in sys.path:
+        sys.path.insert(0, str(_sub))
+
 from ai_service import ask_vertex_ai_with_meta, get_vertex_stage1_model
 from fundamental_analyzer import FundamentalAnalyzer
 from fundamental_cache import FundamentalCacheError, FundamentalCacheManager

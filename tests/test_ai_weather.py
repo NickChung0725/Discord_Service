@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
+import tests  # noqa: F401
 import ai_service
 import weather_service
 

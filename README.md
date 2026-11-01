@@ -35,7 +35,7 @@
 
 ## 🗄️ Google Sheets 智慧快取資料庫架構 (共 12 張工作表)
 
-系統採用 Google Sheets 作為雲端結構化資料庫（定義於 [`fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_config.py) 的 `SHEET_SCHEMAS`），自動建立並維護以下 12 張分頁：
+系統採用 Google Sheets 作為雲端結構化資料庫（定義於 [`quant/fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_config.py) 的 `SHEET_SCHEMAS`），自動建立並維護以下 12 張分頁：
 
 | 分頁名稱 | 定位與儲存內容 | 更新時機與快取策略 |
 | :--- | :--- | :--- |
@@ -56,7 +56,7 @@
 
 ## 🏦 台新證券個人帳務與 AI 持股健診專屬 Google Sheets 架構 (獨立 4 張工作表)
 
-個人對帳單與持股庫存完全隔離於獨立 Google Sheet（`TAISHIN_GSHEET_SPREADSHEET_ID`，定義於 [`taishin_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_config.py) 的 `TAISHIN_SHEET_SCHEMAS`），絕不污染公用 12 張財報快取表，且嚴禁上傳至 GitHub Pages：
+個人對帳單與持股庫存完全隔離於獨立 Google Sheet（`TAISHIN_GSHEET_SPREADSHEET_ID`，定義於 [`taishin/taishin_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin/taishin_config.py) 的 `TAISHIN_SHEET_SCHEMAS`），絕不污染公用 12 張財報快取表，且嚴禁上傳至 GitHub Pages：
 
 | 分頁名稱 | 定位與去重主鍵 (Unique Key) | 更新時機與策略 |
 | :--- | :--- | :--- |
@@ -71,22 +71,32 @@
 
 ```text
 Discord_Service/
-├── bot_server.py                # [Bot 主程式] 綁定伺服器 (Guild) 之機器人入口（含 Slash 指令、08:00 天氣與 6h 心跳排程）
-├── bot.py                       # [技術面指令] /stock 指令註冊與獨立啟動入口
-├── stock_ai_command.py          # [基本面指令] /stock_ai 指令註冊（支援單股診斷、專題問答、多股比較與戰情室互動按鈕）
-├── chart_generator.py           # [技術面圖表] FinMind 日 K + Yahoo 成交量 + MA/KD/MACD Plotly 互動圖表生成器
-├── fundamental_config.py        # [結構與Prompt] SASD v3.3.0 12 張 Google Sheets Schema、會計科目錨點與法人級 AI Prompt 模板
-├── fundamental_cache.py         # [財報快取引擎] Google Sheets 增量同步、累季轉單季、衍生指標計算與批次記憶體快取管理
-├── fundamental_analyzer.py      # [單股分析引擎] 滑動視窗切片、7 大財報表+新聞+法說展望檢索、結構化 ai_summary_json 與戰情室發布
-├── finmind_stock_scanner.py     # [19:00/22:30 掃描器] 五線順勢與型態A反彈掃描、大盤紅綠燈、SQLite 限流器、Sheets 同步與 CLI 入口
-├── alignment_ai_picker.py       # [22:00/22:30 選股器] 訊號預篩、批次財報同步、Vertex AI 跨股總決策（含戰術分流與測幅三刀流）與推播
-├── ai_service.py                # [雙軌 AI 服務] 免費版 Google AI Studio（日常/單股診斷）與付費版 Vertex AI（22:00 跨股彙總決策）呼叫封裝與 /ai 指令
-├── weather_service.py           # [氣象服務] Open-Meteo 台北即時與預報天氣抓取、格式化與 /weather 指令
-├── github_uploader.py           # [網頁發布器] 透過 GitHub Contents API 將 HTML 圖表與戰情室上傳至 GitHub Pages
-├── taxonomy_service.py          # [細分產業知識庫] TWSE/TPEx 盤後快照雙軌量能預篩、下市偵測、Yahoo 業務簡介 + Gemini Lite 細分產業/同業標籤與 08_Stock_Taxonomy 同步
-├── taishin_config.py            # [台新帳務設定] 個人帳務 Google Sheet Schema (4張表)、前導零保護與 AI 持股健診 Prompt 模板
-├── taishin_client.py            # [台新 SDK 封裝] TaishinSDK 登入、PyO3 物件正規化、動態日期簽章探測、30天分塊與 0050 下單安全閘門
-├── taishin_portfolio_service.py # [台新帳務主服務] 全歷史對帳單回補、每日 11:00 帳務同步、AI 持股均價診斷、0050 智慧定投與 CLI 入口
+├── bot_server.py                # [常駐主入口] 綁定伺服器 (Guild) 之 Discord 機器人入口（含 Slash 指令、08:00 天氣與 6h 心跳排程）
+├── finmind_stock_scanner.py     # [量化主入口] 19:00 五線順勢掃描、22:00 AI 選股、22:30 型態A反彈掃描、大盤紅綠燈與 CLI 入口
+├── taishin_portfolio_service.py # [帳務主入口] 11:00 台新帳務同步、全歷史對帳單回補、AI 持股均價診斷、13:15 0050 智慧定投與 CLI 入口
+├── services/                    # [Discord 指令與共用外部服務層]
+│   ├── __init__.py
+│   ├── ai_service.py            # 雙軌 AI 服務：免費版 Google AI Studio 與付費版 Vertex AI 呼叫封裝與 /ai 指令
+│   ├── weather_service.py       # Open-Meteo 台北即時與預報天氣抓取、格式化與 /weather 指令
+│   ├── github_uploader.py       # 透過 GitHub Contents API 將 HTML 圖表與戰情室上傳至 GitHub Pages
+│   ├── stock_ai_command.py      # /stock_ai 指令註冊（單股診斷、專題問答、多股比較與戰情室互動按鈕）
+│   └── bot.py                   # /stock 技術面 K 線指令註冊與獨立啟動入口
+├── quant/                       # [台股量化分析、財報快取與 AI 選股核心引擎]
+│   ├── __init__.py
+│   ├── fundamental_config.py    # 12 張 Google Sheets Schema、會計科目錨點與法人級 AI Prompt 模板
+│   ├── fundamental_cache.py     # Google Sheets 增量同步、累季轉單季、衍生指標計算與批次記憶體快取管理
+│   ├── fundamental_analyzer.py  # 單股 Step 1~7 財報診斷、新聞雜訊清洗、結構化 ai_summary_json 與戰情室發布
+│   ├── alignment_ai_picker.py   # 22:00/22:30 訊號預篩、批次財報同步、Vertex AI 跨股紅藍軍辯證總決策與推播
+│   ├── taxonomy_service.py      # TWSE/TPEx 盤後快照雙軌量能預篩、下市偵測与 08_Stock_Taxonomy 細分產業知識庫
+│   └── chart_generator.py       # FinMind 日 K + Yahoo 成交量 + MA/KD/MACD Plotly 互動圖表生成器
+├── taishin/                     # [台新證券 Nova API 內部模組]
+│   ├── __init__.py
+│   ├── taishin_config.py        # 個人帳務 Google Sheet Schema (4張表)、前導零保護與 AI 持股健診 Prompt 模板
+│   └── taishin_client.py        # TaishinSDK 登入、PyO3 物件正規化、動態日期簽章探測、30天分塊與 0050 下單安全閘門
+├── docs/                        # [開發參考文件]
+│   └── llms.txt                 # 台新/富果 Nova API 參考文件索引
+├── scripts/                     # [開發與診斷輔助腳本]
+│   └── test_log.py              # 本地 Google AI Studio / Vertex AI 連線測試腳本
 ├── certs/                       # [憑證與金鑰目錄] 存放台新 .pfx 憑證與 Google sheetbot.json (列入 .gitignore 嚴禁版控)
 ├── finmind_scanner.json         # [掃描設定檔] 掃描市場/產業、排除清單、API 速率限制、19:00 / 22:00 / 22:30 排程開關設定
 ├── deploy/                      # [systemd 部署] Linux 常駐與定時排程設定檔
@@ -101,6 +111,8 @@ Discord_Service/
 │   ├── finmind-rebound-ai.service # 22:30 型態 A 長均線回踩反彈掃描與彈性 AI 診斷服務
 │   └── finmind-rebound-ai.timer   # 週一至週五 22:30 定時器
 ├── tests/                       # [單元測試] 涵蓋氣象/AI、均線與反彈掃描、大盤紅綠燈、財報快取、AI 選股與台新模組之自動化測試
+├── pyproject.toml               # [套件定義] uv 專案依賴設定檔
+├── uv.lock                      # [套件鎖定] uv 環境版本鎖定檔
 ├── CHANGELOG.md                 # [變更日誌] 記錄每次功能迭代與架構演進歷史
 └── AGENTS.md                    # [AI 開發守則] 記錄本地 uv 環境路徑與文件自動同步規範
 ```

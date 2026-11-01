@@ -117,7 +117,7 @@ def _finmind_reports_dir() -> Path:
     env_reports_dir = os.getenv("FINMIND_REPORTS_DIR", "").strip()
     if env_reports_dir:
         return Path(env_reports_dir)
-    return Path(__file__).resolve().parent / "finmind_reports"
+    return Path(__file__).resolve().parent.parent / "finmind_reports"
 
 
 def _ai_logs_dir() -> Path:

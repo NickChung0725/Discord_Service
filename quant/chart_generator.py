@@ -17,7 +17,7 @@ from plotly.subplots import make_subplots
 
 _STOCK_ID_PATTERN = re.compile(r"^\d{4,6}$")
 _REQUIRED_COLUMNS = ("date", "open", "max", "min", "close", "Trading_Volume")
-_OUTPUT_DIR = Path(__file__).resolve().parent / "generated_charts"
+_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "generated_charts"
 _CHART_HISTORY_MONTHS = 6
 _INDICATOR_HISTORY_MONTHS = 12
 _YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"

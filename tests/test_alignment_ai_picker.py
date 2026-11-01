@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 
 import pandas as pd
 
+import tests  # noqa: F401
 import ai_service
 from alignment_ai_picker import (
     build_dossier,

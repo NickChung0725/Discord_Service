@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import pandas as pd
 
+import tests  # noqa: F401
 import chart_generator
 from chart_generator import (
     InvalidStockIDError,
@@ -68,7 +69,10 @@ class StockChartTests(unittest.TestCase):
             self.assertIn("KD", html)
             self.assertIn("MACD", html)
             self.assertIn("Yahoo Finance", html)
-            self.assertIn(r"HTML \u7522\u51fa\u6642\u9593\uff08\u53f0\u7063\uff09\uff1a", html)
+            self.assertTrue(
+                "HTML 產出時間（台灣）：" in html
+                or r"HTML \u7522\u51fa\u6642\u9593\uff08\u53f0\u7063\uff09\uff1a" in html
+            )
             self.assertIn("選取區間價格", html)
             self.assertIn("value.match(/^", html)
             self.assertIn("plotly_relayouting", html)

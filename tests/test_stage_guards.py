@@ -1,10 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
 
 import pandas as pd
 
+import tests  # noqa: F401
 from fundamental_analyzer import (
     FundamentalAnalyzer,
     RSS_NO_CONTENT_NOTE,

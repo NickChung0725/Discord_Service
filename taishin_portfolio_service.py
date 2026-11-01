@@ -29,6 +29,7 @@ import gspread
 from gspread.exceptions import APIError
 import pandas as pd
 
+import taishin  # noqa: F401 - registers services/, quant/, taishin/ on sys.path
 from ai_service import ask_gemini_diagnosis_with_meta
 from taishin_client import (
     TaishinClient,

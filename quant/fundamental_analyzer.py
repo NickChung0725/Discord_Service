@@ -26,6 +26,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
+import sys
+
+_ROOT = Path(__file__).resolve().parent.parent
+for _sub in (_ROOT, _ROOT / "services", _ROOT / "quant", _ROOT / "taishin"):
+    if str(_sub) not in sys.path:
+        sys.path.insert(0, str(_sub))
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +48,8 @@ from fundamental_config import PROMPT_TEMPLATES
 
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
-_OUTPUT_DIR = Path(__file__).resolve().parent / "generated_charts"
-_DEFAULT_REPORTS_DIR = Path(__file__).resolve().parent / "finmind_reports"
+_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "generated_charts"
+_DEFAULT_REPORTS_DIR = Path(__file__).resolve().parent.parent / "finmind_reports"
 
 # --------------------------------------------------------------------------- #
 # SASD v4.0 Stage 0：Google News RSS 雜訊清洗（純 Python、0 Token）

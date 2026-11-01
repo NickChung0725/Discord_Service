@@ -11,6 +11,14 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from pathlib import Path
+import sys
+
+_ROOT = Path(__file__).resolve().parent.parent
+for _sub in (_ROOT, _ROOT / "services", _ROOT / "quant", _ROOT / "taishin"):
+    if str(_sub) not in sys.path:
+        sys.path.insert(0, str(_sub))
+
 from ai_service import register_ai_command
 from weather_service import register_weather_command
 from chart_generator import (
