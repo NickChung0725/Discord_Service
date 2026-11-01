@@ -1331,10 +1331,12 @@ def sync_daily(
     start_dt = today - timedelta(days=lookback_days)
     now_iso = _now_iso_in_taipei()
 
+    print(f"[sync-daily] 正在登入台新證券 Nova API 並同步帳務 (基準日: {today.isoformat()})...")
     client.ensure_logged_in()
     account_no = client.get_account_no_str()
 
     # 1. Sync recent 7 days of statements, fills, settlements, bank balance & realized PnL
+    print(f"[sync-daily] 抓取近 {lookback_days} 天對帳單、成交明細與交割紀錄...")
     raw_stmt = client.fetch_account_statement(start_dt, today)
     raw_fills = client.fetch_filled_history(start_dt, today)
     raw_fill_details = client.fetch_filled_history_detail(start_dt, today)
@@ -1379,6 +1381,7 @@ def sync_daily(
     added_statements = 0
     added_settlements = 0
     if sheet_mgr is not None and not dry_run:
+        print("[sync-daily] 寫入 Google Sheet 01_Account_Statement 與 03_Settlement_And_PnL...")
         added_statements = sheet_mgr.append_deduplicated_rows(
             STATEMENT_SHEET_NAME,
             recent_statements,
@@ -1399,6 +1402,7 @@ def sync_daily(
     combined_statements = [*existing_statements, *recent_statements]
 
     # 2. Fetch latest holdings (`inventories`) & cross-table technical / fundamental cache
+    print("[sync-daily] 抓取即時庫存 (inventories) 與跨表歷史加權成本...")
     raw_inventories = client.fetch_inventories()
     tech_map, market_regime = load_local_technical_context(reports_dir=reports_dir, as_of=today)
     holding_stock_ids = {
@@ -1420,6 +1424,7 @@ def sync_daily(
     portfolio_overview = ""
     model_version = ""
     if run_ai and holdings_rows:
+        print(f"[sync-daily] 正在調用 AI (Gemini) 進行 18 檔持股成本安全墊與均線健診分析（大約需 10~25 秒）...")
         try:
             holdings_rows, portfolio_overview, model_version = asyncio.run(
                 run_portfolio_ai_diagnosis(
@@ -1435,6 +1440,7 @@ def sync_daily(
 
     # 4. Overwrite `02_Portfolio_Holdings`
     if sheet_mgr is not None and not dry_run:
+        print("[sync-daily] 覆寫 Google Sheet 02_Portfolio_Holdings 最新庫存狀態...")
         sheet_mgr.overwrite_tab(HOLDINGS_SHEET_NAME, holdings_rows)
 
     # 5. Format & push report
@@ -1453,6 +1459,7 @@ def sync_daily(
 
     sent_discord = 0
     if post_discord and not dry_run:
+        print("[sync-daily] 推播持股健診與帳務報告至 Discord...")
         sent_discord = post_to_taishin_discord(messages)
 
     return {

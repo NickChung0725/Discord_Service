@@ -317,8 +317,26 @@ cd ~/Discord_Service && git pull && uv sync --inexact && sudo systemctl restart 
 sudo systemctl stop discordbot
 ```
 
-### 4. 從 GCP VM 下載檔案至本地 Windows
+### 4. 與 GCP VM 檔案傳輸 (PSCP)
+
+#### 4.1 從 GCP VM 下載檔案至本地 Windows (Download)
 
 ```powershell
+# 下載單一檔案
 pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" nick_chung0725@8.229.251.176:/home/nick_chung0725/Discord_Service/finmind_reports/logs/2026-10-30_ai_calls.log "C:\Users\Hung-PC\Downloads"
+
+# 下載整個資料夾（加 -r）
+pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r nick_chung0725@8.229.251.176:/home/nick_chung0725/Discord_Service/certs "C:\Users\Hung-PC\Downloads\certs"
+```
+
+#### 4.2 從本地 Windows 上傳檔案至 GCP VM (Upload)
+
+將「本地路徑」放在前面、「遠端目的地路徑」放在後面即可：
+
+```powershell
+# 上傳單一檔案至 VM 的專案目錄
+pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" "C:\path\to\local_file.ext" nick_chung0725@8.229.251.176:/home/nick_chung0725/Discord_Service/
+
+# 上傳整個資料夾（加 -r，例如上傳憑證或資料庫）
+pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r "C:\path\to\certs" nick_chung0725@8.229.251.176:/home/nick_chung0725/Discord_Service/certs
 ```

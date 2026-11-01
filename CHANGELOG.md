@@ -35,7 +35,7 @@
   * **金鑰移入 `certs/` 集中管理**：確認官方與版控規範為 `certs/`，將 Google 服務帳號金鑰正式移入憑證目錄 [`certs/sheetbot.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/certs/sheetbot.json)，與台新證券 `.pfx` 憑證集中受 [`.gitignore`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.gitignore)（阻擋 `certs/`）防護，徹底清除歷史殘留的拼錯資料夾 `crets/`。
   * **台新憑證路徑探測強化 (`taishin_client.py`)**：[`taishin_client.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_client.py) 的 `TaishinCredentials.from_env()` 新增多層 fallback 探測順序（`TAISHIN_CERT_PATH` ➔ `certs/taishin_cert.pfx` ➔ `certs/{person_id}.pfx` ➔ `certs/*.pfx`），確保身分證字號命名之憑證在未明確指定環境變數時亦能正確載入。
   * **Google 服務帳號金鑰跨環境容錯與向後相容**：在 [`fundamental_cache.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_cache.py)、[`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py)、[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py) 與 [`taxonomy_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taxonomy_service.py) 中，實作雙向相容探測順序（`GOOGLE_APPLICATION_CREDENTIALS` ➔ `certs/sheetbot.json` ➔ `./sheetbot.json`），無論本地 Windows 將金鑰收納於 `certs/` 或 Linux 伺服器放在舊有路徑，皆能無縫自動偵測。
-  * **文件與環境範例同步更新**：同步更新 [`README.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/README.md) 與 [`.env.example`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.env.example) 之 `GOOGLE_APPLICATION_CREDENTIALS=certs/sheetbot.json` 說明。
+  * **文件與環境範例同步更新**：同步更新 [`README.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/README.md)（補齊 GCP VM PSCP 雙向下載與上傳指令教學）與 [`.env.example`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.env.example) 之 `GOOGLE_APPLICATION_CREDENTIALS=certs/sheetbot.json` 說明。
 
 ---
 
