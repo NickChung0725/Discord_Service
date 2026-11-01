@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Taishin Securities accounting sync and AI holdings diagnosis at 11:00 Mon-Fri Taipei time
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 11:00:00 Asia/Taipei
+Persistent=true
+Unit=taishin-statement.service
+
+[Install]
+WantedBy=timers.target

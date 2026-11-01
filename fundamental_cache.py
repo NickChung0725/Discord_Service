@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import logging
 import os
+from pathlib import Path
 import re
 import time
 from typing import Any, Mapping
@@ -223,6 +224,12 @@ def validate_cash_flow_rows(df_delta: pd.DataFrame, *, tolerance_abs: float = 1e
 class FundamentalCacheManager:
     def __init__(self) -> None:
         credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if credentials_path and Path(credentials_path).is_file():
+            pass
+        elif Path("certs/sheetbot.json").is_file():
+            credentials_path = "certs/sheetbot.json"
+        elif Path("sheetbot.json").is_file():
+            credentials_path = "sheetbot.json"
         spreadsheet_id = os.getenv("GSHEET_SPREADSHEET_ID", "").strip()
         if not credentials_path:
             raise FundamentalCacheError("GOOGLE_APPLICATION_CREDENTIALS is not configured.")

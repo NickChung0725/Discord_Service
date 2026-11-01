@@ -4,6 +4,34 @@
 
 ---
 
+## [v5.1.0] - 2026-11-01
+### ✨ 新增功能 (Added)
+* **台新證券 Nova API 歷史對帳單回補、帳務同步與 AI 持股健診模組 (SASD v5.1.0)**：
+  * **純背景排程與 CLI 架構（零侵入既有系統）**：完全不修改 `bot_server.py`、`fundamental_config.py` 與 `fundamental_cache.py`，新增獨立設定與提示詞模組 [`taishin_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_config.py)、SDK 封裝器 [`taishin_client.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_client.py) 與帳務主服務 [`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py)。
+  * **獨立個人 Google Sheet 4 大分頁 (`TAISHIN_GSHEET_SPREADSHEET_ID`)**：
+    * `01_Account_Statement`（全歷史交易對帳單與成交總表）、`02_Portfolio_Holdings`（目前持股庫存與 AI 均價操作建議表）、`03_Settlement_And_PnL`（交割款預警與歷史已實現損益表）、`04_DCA_0050_Tracker`（0050 每週不定期定額智慧尋底表）。
+    * 實作主鍵冪等去重、每批次最多 500 筆 `append_rows(..., value_input_option="USER_ENTERED")`、HTTP `429` 指數退避重試（`2s, 4s, 8s`），以及 ETF 股票代號與委託單號前導零保護（如 `'0050`、`'00878`）。
+  * **Rust PyO3 二進位物件正規化與動態簽章探測 (`taishin_client.py`)**：
+    * 實作 `normalize_sdk_obj()` 遞迴轉型無 `__dict__` 之 Rust PyO3 擴充物件；相容官方 `account_statment` 拼字與 `call_sdk_with_date_range()` 自動探測 `(acc, YYYYMMDD, YYYYMMDD)` ➔ `(acc, YYYY-MM-DD, YYYY-MM-DD)` ➔ `(acc)` 並於 Python 端精確過濾日期區間。
+  * **全歷史對帳單 30 天分塊回補 (`backfill-history`)**：
+    * 自動將查詢區間切分為 30 天 Chunks，單一 Process 僅呼叫 1 次 `sdk.login()`、Chunk 間 `sleep(1.5)` 秒限流保護，並交叉比對 `account_statment` 與 `filled_history` / `filled_history_detail` 自動補遺缺漏成交紀錄與估算稅費。
+  * **每日 11:00 帳務同步與 AI 持股買入均價診斷 (`sync-daily`)**：
+    * 同步近 7 日對帳單、今日交割款、分戶帳餘額（自動判定 `⚠️餘額不足`）與最新庫存；若 API 未回傳買入均價則自動由 `01_Account_Statement` 歷史買進紀錄加權計算。
+    * 跨表串聯本地 `prices.csv` 五線均線與公用 `00_Watchlist_Master` 快取，呼叫 `STAGE1_MODEL`（備援 `VERTEX_STAGE1_MODEL`）輸出成本安全墊評估、操作標籤與具體保本停利/目標價，推播至 `TAISHIN_ALERT_CHANNEL_ID`（严禁上傳 GitHub Pages）。
+  * **週一至週五 13:15 `0050` 每週不定期定額智慧尋底引擎 (`eval-dca-0050`)**：
+    * 週一至週四偵測「17MA 負乖離 <= -1.5%」、「回踩 45MA」、「RSI(14)<=40 或 KD_K<=30」、「近 10 日高點回落 >= 2.5%」四大低點訊號；週五 13:15 若本週尚未買進則強制執行保底定投（依 `dip_score` 動態調整 `0.6x ~ 1.5x` 股數）。支援 `TAISHIN_ENABLE_TRADING` 與 `--confirm-live-order` 雙重下單安全閘門。
+  * **新增 `systemd` 定時排程與完整單元測試**：
+    * 新增 [`deploy/taishin-statement.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/taishin-statement.service)、[`deploy/taishin-statement.timer`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/taishin-statement.timer)、[`deploy/taishin-dca-0050.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/taishin-dca-0050.service)、[`deploy/taishin-dca-0050.timer`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/taishin-dca-0050.timer) 與 [`tests/test_taishin_nova.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_taishin_nova.py)。
+
+### 🔧 優化與修正 (Changed & Fixed)
+* **憑證與金鑰目錄清理、集中收納與跨平台路徑智慧容錯 (`certs/sheetbot.json`)**：
+  * **金鑰移入 `certs/` 集中管理**：確認官方與版控規範為 `certs/`，將 Google 服務帳號金鑰正式移入憑證目錄 [`certs/sheetbot.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/certs/sheetbot.json)，與台新證券 `.pfx` 憑證集中受 [`.gitignore`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.gitignore)（阻擋 `certs/`）防護，徹底清除歷史殘留的拼錯資料夾 `crets/`。
+  * **台新憑證路徑探測強化 (`taishin_client.py`)**：[`taishin_client.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_client.py) 的 `TaishinCredentials.from_env()` 新增多層 fallback 探測順序（`TAISHIN_CERT_PATH` ➔ `certs/taishin_cert.pfx` ➔ `certs/{person_id}.pfx` ➔ `certs/*.pfx`），確保身分證字號命名之憑證在未明確指定環境變數時亦能正確載入。
+  * **Google 服務帳號金鑰跨環境容錯與向後相容**：在 [`fundamental_cache.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/fundamental_cache.py)、[`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py)、[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py) 與 [`taxonomy_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taxonomy_service.py) 中，實作雙向相容探測順序（`GOOGLE_APPLICATION_CREDENTIALS` ➔ `certs/sheetbot.json` ➔ `./sheetbot.json`），無論本地 Windows 將金鑰收納於 `certs/` 或 Linux 伺服器放在舊有路徑，皆能無縫自動偵測。
+  * **文件與環境範例同步更新**：同步更新 [`README.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/README.md) 與 [`.env.example`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.env.example) 之 `GOOGLE_APPLICATION_CREDENTIALS=certs/sheetbot.json` 說明。
+
+---
+
 ## [v5.0.1] - 2026-10-30
 ### 🔧 優化與修正 (Changed & Fixed)
 * **GitHub Pages 戰情室上傳自動重試與單股診斷容錯隔離**：

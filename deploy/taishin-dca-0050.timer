@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Taishin Securities 0050 smart DCA evaluation at 13:15 Mon-Fri Taipei time
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13:15:00 Asia/Taipei
+Persistent=true
+Unit=taishin-dca-0050.service
+
+[Install]
+WantedBy=timers.target

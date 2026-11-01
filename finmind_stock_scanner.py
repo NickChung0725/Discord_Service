@@ -1863,6 +1863,12 @@ def sync_alignment_to_gsheet(
         if credentials_path is not None
         else os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
     )
+    if resolved_credentials and Path(resolved_credentials).is_file():
+        pass
+    elif Path("certs/sheetbot.json").is_file():
+        resolved_credentials = "certs/sheetbot.json"
+    elif Path("sheetbot.json").is_file():
+        resolved_credentials = "sheetbot.json"
     resolved_spreadsheet_id = (
         spreadsheet_id
         if spreadsheet_id is not None
@@ -2482,6 +2488,12 @@ def sync_rebound_watchlist_to_gsheet(
         if credentials_path is not None
         else os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
     )
+    if resolved_credentials and Path(resolved_credentials).is_file():
+        pass
+    elif Path("certs/sheetbot.json").is_file():
+        resolved_credentials = "certs/sheetbot.json"
+    elif Path("sheetbot.json").is_file():
+        resolved_credentials = "sheetbot.json"
     resolved_spreadsheet_id = (
         spreadsheet_id
         if spreadsheet_id is not None

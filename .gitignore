@@ -7,11 +7,15 @@ __pycache__/
 finmind_reports/
 generated_charts/
 generated_reports/
+log/
+*.log*
 
 # secrets / credentials
 service_account.json
 *service_account*.json
 sheetbot.json
+certs/
+*.pfx
 
 # local scratch
 test_log.PY

@@ -691,6 +691,12 @@ class TaxonomyService:
 
     def _pull_from_gsheet(self) -> None:
         creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if creds and Path(creds).is_file():
+            pass
+        elif Path("certs/sheetbot.json").is_file():
+            creds = "certs/sheetbot.json"
+        elif Path("sheetbot.json").is_file():
+            creds = "sheetbot.json"
         sheet_id = os.getenv("GSHEET_SPREADSHEET_ID", "").strip()
         if not creds or not sheet_id:
             return
@@ -710,6 +716,12 @@ class TaxonomyService:
 
     def sync_to_gsheet(self) -> int:
         creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if creds and Path(creds).is_file():
+            pass
+        elif Path("certs/sheetbot.json").is_file():
+            creds = "certs/sheetbot.json"
+        elif Path("sheetbot.json").is_file():
+            creds = "sheetbot.json"
         sheet_id = os.getenv("GSHEET_SPREADSHEET_ID", "").strip()
         if not creds or not sheet_id or not self._records:
             return 0
