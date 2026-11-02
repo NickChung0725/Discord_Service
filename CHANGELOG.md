@@ -19,6 +19,13 @@
     * 新增 [`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py) 唯讀子命令 `dump-context`（支援 `--refresh-live` 即時登入台新 API 更新庫存）與 [`.agent/skills/portfolio-advisor/SKILL.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.agent/skills/portfolio-advisor/SKILL.md)，讓使用者在本地 Antigravity 對話詢問庫存時可隨時調閱精準成本均價、建倉記憶與國際盤數據進行深度互動（維持零 Discord 斜線指令暴露個人資產之資安隔離）。
 
 ### 🔧 優化與修正 (Changed & Fixed)
+* **型態 A 跌深反彈掃描定時排程由 22:30 改至 20:50**：
+  * 將 [`deploy/finmind-rebound-ai.timer`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-rebound-ai.timer) 觸發時間由 `22:30` 調整為 `20:50`（`OnCalendar=Mon..Fri *-*-* 20:50:00 Asia/Taipei`），在 19:00~20:00 全市場掃描完成後、21:00 AI 嚴選選股前 10 分鐘精準產出型態 A 跌深回踩均線之績優股。
+  * 強化 [`quant/alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/alignment_ai_picker.py) 之 `run_rebound_pipeline` 與成交量回補函式，若當日日線未及產出時自動向前回溯讀取最新交易日之 `prices.csv` 與大盤燈號快取，提供雙重防禦保護。
+  * 同步更新 [`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py)、[`taishin/taishin_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin/taishin_config.py) 與 [`README.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/README.md) 排程時間軸、服務部署設定與說明文件。
+* **AI 嚴選選股定時排程由 22:00 提早至 21:00**：
+  * 將 [`deploy/finmind-ai-pick.timer`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-ai-pick.timer) 觸發時間由 `22:00` 提前至 `21:00`（`OnCalendar=Mon..Fri *-*-* 21:00:00 Asia/Taipei`），緊隨於 19:00~20:00 全市場均線掃描完成後執行，減少盤後等待時間。
+  * 同步更新 [`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py) CLI 說明與 [`README.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/README.md) 時間軸、服務設定與環境變數說明。
 * **22:00 `AI_Daily_Picks` 結構化交易計畫欄位擴充**：
   * 於 [`quant/fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_config.py) 的 `SHEET_SCHEMAS["AI_Daily_Picks"]` 末端新增 `tactical_type`、`target_price_1`、`target_price_2`、`stop_loss_price` 四欄，並更新 [`quant/alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/alignment_ai_picker.py) 的 `build_pick_rows()` 自動寫入 Stage 2 / Stage 1 `trade_plan` 目標價與停損價，供盤後建倉記憶精準錨定。
 * **台新排程收斂重整（退役 `11:00` 盤中排程，升級為 `22:45` 記憶歸因 ＋ `08:15` 開盤作戰晨報）**：

@@ -1,8 +1,8 @@
 [Unit]
-Description=Run FinMind alignment-signal AI stock picker on weekdays at 22:00
+Description=Run FinMind alignment-signal AI stock picker on weekdays at 21:00
 
 [Timer]
-OnCalendar=Mon..Fri *-*-* 22:00:00 Asia/Taipei
+OnCalendar=Mon..Fri *-*-* 21:00:00 Asia/Taipei
 Persistent=true
 Unit=finmind-ai-pick.service
 

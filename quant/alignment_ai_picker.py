@@ -113,6 +113,15 @@ def _backfill_volume_from_prices(
 
     prices_path = daily_dir / f"{target_date.isoformat()}_prices.csv"
     if not prices_path.is_file():
+        candidates = sorted(daily_dir.glob("*_prices.csv"))
+        if candidates:
+            prices_path = candidates[-1]
+            try:
+                date_str = prices_path.stem.split("_")[0]
+                target_date = date.fromisoformat(date_str)
+            except Exception:
+                pass
+    if not prices_path.is_file():
         return result
     try:
         prices_df = pd.read_csv(prices_path, dtype={"stock_id": str})
@@ -1301,6 +1310,15 @@ async def run_rebound_pipeline(
     daily_dir = output_root / "daily"
     prices_path = daily_dir / f"{target_date.isoformat()}_prices.csv"
     if not prices_path.is_file():
+        candidates = sorted(daily_dir.glob("*_prices.csv"))
+        if candidates:
+            prices_path = candidates[-1]
+            try:
+                date_str = prices_path.stem.split("_")[0]
+                target_date = date.fromisoformat(date_str)
+            except Exception:
+                pass
+    if not prices_path.is_file():
         print(f"[skip] 找不到 {prices_path}（休市或 19:00 任務未產出）。")
         return 0
 
@@ -1486,7 +1504,7 @@ async def run_rebound_pipeline(
                 model=portfolio_model,
                 model_version=portfolio_model_version,
                 market_regime=market_regime,
-                title_label="22:30 型態 A 反彈 AI 嚴選決策報告",
+                title_label="20:50 型態 A 反彈 AI 嚴選決策報告",
             )
             if not dry_run:
                 payload = {

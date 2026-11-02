@@ -2136,7 +2136,7 @@ def match_entry_to_picks(
     Priority:
       1. `AI_Daily_Picks` (`category == "TOP_PICK"`)
       2. `AI_Daily_Picks` (`category == "WATCHLIST"`)
-      3. `Rebound_Watchlist` (22:30 Pattern A)
+      3. `Rebound_Watchlist` (20:50 Pattern A)
 
     Returns `None` if the stock was NOT in any actionable list within the window (e.g. `0050`,
     legacy holdings, or discretionary trades).
@@ -2229,7 +2229,7 @@ def match_entry_to_picks(
             "war_room_url": war_url,
         }
 
-    # 3. Search Rebound_Watchlist (22:30 Pattern A)
+    # 3. Search Rebound_Watchlist (20:50 Pattern A)
     reb_matches: list[tuple[date, dict[str, Any]]] = []
     for row in rebound_watchlist:
         if clean_leading_zero_code(row.get("stock_id", "")) != sno:

@@ -964,11 +964,11 @@ def format_rebound_report(
     market_regime: Mapping[str, object] | None = None,
     ai_executed: bool = False,
 ) -> list[str]:
-    """格式化 22:30 型態 A（高點急跌回踩長均線反彈）Discord 快報。"""
+    """格式化 20:50 型態 A（高點急跌回踩長均線反彈）Discord 快報。"""
     report_date = (as_of or _today_in_taipei()).isoformat()
     count = len(rebound_signals)
     heading_lines = [
-        f"🪃 【22:30 型態 A：高點回跌回踩長均線反彈清單】{report_date}",
+        f"🪃 【20:50 型態 A：高點回跌回踩長均線反彈清單】{report_date}",
         f"🎯 今日符合反彈條件標的總數：{count} 檔",
         "條件：MA45 >= MA117 > MA189｜近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 >=10%｜回踩 45MA/117MA（-1.5%~+2.5%）｜反彈至 17MA 空間 >=5%｜K線收盤強度 >=0.55",
     ]
@@ -2483,7 +2483,7 @@ def sync_rebound_watchlist_to_gsheet(
     tab_name: str = REBOUND_WATCHLIST_SHEET_NAME,
     replace_date: bool = True,
 ) -> int:
-    """將 22:30 型態 A 反彈清單同步寫入 Google Sheets Rebound_Watchlist。"""
+    """將 20:50 型態 A 反彈清單同步寫入 Google Sheets Rebound_Watchlist。"""
     resolved_credentials = (
         credentials_path
         if credentials_path is not None
@@ -3175,7 +3175,7 @@ def _make_parser() -> argparse.ArgumentParser:
 
     analyze_parser = subparsers.add_parser(
         "analyze-alignment",
-        help="22:00 流程：對當日 alignment_signals 做財報/法說分析並由 AI 嚴選進場標的",
+        help="21:00 流程：對當日 alignment_signals 做財報/法說分析並由 AI 嚴選進場標的",
     )
     analyze_parser.add_argument(
         "--config",
@@ -3201,7 +3201,7 @@ def _make_parser() -> argparse.ArgumentParser:
 
     rebound_parser = subparsers.add_parser(
         "analyze-rebound",
-        help="22:30 流程：執行型態 A（高點回跌回踩長均線反彈）掃描、寫入 Rebound_Watchlist 並彈性決定是否啟動 AI 嚴選",
+        help="20:50 流程：執行型態 A（高點回跌回踩長均線反彈）掃描、寫入 Rebound_Watchlist 並彈性決定是否啟動 AI 嚴選",
     )
     rebound_parser.add_argument(
         "--config",
