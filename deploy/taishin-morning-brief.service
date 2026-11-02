@@ -1,0 +1,16 @@
+[Unit]
+Description=Daily 08:15 Taishin Securities pre-market settlement check, global macro overlay & AI battle brief
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=nick_chung0725
+WorkingDirectory=/home/nick_chung0725/Discord_Service
+EnvironmentFile=/home/nick_chung0725/Discord_Service/.env
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/home/nick_chung0725/Discord_Service/.venv/bin/python /home/nick_chung0725/Discord_Service/taishin_portfolio_service.py morning-brief
+TimeoutStartSec=infinity

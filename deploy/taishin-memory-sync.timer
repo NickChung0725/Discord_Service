@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Taishin Securities statement & position thesis memory attribution at 22:45 Mon-Fri Taipei time
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 22:45:00 Asia/Taipei
+Persistent=true
+Unit=taishin-memory-sync.service
+
+[Install]
+WantedBy=timers.target

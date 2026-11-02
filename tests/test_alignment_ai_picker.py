@@ -250,9 +250,25 @@ class ReportTests(unittest.TestCase):
     def test_pick_rows_cover_all_categories(self) -> None:
         frame = _frame([{"stock_id": "2330"}, {"stock_id": "2317"}, {"stock_id": "2454"}])
         decision = self._decision()
+        decision["top_picks"][0]["tactical_type"] = "🎯 短中期波段 (5~20日)"
+        decision["top_picks"][0]["target_price_1"] = "1,120 元"
+        decision["top_picks"][0]["target_price_2"] = "1,200 元"
+        decision["top_picks"][0]["stop_loss_price"] = "960 元"
         decision["avoid"] = [{"stock_id": "2454", "reason": "x"}]
+        s1_summary = json.dumps(
+            {
+                "score": 77,
+                "trade_plan": {
+                    "tactical_type": "波段",
+                    "target_price_1": "225 元 (前高)",
+                    "target_price_2": "245 元",
+                    "stop_loss_price": "192 元",
+                    "invalidation": "跌破 45MA",
+                },
+            }
+        )
         results = {
-            sid: {"report": SimpleNamespace(war_room_url=f"https://example.com/{sid}_fund.html"), "summary": json.dumps({"score": 77})}
+            sid: {"report": SimpleNamespace(war_room_url=f"https://example.com/{sid}_fund.html"), "summary": s1_summary}
             for sid in ("2330", "2317", "2454")
         }
         rows = build_pick_rows(date(2026, 10, 16), decision, frame, results)
@@ -261,6 +277,13 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(rows[0]["fundamental_score"], 77)
         self.assertEqual(rows[0]["entry_thesis"], "【進場】拉回17MA低接｜理由")
         self.assertEqual(rows[0]["risk_note"], "風險")
+        self.assertEqual(rows[0]["target_price_1"], "1,120 元")
+        self.assertEqual(rows[0]["target_price_2"], "1,200 元")
+        self.assertEqual(rows[0]["stop_loss_price"], "960 元")
+        # WATCHLIST inherits trade_plan from Stage 1 summary; AVOID leaves target prices blank
+        self.assertEqual(rows[1]["target_price_1"], "225 元 (前高)")
+        self.assertEqual(rows[1]["risk_note"], "跌破 45MA")
+        self.assertEqual(rows[2]["target_price_1"], "")
         for r in rows:
             self.assertTrue(r["war_room_url"].startswith("https://example.com/"))
 

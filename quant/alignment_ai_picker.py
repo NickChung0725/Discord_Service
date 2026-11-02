@@ -971,13 +971,16 @@ def build_pick_rows(
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     output: list[dict[str, object]] = []
 
-    def fundamental_score(stock_id: str) -> object:
+    def _stage1_summary_dict(stock_id: str) -> dict[str, object]:
         summary = str(results.get(stock_id, {}).get("summary", ""))
         try:
             parsed = json.loads(summary)
-            return parsed.get("score", "") if isinstance(parsed, dict) else ""
+            return parsed if isinstance(parsed, dict) else {}
         except (json.JSONDecodeError, ValueError):
-            return ""
+            return {}
+
+    def fundamental_score(stock_id: str) -> object:
+        return _stage1_summary_dict(stock_id).get("score", "")
 
     def entry_thesis(item: Mapping[str, object]) -> str:
         bull = str(item.get("bull_thesis") or item.get("thesis") or item.get("reason") or "")
@@ -988,6 +991,25 @@ def build_pick_rows(
         stock_id = str(item["stock_id"])
         row = rows.get(stock_id, {})
         report = results.get(stock_id, {}).get("report")
+        s1_dict = _stage1_summary_dict(stock_id)
+        s1_plan = s1_dict.get("trade_plan") if isinstance(s1_dict.get("trade_plan"), Mapping) else {}
+        is_actionable = category in ("TOP_PICK", "WATCHLIST")
+
+        tactical_type = (
+            str(item.get("tactical_type") or (s1_plan.get("tactical_type") if is_actionable else "") or "").strip()
+        )
+        tp1 = str(item.get("target_price_1") or (s1_plan.get("target_price_1") if is_actionable else "") or "").strip()
+        tp2 = str(item.get("target_price_2") or (s1_plan.get("target_price_2") if is_actionable else "") or "").strip()
+        sl = str(item.get("stop_loss_price") or (s1_plan.get("stop_loss_price") if is_actionable else "") or "").strip()
+        risk_val = (
+            str(
+                item.get("bear_case_and_invalidation")
+                or item.get("risk")
+                or (s1_plan.get("invalidation") if category == "WATCHLIST" else "")
+                or ""
+            ).strip()
+        )
+
         return {
             "pk_key": f"{target_date.isoformat()}_{stock_id}",
             "scan_date": target_date.isoformat(),
@@ -1004,11 +1026,19 @@ def build_pick_rows(
             "streak_days": row.get("streak", ""),
             "fundamental_score": fundamental_score(stock_id),
             "final_pick_score": item.get("score", ""),
-            "outlook_verdict": item.get("outlook_verdict", ""),
+            "outlook_verdict": item.get("outlook_verdict") or (
+                s1_dict.get("guidance", {}).get("verdict", "")
+                if isinstance(s1_dict.get("guidance"), Mapping) and category == "WATCHLIST"
+                else ""
+            ),
             "entry_thesis": entry_thesis(item),
-            "risk_note": item.get("bear_case_and_invalidation") or item.get("risk", ""),
+            "risk_note": risk_val,
             "war_room_url": getattr(report, "war_room_url", "") or "",
             "updated_at": now,
+            "tactical_type": tactical_type,
+            "target_price_1": tp1,
+            "target_price_2": tp2,
+            "stop_loss_price": sl,
         }
 
     for pick in decision["top_picks"]:

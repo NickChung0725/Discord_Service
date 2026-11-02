@@ -26,12 +26,15 @@ from taishin_client import (
     iter_date_chunks,
     normalize_sdk_obj,
 )
+from macro_context import classify_macro_risk_tone, fetch_global_macro_context
 from taishin_config import (
     DCA_0050_SHEET_NAME,
     HOLDINGS_SHEET_NAME,
+    MEMORY_SHEET_NAME,
     SETTLEMENT_SHEET_NAME,
     STATEMENT_SHEET_NAME,
     TAISHIN_SHEET_SCHEMAS,
+    UNTRACKED_HOLDING_TAG,
     build_statement_unique_key,
     clean_leading_zero_code,
     protect_leading_zero,
@@ -43,14 +46,21 @@ from taishin_portfolio_service import (
     backfill_history,
     build_portfolio_holdings_rows,
     compute_0050_technical_indicators,
+    compute_ratchet_trailing_stop,
+    compute_style_b_trim_plan,
     compute_weighted_avg_cost_from_statements,
+    dump_portfolio_context,
     eval_dca_0050,
     evaluate_0050_dip_decision,
+    extract_first_price,
     merge_statement_and_fills,
     normalize_settlement_or_pnl_record,
     normalize_statement_record,
     parse_portfolio_ai_response,
+    reconcile_position_memory,
+    run_morning_brief,
     sync_daily,
+    sync_memory,
 )
 
 
@@ -77,15 +87,27 @@ class TestTaishinNova(unittest.TestCase):
     # ----------------------------------------------------------------------- #
     def test_zero_intrusion_on_public_fundamental_schemas_and_no_github_uploader(self) -> None:
         self.assertEqual(len(fundamental_config.SHEET_SCHEMAS), 12)
-        self.assertEqual(len(TAISHIN_SHEET_SCHEMAS), 4)
+        self.assertEqual(len(TAISHIN_SHEET_SCHEMAS), 5)
+        self.assertIn(MEMORY_SHEET_NAME, TAISHIN_SHEET_SCHEMAS)
         for tab in TAISHIN_SHEET_SCHEMAS:
             self.assertNotIn(tab, fundamental_config.SHEET_SCHEMAS)
 
-        # Guardrail 6: Ensure github_uploader is never referenced in Taishin modules
-        for mod_name in ("taishin/taishin_config.py", "taishin/taishin_client.py", "taishin_portfolio_service.py"):
+        # Guardrail 6: Ensure github_uploader is never referenced in Taishin modules,
+        # and bot_server.py never imports personal Taishin accounting modules.
+        for mod_name in (
+            "taishin/taishin_config.py",
+            "taishin/taishin_client.py",
+            "taishin/macro_context.py",
+            "taishin_portfolio_service.py",
+        ):
             with open(mod_name, encoding="utf-8") as fh:
                 source = fh.read()
             self.assertNotIn("github_uploader", source)
+
+        with open("bot_server.py", encoding="utf-8") as bot_fh:
+            bot_source = bot_fh.read()
+        self.assertNotIn("taishin_portfolio_service", bot_source)
+        self.assertNotIn("taishin_client", bot_source)
 
     def test_sheet_manager_rejects_same_spreadsheet_id_as_public_cache(self) -> None:
         with patch.dict(
@@ -566,6 +588,401 @@ class TestTaishinNova(unittest.TestCase):
         placed_order = fake_sdk.stock.place_order.call_args.args[1]
         self.assertEqual(placed_order.market_type, MarketType.IntradayOdd)
         self.assertEqual(placed_order.symbol, "0050")
+
+    # ----------------------------------------------------------------------- #
+    # 8. SASD v5.2.0: Price Extractor, Attribution, Style B Trim & Ratchet Lock
+    # ----------------------------------------------------------------------- #
+    def test_extract_first_price_ignores_ma_percent_and_dates(self) -> None:
+        self.assertEqual(extract_first_price("1,020 元 (17MA+12%)"), 1020.0)
+        self.assertEqual(extract_first_price("於 17MA 支撐 985.5 元防守"), 985.5)
+        self.assertEqual(extract_first_price("收盤 -4% 或 95.2 元"), 95.2)
+        self.assertEqual(extract_first_price("2026Q3 合理 18倍PE 約 245 元"), 245.0)
+        self.assertEqual(extract_first_price(1150.0), 1150.0)
+
+    def test_style_b_trim_plan_handles_multi_lot_and_single_lot_intraday_odd(self) -> None:
+        # >= 2 lots -> whole lots via 整張現股
+        plan_3lots = compute_style_b_trim_plan(3000)
+        self.assertEqual(plan_3lots["trim_qty"], 1000)
+        self.assertEqual(plan_3lots["remain_qty"], 2000)
+        self.assertEqual(plan_3lots["order_method"], "整張現股")
+
+        plan_2lots = compute_style_b_trim_plan(2000)
+        self.assertEqual(plan_2lots["trim_qty"], 1000)
+        self.assertEqual(plan_2lots["remain_qty"], 1000)
+        self.assertEqual(plan_2lots["order_method"], "整張現股")
+
+        # 1 lot (1,000 shares) -> 500 shares via 盤中零股
+        plan_1lot = compute_style_b_trim_plan(1000)
+        self.assertEqual(plan_1lot["trim_qty"], 500)
+        self.assertEqual(plan_1lot["remain_qty"], 500)
+        self.assertEqual(plan_1lot["order_method"], "盤中零股")
+
+    def test_position_memory_attribution_scale_in_partial_tp1_and_close_lifecycle(self) -> None:
+        picks_bundle = {
+            "ai_daily_picks": [
+                {
+                    "scan_date": "2026-10-30",
+                    "rank": 1,
+                    "category": "TOP_PICK",
+                    "stock_id": "2330",
+                    "stock_name": "台積電",
+                    "close_at_pick": 1000,
+                    "tactical_type": "🎯 短中期波段 (5~20日)",
+                    "target_price_1": "1,120 元 (17MA+12%)",
+                    "target_price_2": "1,220 元 (20倍PE)",
+                    "stop_loss_price": "960 元 (-4%)",
+                    "entry_thesis": "Q3 毛利率創高 + 法人連買",
+                    "risk_note": "跌破 45MA 退場",
+                    "war_room_url": "https://example.com/2330_fund.html",
+                },
+                {
+                    "scan_date": "2026-10-30",
+                    "rank": "W1",
+                    "category": "WATCHLIST",
+                    "stock_id": "2317",
+                    "stock_name": "鴻海",
+                    "close_at_pick": 200,
+                    "entry_thesis": "拉回 17MA 低接",
+                },
+            ],
+            "rebound_watchlist": [
+                {
+                    "scan_date": "2026-10-30",
+                    "stock_id": "3008",
+                    "stock_name": "大立光",
+                    "close_price": 2300,
+                    "high_60d": 2800,
+                    "support_ma": "117MA",
+                    "support_price": 2280,
+                    "target_ma17": 2480,
+                }
+            ],
+            "watchlist_master": {
+                "2317": {
+                    "stock_name": "鴻海",
+                    "ai_summary_json": json.dumps(
+                        {
+                            "verdict": "AI伺服器動能強",
+                            "trade_plan": {
+                                "tactical_type": "波段",
+                                "target_price_1": "225 元",
+                                "target_price_2": "245 元",
+                                "stop_loss_price": "192 元",
+                                "invalidation": "月營收YoY轉負",
+                            },
+                        }
+                    ),
+                }
+            },
+        }
+
+        statements_t1 = [
+            # Matched TOP_PICK #1
+            {"trade_date": "2026-10-31", "order_no": "1", "stock_no": "2330", "action": "BUY", "filled_qty": 1000, "filled_price": 1005.0},
+            # Matched WATCHLIST W1
+            {"trade_date": "2026-10-31", "order_no": "2", "stock_no": "2317", "action": "BUY", "filled_qty": 1000, "filled_price": 202.0},
+            # Matched Rebound_Watchlist
+            {"trade_date": "2026-10-31", "order_no": "3", "stock_no": "3008", "action": "BUY", "filled_qty": 100, "filled_price": 2310.0},
+            # Untracked: 0050 DCA + legacy stock 2881 bought long ago
+            {"trade_date": "2026-10-31", "order_no": "4", "stock_no": "0050", "action": "BUY", "filled_qty": 100, "filled_price": 190.0},
+            {"trade_date": "2026-05-10", "order_no": "5", "stock_no": "2881", "action": "BUY", "filled_qty": 2000, "filled_price": 70.0},
+        ]
+
+        raw_inv_t1 = [
+            {"stock_no": "2330", "stock_name": "台積電", "qty": 1000, "avg_cost_price": 1005.0, "current_price": 1015.0},
+            {"stock_no": "2317", "stock_name": "鴻海", "qty": 1000, "avg_cost_price": 202.0, "current_price": 204.0},
+            {"stock_no": "3008", "stock_name": "大立光", "qty": 100, "avg_cost_price": 2310.0, "current_price": 2330.0},
+            {"stock_no": "0050", "stock_name": "元大台灣50", "qty": 100, "avg_cost_price": 190.0, "current_price": 192.0},
+            {"stock_no": "2881", "stock_name": "富邦金", "qty": 2000, "avg_cost_price": 70.0, "current_price": 85.0},
+        ]
+        holdings_t1 = build_portfolio_holdings_rows(
+            raw_inv_t1,
+            statement_records=statements_t1,
+            tech_map={"2330": {"close": 1015.0, "ma17": 995.0, "ma45": 970.0, "ma117": 930.0}},
+            public_cache={},
+            snapshot_date=date(2026, 10, 31),
+        )
+
+        # Day 1: Reconcile creates 3 memory cards; 0050 & 2881 stay untracked!
+        mem_t1, proj_t1, events_t1 = reconcile_position_memory(
+            existing_memory_rows=[],
+            holdings_rows=holdings_t1,
+            statement_records=statements_t1,
+            settlement_records=[],
+            picks_bundle=picks_bundle,
+            as_of=date(2026, 10, 31),
+        )
+        self.assertEqual(len(mem_t1), 3)
+        self.assertEqual({m["stock_no"] for m in mem_t1}, {"2330", "2317", "3008"})
+        self.assertEqual(len([e for e in events_t1 if e["type"] == "NEW_BOUND"]), 3)
+
+        card_2330 = [m for m in mem_t1 if m["stock_no"] == "2330"][0]
+        self.assertEqual(card_2330["entry_source"], "AI_DAILY_TOP_PICK")
+        self.assertEqual(card_2330["initial_tp1"], 1120.0)
+        self.assertEqual(card_2330["initial_tp2"], 1220.0)
+        self.assertEqual(card_2330["initial_sl"], 960.0)
+        card_2330["user_note"] = "法說展望超預期"
+
+        card_2317 = [m for m in mem_t1 if m["stock_no"] == "2317"][0]
+        self.assertEqual(card_2317["entry_source"], "AI_DAILY_WATCHLIST")
+        self.assertEqual(card_2317["initial_tp1"], 225.0)
+
+        card_3008 = [m for m in mem_t1 if m["stock_no"] == "3008"][0]
+        self.assertEqual(card_3008["entry_source"], "REBOUND_WATCHLIST")
+        self.assertEqual(card_3008["initial_tp1"], 2480.0)
+
+        # Verify untracked holdings have blank target/stop and UNTRACKED_HOLDING_TAG
+        hold_0050 = [h for h in proj_t1 if h["stock_no"] == "0050"][0]
+        self.assertEqual(hold_0050["ai_action_tag"], UNTRACKED_HOLDING_TAG)
+        self.assertEqual(hold_0050["ai_target_price"], "")
+        self.assertEqual(hold_0050["ai_stop_loss"], "")
+
+        # Day 2: Scale-in (add another 1,000 shares of 2330 at 995 -> avg 1000) AND 2330 re-appears on picks with TP1=1190
+        # Anchor TP1=1120 & user_note MUST stay locked without drifting!
+        picks_bundle_t2 = {
+            **picks_bundle,
+            "ai_daily_picks": [
+                *picks_bundle["ai_daily_picks"],
+                {
+                    "scan_date": "2026-11-02",
+                    "rank": 1,
+                    "category": "TOP_PICK",
+                    "stock_id": "2330",
+                    "target_price_1": "1,190 元",
+                    "target_price_2": "1,300 元",
+                    "stop_loss_price": "980 元",
+                },
+            ],
+        }
+        statements_t2 = [
+            *statements_t1,
+            {"trade_date": "2026-11-03", "order_no": "6", "stock_no": "2330", "action": "BUY", "filled_qty": 1000, "filled_price": 995.0},
+        ]
+        raw_inv_t2 = [
+            {"stock_no": "2330", "stock_name": "台積電", "qty": 2000, "avg_cost_price": 1000.0, "current_price": 1125.0},
+            {"stock_no": "2317", "stock_name": "鴻海", "qty": 1000, "avg_cost_price": 202.0, "current_price": 205.0},
+            {"stock_no": "3008", "stock_name": "大立光", "qty": 100, "avg_cost_price": 2310.0, "current_price": 2340.0},
+        ]
+        holdings_t2 = build_portfolio_holdings_rows(
+            raw_inv_t2,
+            statement_records=statements_t2,
+            tech_map={"2330": {"close": 1125.0, "ma17": 1060.0, "ma45": 1010.0, "ma117": 950.0}},
+            public_cache={},
+            snapshot_date=date(2026, 11, 3),
+        )
+        mem_t2, _, _ = reconcile_position_memory(
+            existing_memory_rows=mem_t1,
+            holdings_rows=holdings_t2,
+            statement_records=statements_t2,
+            settlement_records=[],
+            picks_bundle=picks_bundle_t2,
+            as_of=date(2026, 11, 3),
+        )
+        card_2330_t2 = [m for m in mem_t2 if m["stock_no"] == "2330"][0]
+        self.assertEqual(card_2330_t2["peak_qty"], 2000)
+        self.assertEqual(card_2330_t2["avg_cost_price"], 1000.0)
+        self.assertEqual(card_2330_t2["initial_tp1"], 1120.0)  # Locked! Did NOT drift to 1190!
+        self.assertEqual(card_2330_t2["user_note"], "法說展望超預期")
+        self.assertGreaterEqual(card_2330_t2["trailing_stop"], 1006.0)  # Ratcheted to breakeven+!
+
+        # Day 3: User sells half (1,000 shares) of 2330 at TP1 (1125) and sells all of 2317
+        statements_t3 = [
+            *statements_t2,
+            {"trade_date": "2026-11-04", "order_no": "7", "stock_no": "2330", "action": "SELL", "filled_qty": 1000, "filled_price": 1125.0},
+            {"trade_date": "2026-11-04", "order_no": "8", "stock_no": "2317", "action": "SELL", "filled_qty": 1000, "filled_price": 210.0},
+        ]
+        settlements_t3 = [
+            {"record_date": "2026-11-04", "record_type": "REALIZED_PNL", "stock_no": "2317", "realized_pnl": 7100}
+        ]
+        raw_inv_t3 = [
+            {"stock_no": "2330", "stock_name": "台積電", "qty": 1000, "avg_cost_price": 1000.0, "current_price": 1110.0},
+            {"stock_no": "3008", "stock_name": "大立光", "qty": 100, "avg_cost_price": 2310.0, "current_price": 2340.0},
+        ]
+        holdings_t3 = build_portfolio_holdings_rows(
+            raw_inv_t3,
+            statement_records=statements_t3,
+            tech_map={"2330": {"close": 1110.0, "ma17": 1065.0, "ma45": 1015.0, "ma117": 955.0}},
+            public_cache={},
+            snapshot_date=date(2026, 11, 4),
+        )
+        mem_t3, proj_t3, events_t3 = reconcile_position_memory(
+            existing_memory_rows=mem_t2,
+            holdings_rows=holdings_t3,
+            statement_records=statements_t3,
+            settlement_records=settlements_t3,
+            picks_bundle=picks_bundle_t2,
+            as_of=date(2026, 11, 4),
+        )
+        card_2330_t3 = [m for m in mem_t3 if m["stock_no"] == "2330"][0]
+        self.assertEqual(card_2330_t3["status"], "TP1_PARTIAL_TAKEN")
+        # Active target on 02_Portfolio_Holdings now advances to TP2 (1220.0)!
+        hold_2330_t3 = [h for h in proj_t3 if h["stock_no"] == "2330"][0]
+        self.assertEqual(hold_2330_t3["ai_target_price"], 1220.0)
+
+        card_2317_t3 = [m for m in mem_t3 if m["stock_no"] == "2317"][0]
+        self.assertEqual(card_2317_t3["status"], "CLOSED")
+        self.assertEqual(card_2317_t3["realized_pnl"], 7100)
+        self.assertTrue(any(e["type"] == "PARTIAL_TAKEN" and e["stock_no"] == "2330" for e in events_t3))
+        self.assertTrue(any(e["type"] == "CLOSED" and e["stock_no"] == "2317" for e in events_t3))
+
+        # Verify Ratchet Stop never decreases even if price later pulls back
+        prev_stop = card_2330_t3["trailing_stop"]
+        dipped_stop = compute_ratchet_trailing_stop(
+            prev_trailing_stop=prev_stop,
+            initial_sl=960.0,
+            avg_cost_price=1000.0,
+            current_price=1010.0,
+            initial_tp1=1120.0,
+            ma17=1020.0,
+            status="TP1_PARTIAL_TAKEN",
+        )
+        self.assertGreaterEqual(dipped_stop, prev_stop)
+
+    # ----------------------------------------------------------------------- #
+    # 9. SASD v5.2.0: 08:15 Morning Brief (0-Token Mode vs VERTEX_STAGE2_MODEL) & Macro/Dump
+    # ----------------------------------------------------------------------- #
+    def test_morning_brief_skips_ai_when_only_untracked_holdings_and_calls_vertex_when_tracked(self) -> None:
+        fake_sdk = MagicMock()
+        fake_sdk.login.return_value = [{"account": "9876543"}]
+        fake_sdk.account_statment.return_value = []
+        fake_sdk.filled_history.return_value = []
+        fake_sdk.filled_history_detail.return_value = []
+        fake_sdk.realized_profit_and_loses.return_value = []
+        fake_sdk.history_settlement.return_value = []
+        fake_sdk.today_settlement.return_value = [
+            {"record_date": "2026-11-02", "stock_no": "0050", "qty": 100, "net_amount": -19000}
+        ]
+        fake_sdk.bank_balance.return_value = 50000.0
+        # Path A: Only 0050 in inventory -> 0 tracked memory cards -> 0 AI calls!
+        fake_sdk.inventories.return_value = [
+            {"stock_no": "0050", "stock_name": "元大台灣50", "qty": 500, "avg_cost_price": 185.0, "current_price": 192.0}
+        ]
+
+        creds = TaishinCredentials("A123456789", "pw", "certs/taishin_cert.pfx", "cert_pw", "9876543")
+        client = TaishinClient(sdk=fake_sdk, credentials=creds)
+
+        fake_macro = {
+            "risk_tone": "🟢 國際順風偏多",
+            "risk_note": "費半大漲",
+            "compact_line": "費半指數 +2.45% ｜ 台積電ADR +3.10% ｜ 美元/台幣 32.05 (-0.12%)",
+            "headlines": [{"title": "費半強彈創波段高", "source": "Reuters", "pub_time": "11-02 05:30"}],
+            "prompt_block": "- 費半 +2.45%",
+        }
+
+        with patch("taishin_portfolio_service.ask_vertex_ai_with_meta") as mock_vertex:
+            res_zero_token = run_morning_brief(
+                client=client,
+                sheet_mgr=None,
+                as_of=date(2026, 11, 2),
+                post_discord=False,
+                dry_run=True,
+                macro_context_override=fake_macro,
+                picks_bundle_override={"ai_daily_picks": [], "rebound_watchlist": [], "watchlist_master": {}},
+            )
+            self.assertFalse(res_zero_token["ai_called"])
+            self.assertEqual(res_zero_token["active_tracked_count"], 0)
+            mock_vertex.assert_not_called()
+            joined_zero = "\n".join(res_zero_token["messages"])
+            self.assertIn("0 Token 快報模式", joined_zero)
+            self.assertIn("費半指數 +2.45%", joined_zero)
+
+        # Path B: Tracked 2330 holding (1,000 shares single lot reaching TP1 1120) -> calls VERTEX_STAGE2_MODEL!
+        fake_sdk.account_statment.return_value = [
+            {"trade_date": "2026-10-31", "order_no": "10", "stock_no": "2330", "action": "BUY", "filled_qty": 1000, "filled_price": 1000.0}
+        ]
+        fake_sdk.inventories.return_value = [
+            {"stock_no": "2330", "stock_name": "台積電", "qty": 1000, "avg_cost_price": 1000.0, "current_price": 1122.0},
+            {"stock_no": "0050", "stock_name": "元大台灣50", "qty": 500, "avg_cost_price": 185.0, "current_price": 192.0},
+        ]
+
+        async def _fake_vertex_call(prompt: str, **kwargs: Any) -> Any:
+            self.assertIn("盤中零股", prompt)
+            self.assertIn("賣出 500 股", prompt)
+            # AI tries to suggest a lower stop (950.0) than breakeven ratchet (~1006.0) -> Python must clamp it up!
+            resp_json = json.dumps(
+                {
+                    "morning_battle_headline": "費半強彈助攻，2330 達標 TP1 執行賣半鎖利。",
+                    "positions": [
+                        {
+                            "position_id": "2026-10-31_2330",
+                            "stock_no": "2330",
+                            "ai_action_tag": "💰 分批停利",
+                            "recommended_trailing_stop": 950.0,
+                            "thesis_intact": True,
+                            "order_instruction": "09:00 掛盤中零股賣出 500 股鎖利，餘 500 股續抱看 TP2 1,220 元",
+                            "pm_rationale": "已觸及原定 TP1 1,120 元且 ADR 大漲，順勢落袋一半。",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            )
+            mock_meta = MagicMock()
+            mock_meta.text = f"```json\n{resp_json}\n```"
+            mock_meta.model_version = "gemini-2.5-pro-002"
+            return mock_meta
+
+        picks_with_2330 = {
+            "ai_daily_picks": [
+                {
+                    "scan_date": "2026-10-30",
+                    "rank": 1,
+                    "category": "TOP_PICK",
+                    "stock_id": "2330",
+                    "stock_name": "台積電",
+                    "target_price_1": "1,120 元",
+                    "target_price_2": "1,220 元",
+                    "stop_loss_price": "960 元",
+                    "entry_thesis": "法說優於預期",
+                    "risk_note": "跌破 45MA",
+                }
+            ],
+            "rebound_watchlist": [],
+            "watchlist_master": {},
+        }
+
+        with patch("taishin_portfolio_service.ask_vertex_ai_with_meta", side_effect=_fake_vertex_call) as mock_v2:
+            res_tracked = run_morning_brief(
+                client=client,
+                sheet_mgr=None,
+                as_of=date(2026, 11, 2),
+                post_discord=False,
+                dry_run=True,
+                macro_context_override=fake_macro,
+                picks_bundle_override=picks_with_2330,
+            )
+            self.assertTrue(res_tracked["ai_called"])
+            mock_v2.assert_called_once()
+            mem_card = res_tracked["memory_rows"][0]
+            # Clamped to breakeven floor (>= 1006.0) despite AI suggesting 950.0!
+            self.assertGreaterEqual(mem_card["trailing_stop"], 1006.0)
+            joined_battle = "\n".join(res_tracked["messages"])
+            self.assertIn("掛盤中零股賣出 500 股鎖利", joined_battle)
+            self.assertIn("0050 元大台灣50", joined_battle)
+
+    def test_macro_risk_tone_and_dump_portfolio_context_for_skill(self) -> None:
+        tone_bear, _ = classify_macro_risk_tone({"SOX": {"change_pct": -3.2}, "VIX": {"price": 27.5, "change_pct": 18.0}})
+        self.assertIn("🔴", tone_bear)
+        tone_bull, _ = classify_macro_risk_tone({"SOX": {"change_pct": 2.1}, "TSM": {"change_pct": 2.5}, "IXIC": {"change_pct": 1.1}, "VIX": {"price": 15.2, "change_pct": -4.0}})
+        self.assertIn("🟢", tone_bull)
+
+        mock_mgr = MagicMock()
+        mock_mgr.read_records.side_effect = lambda tab: (
+            [{"stock_no": "2330", "stock_name": "台積電", "order_type": "現股", "qty": 1000, "avg_cost_price": 1000.0, "total_cost": 1000000, "current_price": 1080.0, "market_value": 1080000, "unrealized_pnl": 80000, "return_pct": 8.0, "weight_pct": 100.0}]
+            if tab == HOLDINGS_SHEET_NAME
+            else (
+                [{"position_id": "2026-10-31_2330", "stock_no": "2330", "stock_name": "台積電", "status": "OPEN", "entry_source": "AI_DAILY_TOP_PICK", "source_scan_date": "2026-10-30", "source_rank": "1", "opened_date": "2026-10-31", "initial_qty": 1000, "peak_qty": 1000, "current_qty": 1000, "avg_cost_price": 1000.0, "initial_tp1": 1120.0, "initial_tp2": 1220.0, "initial_sl": 960.0, "trailing_stop": 1006.0, "entry_thesis": "Q3創高", "invalidation_rule": "破45MA"}]
+                if tab == MEMORY_SHEET_NAME
+                else (
+                    [{"bank_balance": 250000}] if tab == SETTLEMENT_SHEET_NAME else []
+                )
+            )
+        )
+        with patch("taishin_portfolio_service.load_public_watchlist_cache", return_value={}):
+            ctx = dump_portfolio_context(sheet_mgr=mock_mgr, refresh_live=False, include_macro=False, as_of=date(2026, 11, 2))
+        self.assertEqual(ctx["account_summary"]["tracked_positions_count"], 1)
+        self.assertEqual(ctx["account_summary"]["bank_balance"], 250000.0)
+        self.assertEqual(ctx["tracked_positions"][0]["initial_tp1"], 1120.0)
+        self.assertEqual(ctx["tracked_positions"][0]["live_metrics"]["trim_plan"]["trim_qty"], 500)
 
 
 if __name__ == "__main__":

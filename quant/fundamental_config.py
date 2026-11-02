@@ -238,6 +238,10 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "risk_note",
         "war_room_url",
         "updated_at",
+        "tactical_type",
+        "target_price_1",
+        "target_price_2",
+        "stop_loss_price",
     ],
     "Rebound_Watchlist": [
         "pk_key",

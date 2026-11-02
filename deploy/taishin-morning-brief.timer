@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Taishin Securities pre-market settlement check & AI morning battle brief at 08:15 Mon-Fri Taipei time
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08:15:00 Asia/Taipei
+Persistent=true
+Unit=taishin-morning-brief.service
+
+[Install]
+WantedBy=timers.target

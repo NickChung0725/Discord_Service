@@ -30,7 +30,12 @@ from gspread.exceptions import APIError
 import pandas as pd
 
 import taishin  # noqa: F401 - registers services/, quant/, taishin/ on sys.path
-from ai_service import ask_gemini_diagnosis_with_meta
+from ai_service import (
+    ask_gemini_diagnosis_with_meta,
+    ask_vertex_ai_with_meta,
+    get_vertex_stage2_model,
+)
+from macro_context import fetch_global_macro_context
 from taishin_client import (
     TaishinClient,
     TaishinClientError,
@@ -43,6 +48,7 @@ from taishin_client import (
 )
 from taishin_config import (
     BACKFILL_CHUNK_SLEEP_SECONDS,
+    BREAKEVEN_BUFFER_MULTIPLIER,
     DCA_0050_SHEET_NAME,
     DCA_0050_SYMBOL,
     DCA_10D_DROP_TRIGGER_PCT,
@@ -51,6 +57,8 @@ from taishin_config import (
     DCA_MAX_MULTIPLIER,
     DCA_MIN_MULTIPLIER,
     DCA_RSI14_TRIGGER,
+    DEFAULT_ATTRIBUTION_LOOKBACK_TRADING_DAYS,
+    DEFAULT_ATTRIBUTION_MAX_CALENDAR_DAYS,
     DEFAULT_BACKFILL_CHUNK_DAYS,
     DEFAULT_BACKFILL_FROM_DATE,
     DEFAULT_DCA_0050_WEEKLY_BUDGET_TWD,
@@ -58,13 +66,17 @@ from taishin_config import (
     GSHEET_RETRY_DELAYS_SECONDS,
     HOLDINGS_SHEET_NAME,
     LEADING_ZERO_PROTECTED_FIELDS,
+    MEMORY_SHEET_NAME,
+    RATCHET_PROFIT_TRIGGER_PCT,
     SETTLEMENT_SHEET_NAME,
     STANDARD_ETF_TAX_RATE,
     STANDARD_FEE_RATE,
     STANDARD_STOCK_TAX_RATE,
     STATEMENT_SHEET_NAME,
+    TAISHIN_MORNING_BATTLE_PROMPT,
     TAISHIN_PORTFOLIO_AI_PROMPT,
     TAISHIN_SHEET_SCHEMAS,
+    UNTRACKED_HOLDING_TAG,
     clean_leading_zero_code,
     get_unique_key_for_tab,
     normalize_ai_action_tag,
@@ -211,13 +223,25 @@ class TaishinSheetManager:
                 continue
 
             ws = existing[tab_name]
-            first_row = self._gspread_call(ws.row_values, 1)
+            first_row = [str(h).strip() for h in (self._gspread_call(ws.row_values, 1) or [])]
             if not first_row:
                 self._gspread_call(
                     ws.update,
                     range_name=f"A1:{gspread.utils.rowcol_to_a1(1, len(headers))}",
                     values=[headers],
                 )
+            else:
+                missing = [h for h in headers if h not in first_row]
+                if missing:
+                    merged_headers = first_row + missing
+                    col_cnt = getattr(ws, "col_count", None)
+                    if isinstance(col_cnt, int) and col_cnt < len(merged_headers):
+                        self._gspread_call(ws.resize, cols=len(merged_headers))
+                    self._gspread_call(
+                        ws.update,
+                        range_name=f"A1:{gspread.utils.rowcol_to_a1(1, len(merged_headers))}",
+                        values=[merged_headers],
+                    )
         self._schema_ensured = True
 
     def get_worksheet(self, tab_name: str) -> Any:
@@ -1800,11 +1824,1728 @@ def eval_dca_0050(
 
 
 # --------------------------------------------------------------------------- #
+# Section 4.4: Position Thesis Memory, Style B Gatekeeper, 22:45 & 08:15 Engine (SASD v5.2.0)
+# --------------------------------------------------------------------------- #
+def extract_first_price(value: Any, default: float = 0.0) -> float:
+    """Extract the primary numeric price from free-form text like '1,020 元 (17MA+12%)' or '收盤-4% (95.2元)'.
+
+    Strips moving-average tokens (e.g. '17MA', 'MA45'), percentage tokens ('+12%', '-4%'),
+    date/quarter tokens ('2026Q3', '2026-10'), and day/multiplier counts ('20日', '1.5倍')
+    so non-price numbers are never mistaken for prices.
+    """
+    if value is None or value == "":
+        return default
+    if isinstance(value, (int, float)):
+        if math.isnan(value) or math.isinf(value) or value <= 0:
+            return default
+        return round(float(value), 2)
+
+    text = str(value).strip()
+    if not text:
+        return default
+
+    # Fast path for pure numeric string
+    pure = text.replace(",", "").strip()
+    try:
+        num = float(pure)
+        return round(num, 2) if num > 0 else default
+    except ValueError:
+        pass
+
+    cleaned = text.replace(",", "")
+    # Strip dates / quarters first
+    cleaned = re.sub(r"\b20\d{2}\s*Q[1-4]\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b20\d{2}[-/]\d{1,2}(?:[-/]\d{1,2})?\b", " ", cleaned)
+    # Strip MA tokens like 17MA, 45MA, MA17, MA117, 17/45MA
+    cleaned = re.sub(r"\b\d+(?:/\d+)?\s*MA\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bMA\s*\d+\b", " ", cleaned, flags=re.IGNORECASE)
+    # Strip percentages like +12%, -4.5%
+    cleaned = re.sub(r"[+-]?\d+(?:\.\d+)?\s*%", " ", cleaned)
+    # Strip durations / multipliers / lot counts like 5~20日, 60日, 18倍, 1.5x, 500張
+    cleaned = re.sub(r"\d+(?:~\d+)?(?:\.\d+)?\s*(?:日|天|週|季|年|倍|張|[xX])\b", " ", cleaned)
+
+    # Prefer numbers explicitly followed by '元' first
+    m_yuan = re.search(r"(?<![A-Za-z0-9_-])(\d+(?:\.\d+)?)\s*元", cleaned)
+    if m_yuan:
+        val = _to_float(m_yuan.group(1), 0.0)
+        if val > 0:
+            return round(val, 2)
+
+    m_any = re.search(r"(?<![A-Za-z0-9_-])(\d+(?:\.\d+)?)", cleaned)
+    if m_any:
+        val = _to_float(m_any.group(1), 0.0)
+        if val > 0:
+            return round(val, 2)
+    return default
+
+
+def compute_holding_waves_from_statements(
+    statements: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Replay historical statements chronologically to identify each stock's current holding wave.
+
+    Whenever running share balance drops to 0 and later increases > 0 on a BUY, a new wave begins
+    with a fresh `opened_date`, `initial_qty`, and `peak_qty`.
+    """
+    sorted_rows = sorted(
+        statements,
+        key=lambda r: (str(r.get("trade_date", "")), str(r.get("order_no", ""))),
+    )
+    waves: dict[str, dict[str, Any]] = {}
+
+    for r in sorted_rows:
+        stock_no = clean_leading_zero_code(r.get("stock_no", ""))
+        if not stock_no:
+            continue
+        action = str(r.get("action", "")).upper()
+        qty = _to_int(r.get("filled_qty", 0))
+        price = _to_float(r.get("filled_price", 0.0))
+        t_date = str(r.get("trade_date", "")).strip()
+        if qty <= 0:
+            continue
+
+        state = waves.setdefault(
+            stock_no,
+            {
+                "opened_date": "",
+                "initial_qty": 0,
+                "peak_qty": 0,
+                "running_qty": 0,
+                "running_cost": 0.0,
+                "last_buy_date": "",
+                "last_sell_date": "",
+            },
+        )
+        if action == "BUY":
+            if state["running_qty"] <= 0:
+                state["opened_date"] = t_date
+                state["initial_qty"] = qty
+                state["peak_qty"] = qty
+                state["running_qty"] = qty
+                state["running_cost"] = qty * price if price > 0 else 0.0
+            else:
+                if t_date == state["opened_date"]:
+                    state["initial_qty"] += qty
+                state["running_qty"] += qty
+                if price > 0:
+                    state["running_cost"] += qty * price
+                state["peak_qty"] = max(state["peak_qty"], state["running_qty"])
+            state["last_buy_date"] = t_date
+        elif action == "SELL":
+            cur_q = state["running_qty"]
+            if cur_q > 0:
+                avg_p = (state["running_cost"] / cur_q) if cur_q > 0 else 0.0
+                rem_q = max(0, cur_q - qty)
+                state["running_qty"] = rem_q
+                state["running_cost"] = rem_q * avg_p
+                if rem_q == 0:
+                    state["opened_date"] = ""
+                    state["initial_qty"] = 0
+                    state["peak_qty"] = 0
+            state["last_sell_date"] = t_date
+
+    return waves
+
+
+def load_public_picks_for_attribution(
+    *,
+    reports_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Read `AI_Daily_Picks`, `Rebound_Watchlist`, and `00_Watchlist_Master` read-only for buy attribution."""
+    ai_daily_picks: list[dict[str, Any]] = []
+    rebound_watchlist: list[dict[str, Any]] = []
+    watchlist_master: dict[str, dict[str, str]] = {}
+
+    public_sheet_id = (os.getenv("GSHEET_SPREADSHEET_ID") or "").strip()
+    creds_path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "certs/sheetbot.json").strip()
+    if creds_path and Path(creds_path).is_file():
+        pass
+    elif Path("certs/sheetbot.json").is_file():
+        creds_path = "certs/sheetbot.json"
+    elif Path("sheetbot.json").is_file():
+        creds_path = "sheetbot.json"
+
+    if public_sheet_id and Path(creds_path).is_file():
+        try:
+            gc = gspread.service_account(filename=creds_path)
+            sp = gc.open_by_key(public_sheet_id)
+
+            def _read_ws_dicts(tab: str) -> list[dict[str, Any]]:
+                try:
+                    ws = sp.worksheet(tab)
+                    rows = ws.get_all_values()
+                except Exception:  # noqa: BLE001
+                    return []
+                if not rows or len(rows) < 2:
+                    return []
+                hdrs = [str(h).strip() for h in rows[0]]
+                out: list[dict[str, Any]] = []
+                for raw in rows[1:]:
+                    padded = list(raw) + [""] * max(0, len(hdrs) - len(raw))
+                    rec = {hdrs[i]: padded[i] for i in range(len(hdrs)) if hdrs[i]}
+                    if any(v not in ("", None) for v in rec.values()):
+                        out.append(rec)
+                return out
+
+            ai_daily_picks = _read_ws_dicts("AI_Daily_Picks")
+            rebound_watchlist = _read_ws_dicts("Rebound_Watchlist")
+            for rec in _read_ws_dicts("00_Watchlist_Master"):
+                sid = clean_leading_zero_code(rec.get("stock_id", ""))
+                if sid:
+                    watchlist_master[sid] = {
+                        "stock_name": str(rec.get("stock_name", "")).strip(),
+                        "ai_summary_json": str(rec.get("ai_summary_json", "")).strip(),
+                        "war_room_url": str(rec.get("war_room_url", "")).strip(),
+                    }
+        except Exception as err:  # noqa: BLE001
+            logger.warning("Failed to read public GSheet picks for attribution: %s", err)
+
+    # Supplement from local `finmind_reports/daily` JSON/CSV if public sheet was empty or unavailable
+    root = reports_dir or Path(os.getenv("FINMIND_REPORTS_DIR") or "finmind_reports")
+    daily_dir = root / "daily"
+    if daily_dir.is_dir():
+        seen_pick_keys = {
+            f"{r.get('scan_date')}_{clean_leading_zero_code(r.get('stock_id'))}"
+            for r in ai_daily_picks
+        }
+        for rec_json in sorted(daily_dir.glob("*_ai_recommendations.json")):
+            try:
+                payload = json.loads(rec_json.read_text(encoding="utf-8"))
+                scan_dt = str(payload.get("date") or rec_json.name.split("_")[0]).strip()
+                dec = payload.get("decision") or {}
+                cands = payload.get("candidates") or {}
+                for pick in dec.get("top_picks") or []:
+                    sid = clean_leading_zero_code(pick.get("stock_id", ""))
+                    pk = f"{scan_dt}_{sid}"
+                    if not sid or pk in seen_pick_keys:
+                        continue
+                    seen_pick_keys.add(pk)
+                    ai_daily_picks.append(
+                        {
+                            "pk_key": pk,
+                            "scan_date": scan_dt,
+                            "rank": pick.get("rank", ""),
+                            "category": "TOP_PICK",
+                            "stock_id": sid,
+                            "tactical_type": pick.get("tactical_type", ""),
+                            "target_price_1": pick.get("target_price_1", ""),
+                            "target_price_2": pick.get("target_price_2", ""),
+                            "stop_loss_price": pick.get("stop_loss_price", ""),
+                            "entry_thesis": pick.get("bull_thesis", ""),
+                            "risk_note": pick.get("bear_case_and_invalidation", ""),
+                        }
+                    )
+                for idx, watch in enumerate(dec.get("watchlist") or [], start=1):
+                    sid = clean_leading_zero_code(watch.get("stock_id", ""))
+                    pk = f"{scan_dt}_{sid}"
+                    if not sid or pk in seen_pick_keys:
+                        continue
+                    seen_pick_keys.add(pk)
+                    s1_raw = str((cands.get(sid) or {}).get("summary") or "")
+                    s1_plan: dict[str, Any] = {}
+                    try:
+                        s1_obj = json.loads(s1_raw)
+                        if isinstance(s1_obj, dict) and isinstance(s1_obj.get("trade_plan"), dict):
+                            s1_plan = s1_obj["trade_plan"]
+                    except Exception:  # noqa: BLE001
+                        pass
+                    ai_daily_picks.append(
+                        {
+                            "pk_key": pk,
+                            "scan_date": scan_dt,
+                            "rank": f"W{idx}",
+                            "category": "WATCHLIST",
+                            "stock_id": sid,
+                            "tactical_type": s1_plan.get("tactical_type", ""),
+                            "target_price_1": s1_plan.get("target_price_1", ""),
+                            "target_price_2": s1_plan.get("target_price_2", ""),
+                            "stop_loss_price": s1_plan.get("stop_loss_price", ""),
+                            "entry_thesis": watch.get("reason", ""),
+                            "risk_note": s1_plan.get("invalidation", ""),
+                        }
+                    )
+            except Exception:  # noqa: BLE001
+                continue
+
+        seen_reb_keys = {
+            f"{r.get('scan_date')}_{clean_leading_zero_code(r.get('stock_id'))}"
+            for r in rebound_watchlist
+        }
+        for reb_csv in sorted(daily_dir.glob("*_rebound_signals.csv")):
+            try:
+                scan_dt = reb_csv.name.split("_rebound_signals.csv")[0]
+                df_reb = pd.read_csv(reb_csv, dtype={"stock_id": str})
+                for r in df_reb.to_dict("records"):
+                    sid = clean_leading_zero_code(r.get("stock_id", ""))
+                    pk = f"{scan_dt}_{sid}"
+                    if not sid or pk in seen_reb_keys:
+                        continue
+                    seen_reb_keys.add(pk)
+                    rebound_watchlist.append(
+                        {
+                            "pk_key": pk,
+                            "scan_date": scan_dt,
+                            "stock_id": sid,
+                            "stock_name": r.get("stock_name", ""),
+                            "close_price": r.get("close", r.get("close_price", "")),
+                            "high_60d": r.get("high_60d", ""),
+                            "support_ma": r.get("support_ma", ""),
+                            "support_price": r.get("support_price", ""),
+                            "target_ma17": r.get("target_ma17", ""),
+                        }
+                    )
+            except Exception:  # noqa: BLE001
+                continue
+
+    return {
+        "ai_daily_picks": ai_daily_picks,
+        "rebound_watchlist": rebound_watchlist,
+        "watchlist_master": watchlist_master,
+    }
+
+
+def _parse_stage1_trade_plan(ai_summary_raw: Any) -> tuple[dict[str, Any], str]:
+    """Return `(trade_plan_dict, verdict_text)` from Stage 1 `ai_summary_json`."""
+    raw = str(ai_summary_raw or "").strip()
+    if not raw:
+        return {}, ""
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {}, ""
+    if not isinstance(parsed, dict):
+        return {}, ""
+    plan = parsed.get("trade_plan")
+    verdict = str(parsed.get("verdict") or parsed.get("one_line_verdict") or "").strip()
+    return (dict(plan) if isinstance(plan, Mapping) else {}), verdict
+
+
+def match_entry_to_picks(
+    stock_no: str,
+    opened_date: date | str,
+    *,
+    ai_daily_picks: list[dict[str, Any]],
+    rebound_watchlist: list[dict[str, Any]],
+    public_cache: Mapping[str, Mapping[str, str]] | None = None,
+    avg_cost_price: float = 0.0,
+    lookback_trading_days: int = DEFAULT_ATTRIBUTION_LOOKBACK_TRADING_DAYS,
+    max_calendar_days: int = DEFAULT_ATTRIBUTION_MAX_CALENDAR_DAYS,
+) -> dict[str, Any] | None:
+    """Match a buy wave (`opened_date`, `stock_no`) against recent 5 trading days of picks.
+
+    Priority:
+      1. `AI_Daily_Picks` (`category == "TOP_PICK"`)
+      2. `AI_Daily_Picks` (`category == "WATCHLIST"`)
+      3. `Rebound_Watchlist` (22:30 Pattern A)
+
+    Returns `None` if the stock was NOT in any actionable list within the window (e.g. `0050`,
+    legacy holdings, or discretionary trades).
+    """
+    sno = clean_leading_zero_code(stock_no)
+    opened_dt = parse_flexible_date(opened_date)
+    if not sno or opened_dt is None:
+        return None
+
+    # Gather all observed scan dates <= opened_dt to determine the N-trading-day window
+    observed_dates: set[date] = set()
+    for row in [*ai_daily_picks, *rebound_watchlist]:
+        dt = parse_flexible_date(row.get("scan_date"))
+        if dt is not None and dt <= opened_dt:
+            observed_dates.add(dt)
+
+    sorted_scan_dates = sorted(observed_dates, reverse=True)
+    allowed_trading_dates: set[date] = set(sorted_scan_dates[: max(1, lookback_trading_days)])
+
+    def _in_window(raw_scan_date: Any) -> tuple[bool, date | None]:
+        sdt = parse_flexible_date(raw_scan_date)
+        if sdt is None or sdt > opened_dt:
+            return False, None
+        if (opened_dt - sdt).days > max_calendar_days:
+            return False, None
+        if allowed_trading_dates and sdt not in allowed_trading_dates:
+            return False, None
+        return True, sdt
+
+    pub_entry = (public_cache or {}).get(sno, {})
+    pub_plan, pub_verdict = _parse_stage1_trade_plan(pub_entry.get("ai_summary_json", ""))
+    pub_war_room = str(pub_entry.get("war_room_url", "")).strip()
+
+    # 1 & 2. Search AI_Daily_Picks (TOP_PICK first, then WATCHLIST)
+    top_matches: list[tuple[date, dict[str, Any]]] = []
+    watch_matches: list[tuple[date, dict[str, Any]]] = []
+    for row in ai_daily_picks:
+        if clean_leading_zero_code(row.get("stock_id", "")) != sno:
+            continue
+        ok, sdt = _in_window(row.get("scan_date"))
+        if not ok or sdt is None:
+            continue
+        cat = str(row.get("category", "")).strip().upper()
+        if cat == "TOP_PICK":
+            top_matches.append((sdt, row))
+        elif cat == "WATCHLIST":
+            watch_matches.append((sdt, row))
+
+    top_matches.sort(key=lambda t: t[0], reverse=True)
+    watch_matches.sort(key=lambda t: t[0], reverse=True)
+
+    if top_matches or watch_matches:
+        is_top = bool(top_matches)
+        sdt, matched = top_matches[0] if is_top else watch_matches[0]
+        ref_close = _to_float(matched.get("close_at_pick"), avg_cost_price)
+        ref_ma17 = _to_float(matched.get("ma17_at_pick"), ref_close)
+
+        tp1 = extract_first_price(matched.get("target_price_1")) or extract_first_price(pub_plan.get("target_price_1"))
+        tp2 = extract_first_price(matched.get("target_price_2")) or extract_first_price(pub_plan.get("target_price_2"))
+        sl = extract_first_price(matched.get("stop_loss_price")) or extract_first_price(pub_plan.get("stop_loss_price"))
+
+        base_px = avg_cost_price if avg_cost_price > 0 else ref_close
+        if tp1 <= 0 and base_px > 0:
+            tp1 = round(base_px * 1.10, 2)
+        if tp2 <= tp1 and tp1 > 0:
+            tp2 = round(tp1 * 1.08, 2)
+        if sl <= 0 and base_px > 0:
+            sl = round(min(base_px * 0.96, ref_ma17 * 0.98 if ref_ma17 > 0 else base_px * 0.96), 2)
+
+        tactical = (
+            str(matched.get("tactical_type") or pub_plan.get("tactical_type") or "🎯 短中期波段持有 (5~20日)").strip()
+        )
+        thesis = str(matched.get("entry_thesis") or pub_verdict or "依據 22:00 AI 嚴選訊號建倉").strip()
+        invalidation = str(
+            matched.get("risk_note") or pub_plan.get("invalidation") or "跌破關鍵防守均線或基本面轉弱退場"
+        ).strip()
+        war_url = str(matched.get("war_room_url") or pub_war_room).strip()
+
+        return {
+            "entry_source": "AI_DAILY_TOP_PICK" if is_top else "AI_DAILY_WATCHLIST",
+            "source_scan_date": sdt.isoformat(),
+            "source_rank": str(matched.get("rank") or ("1" if is_top else "WATCH")).strip(),
+            "stock_name": str(matched.get("stock_name") or pub_entry.get("stock_name") or "").strip(),
+            "tactical_type": tactical,
+            "initial_tp1": round(tp1, 2),
+            "initial_tp2": round(tp2, 2),
+            "initial_sl": round(sl, 2),
+            "entry_thesis": thesis,
+            "invalidation_rule": invalidation,
+            "war_room_url": war_url,
+        }
+
+    # 3. Search Rebound_Watchlist (22:30 Pattern A)
+    reb_matches: list[tuple[date, dict[str, Any]]] = []
+    for row in rebound_watchlist:
+        if clean_leading_zero_code(row.get("stock_id", "")) != sno:
+            continue
+        ok, sdt = _in_window(row.get("scan_date"))
+        if ok and sdt is not None:
+            reb_matches.append((sdt, row))
+
+    reb_matches.sort(key=lambda t: t[0], reverse=True)
+    if reb_matches:
+        sdt, reb = reb_matches[0]
+        reb_plan, reb_verdict = _parse_stage1_trade_plan(reb.get("ai_summary_json") or pub_entry.get("ai_summary_json"))
+        close_px = _to_float(reb.get("close_price"), avg_cost_price)
+        base_px = avg_cost_price if avg_cost_price > 0 else close_px
+        target_ma17 = _to_float(reb.get("target_ma17"), 0.0)
+        high_60d = _to_float(reb.get("high_60d"), 0.0)
+        support_px = _to_float(reb.get("support_price"), 0.0)
+        support_ma = str(reb.get("support_ma") or "45MA/117MA").strip()
+
+        tp1 = target_ma17 if target_ma17 > base_px else extract_first_price(reb_plan.get("target_price_1"))
+        if tp1 <= 0 and base_px > 0:
+            tp1 = round(base_px * 1.07, 2)
+
+        tp2 = extract_first_price(reb_plan.get("target_price_2"))
+        if tp2 <= tp1:
+            if high_60d > tp1:
+                tp2 = round(min(high_60d, tp1 * 1.12), 2)
+            else:
+                tp2 = round(tp1 * 1.08, 2)
+
+        sl = extract_first_price(reb_plan.get("stop_loss_price"))
+        if sl <= 0:
+            sl = round(support_px * 0.97, 2) if support_px > 0 else round(base_px * 0.95, 2)
+
+        thesis = (
+            f"【22:30 型態A反彈】回踩 {support_ma} ({support_px}) 均值回歸，第一目標反壓 17MA ({tp1})"
+            + (f"｜{reb_verdict}" if reb_verdict else "")
+        )
+        invalidation = str(
+            reb_plan.get("invalidation") or f"帶量實質跌破 {support_ma} 支撐 ({sl} 元) 反彈失敗無條件停損"
+        ).strip()
+        war_url = str(reb.get("war_room_url") or pub_war_room).strip()
+
+        return {
+            "entry_source": "REBOUND_WATCHLIST",
+            "source_scan_date": sdt.isoformat(),
+            "source_rank": "REBOUND",
+            "stock_name": str(reb.get("stock_name") or pub_entry.get("stock_name") or "").strip(),
+            "tactical_type": f"⚡ 型態A長均線反彈（防守 {support_ma}）",
+            "initial_tp1": round(tp1, 2),
+            "initial_tp2": round(tp2, 2),
+            "initial_sl": round(sl, 2),
+            "entry_thesis": thesis[:220],
+            "invalidation_rule": invalidation[:220],
+            "war_room_url": war_url,
+        }
+
+    return None
+
+
+def compute_style_b_trim_plan(current_qty: int) -> dict[str, Any]:
+    """Calculate exact Style B (~50% partial take-profit) share count and order method.
+
+    - `>= 2,000` shares (>= 2 lots): sell whole lots `(current_qty // 2000) * 1000` via `整張現股`.
+    - `2 .. 1,999` shares (e.g. 1 lot = 1,000 shares or odd lots): sell `current_qty // 2` via `盤中零股`.
+    - `1` share: sell `1` share via `盤中零股`.
+    """
+    qty = max(0, int(current_qty))
+    if qty <= 0:
+        return {"trim_qty": 0, "remain_qty": 0, "order_method": "無庫存", "instruction_hint": "無庫存"}
+    if qty >= 2000:
+        lots_to_sell = (qty // 1000) // 2
+        if lots_to_sell < 1:
+            lots_to_sell = 1
+        trim_qty = lots_to_sell * 1000
+        remain_qty = qty - trim_qty
+        return {
+            "trim_qty": trim_qty,
+            "remain_qty": remain_qty,
+            "order_method": "整張現股",
+            "instruction_hint": f"掛【整張現股】賣出 {trim_qty:,} 股（{lots_to_sell} 張）鎖利，留 {remain_qty:,} 股拼 TP2",
+        }
+    if qty >= 2:
+        trim_qty = qty // 2
+        remain_qty = qty - trim_qty
+        return {
+            "trim_qty": trim_qty,
+            "remain_qty": remain_qty,
+            "order_method": "盤中零股",
+            "instruction_hint": f"掛【盤中零股】賣出 {trim_qty:,} 股鎖利，留 {remain_qty:,} 股拼 TP2",
+        }
+    return {
+        "trim_qty": 1,
+        "remain_qty": 0,
+        "order_method": "盤中零股",
+        "instruction_hint": "掛【盤中零股】賣出 1 股獲利了結",
+    }
+
+
+def compute_ratchet_trailing_stop(
+    *,
+    prev_trailing_stop: float,
+    initial_sl: float,
+    avg_cost_price: float,
+    current_price: float,
+    initial_tp1: float,
+    ma17: float,
+    status: str,
+) -> float:
+    """Compute a strictly non-decreasing (ratchet) trailing stop for long positions."""
+    floor = max(_to_float(prev_trailing_stop, 0.0), _to_float(initial_sl, 0.0))
+    if avg_cost_price <= 0:
+        return round(floor, 2)
+
+    breakeven = round(avg_cost_price * BREAKEVEN_BUFFER_MULTIPLIER, 2)
+    ret_pct = ((current_price - avg_cost_price) / avg_cost_price * 100.0) if current_price > 0 else 0.0
+
+    # Once profit >= +8% or TP1 partial profit has been taken, lock at least breakeven
+    if ret_pct >= RATCHET_PROFIT_TRIGGER_PCT or status == "TP1_PARTIAL_TAKEN":
+        if current_price <= 0 or current_price >= breakeven:
+            floor = max(floor, breakeven)
+
+    # After TP1 partial take-profit, trail along min(initial_tp1, ma17) * 0.985 when above breakeven
+    if status == "TP1_PARTIAL_TAKEN" and initial_tp1 > 0:
+        candidates = [v for v in (initial_tp1 * 0.985, ma17 * 0.985 if ma17 > 0 else 0.0) if v > breakeven]
+        if candidates:
+            tighter = round(min(candidates), 2)
+            if current_price <= 0 or tighter < current_price:
+                floor = max(floor, tighter)
+
+    return round(floor, 2)
+
+
+def _aggregate_holdings_by_stock(holdings_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Aggregate `02_Portfolio_Holdings` across `現股` and `盤中零股` per `stock_no`."""
+    agg: dict[str, dict[str, Any]] = {}
+    for r in holdings_rows:
+        sno = clean_leading_zero_code(r.get("stock_no", ""))
+        if not sno:
+            continue
+        qty = _to_int(r.get("qty", 0))
+        if qty <= 0:
+            continue
+        cost = _to_float(r.get("total_cost"), qty * _to_float(r.get("avg_cost_price"), 0.0))
+        mv = _to_float(r.get("market_value"), qty * _to_float(r.get("current_price"), 0.0))
+        if sno not in agg:
+            agg[sno] = {
+                "stock_no": sno,
+                "stock_name": str(r.get("stock_name", sno)).strip(),
+                "qty": qty,
+                "tradable_qty": _to_int(r.get("tradable_qty", qty)),
+                "total_cost": cost,
+                "market_value": mv,
+                "current_price": _to_float(r.get("current_price"), 0.0),
+                "ma17": _to_float(r.get("ma17"), 0.0),
+                "ma45": _to_float(r.get("ma45"), 0.0),
+                "ma117": _to_float(r.get("ma117"), 0.0),
+                "weight_pct": _to_float(r.get("weight_pct"), 0.0),
+                "war_room_url": str(r.get("war_room_url", "")).strip(),
+            }
+        else:
+            item = agg[sno]
+            item["qty"] += qty
+            item["tradable_qty"] += _to_int(r.get("tradable_qty", qty))
+            item["total_cost"] += cost
+            item["market_value"] += mv
+            item["weight_pct"] = round(item["weight_pct"] + _to_float(r.get("weight_pct"), 0.0), 2)
+            if not item["war_room_url"] and r.get("war_room_url"):
+                item["war_room_url"] = str(r["war_room_url"]).strip()
+
+    for sno, item in agg.items():
+        q = item["qty"]
+        tc = item["total_cost"]
+        mv = item["market_value"]
+        item["avg_cost_price"] = round(tc / q, 2) if q > 0 else 0.0
+        item["unrealized_pnl"] = int(round(mv - tc))
+        item["return_pct"] = round(((mv - tc) / tc * 100.0), 2) if tc > 0 else 0.0
+    return agg
+
+
+def _sum_realized_pnl_for_wave(
+    settlement_records: list[dict[str, Any]],
+    *,
+    stock_no: str,
+    opened_date: str,
+) -> int:
+    sno = clean_leading_zero_code(stock_no)
+    total = 0
+    for rec in settlement_records:
+        if str(rec.get("record_type", "")).upper() != "REALIZED_PNL":
+            continue
+        if clean_leading_zero_code(rec.get("stock_no", "")) != sno:
+            continue
+        r_date = str(rec.get("record_date", "")).strip()
+        if opened_date and r_date and r_date < opened_date:
+            continue
+        total += _to_int(rec.get("realized_pnl", 0))
+    return total
+
+
+def sync_holdings_with_memory_cards(
+    holdings_rows: list[dict[str, Any]],
+    memory_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Project active `05_Position_Thesis_Memory` fields onto `02_Portfolio_Holdings` rows.
+
+    Holdings WITHOUT an active memory card (e.g. `0050` or legacy holdings) are cleanly marked
+    with `📦 帳面損益觀察` and blank target/stop prices per user rules.
+    """
+    active_by_stock: dict[str, dict[str, Any]] = {}
+    for m in memory_rows:
+        st = str(m.get("status", "")).strip().upper()
+        if st in ("OPEN", "TP1_PARTIAL_TAKEN"):
+            sno = clean_leading_zero_code(m.get("stock_no", ""))
+            if sno:
+                active_by_stock[sno] = m
+
+    projected: list[dict[str, Any]] = []
+    for row in holdings_rows:
+        r = dict(row)
+        sno = clean_leading_zero_code(r.get("stock_no", ""))
+        mem = active_by_stock.get(sno)
+        if mem is None:
+            r["ai_action_tag"] = UNTRACKED_HOLDING_TAG
+            r["ai_target_price"] = ""
+            r["ai_stop_loss"] = ""
+            r["ai_advice_summary"] = "非嚴選波段追蹤標的（僅記錄帳面損益，不設定波段目標價）。"
+        else:
+            st = str(mem.get("status", "OPEN")).upper()
+            tp1 = _to_float(mem.get("initial_tp1"), 0.0)
+            tp2 = _to_float(mem.get("initial_tp2"), 0.0)
+            active_tp = tp2 if (st == "TP1_PARTIAL_TAKEN" and tp2 > 0) else tp1
+            t_stop = _to_float(mem.get("trailing_stop"), _to_float(mem.get("initial_sl"), 0.0))
+            last_tag = str(mem.get("last_ai_action", "")).strip()
+            last_sum = str(mem.get("last_ai_summary", "")).strip()
+
+            r["ai_action_tag"] = normalize_ai_action_tag(last_tag) if last_tag else "🟢 順勢續抱"
+            r["ai_target_price"] = round(active_tp, 2) if active_tp > 0 else ""
+            r["ai_stop_loss"] = round(t_stop, 2) if t_stop > 0 else ""
+            if last_sum:
+                r["ai_advice_summary"] = last_sum
+            else:
+                src_label = f"{mem.get('source_scan_date')} #{mem.get('source_rank')}"
+                r["ai_advice_summary"] = (
+                    f"【記憶綁定 {src_label}】原定 TP1={tp1} / TP2={tp2}，目前棘輪防守價={t_stop}。"
+                )
+            if not r.get("war_room_url") and mem.get("war_room_url"):
+                r["war_room_url"] = str(mem["war_room_url"]).strip()
+        projected.append(r)
+    return projected
+
+
+def reconcile_position_memory(
+    *,
+    existing_memory_rows: list[dict[str, Any]],
+    holdings_rows: list[dict[str, Any]],
+    statement_records: list[dict[str, Any]],
+    settlement_records: list[dict[str, Any]],
+    picks_bundle: Mapping[str, Any],
+    public_cache: Mapping[str, Mapping[str, str]] | None = None,
+    as_of: date | None = None,
+    updated_at: str | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Reconcile `05_Position_Thesis_Memory` with latest Taishin holdings, statements, and recent picks.
+
+    Key guarantees:
+    1. Only newly opened waves matching recent 5-trading-day `AI_Daily_Picks` (`TOP_PICK` / `WATCHLIST`)
+       or `Rebound_Watchlist` create memory cards. Legacy / ETF (`0050`) / discretionary buys are ignored.
+    2. Scale-ins (`current_qty > peak_qty`) update `avg_cost_price` & `peak_qty` WITHOUT overwriting
+       `initial_tp1` / `initial_tp2` / `entry_thesis` (zero goalpost drift).
+    3. Partial ~50% sell near/above `initial_tp1` transitions `OPEN -> TP1_PARTIAL_TAKEN` and locks breakeven.
+    4. Full exit (`current_qty == 0`) transitions `-> CLOSED` and records realized PnL.
+    """
+    today_iso = (as_of or _today_in_taipei()).isoformat()
+    now_iso = updated_at or _now_iso_in_taipei()
+    agg_holdings = _aggregate_holdings_by_stock(holdings_rows)
+    waves = compute_holding_waves_from_statements(statement_records)
+
+    ai_picks = list(picks_bundle.get("ai_daily_picks") or [])
+    reb_picks = list(picks_bundle.get("rebound_watchlist") or [])
+    merged_pub_cache: dict[str, dict[str, str]] = {}
+    if isinstance(picks_bundle.get("watchlist_master"), Mapping):
+        for k, v in picks_bundle["watchlist_master"].items():
+            merged_pub_cache[str(k)] = dict(v)
+    if public_cache:
+        for k, v in public_cache.items():
+            merged_pub_cache[str(k)] = {**merged_pub_cache.get(str(k), {}), **dict(v)}
+
+    updated_memory: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
+    active_handled_stocks: set[str] = set()
+    known_position_ids: set[str] = set()
+
+    for raw_mem in existing_memory_rows:
+        mem = dict(raw_mem)
+        sno = clean_leading_zero_code(mem.get("stock_no", ""))
+        mem["stock_no"] = sno
+        pid = clean_leading_zero_code(mem.get("position_id", "")) or f"{mem.get('opened_date', '')}_{sno}"
+        mem["position_id"] = pid
+        known_position_ids.add(pid)
+
+        status = str(mem.get("status", "OPEN")).strip().upper()
+        if status == "CLOSED":
+            updated_memory.append(mem)
+            continue
+
+        active_handled_stocks.add(sno)
+        hold = agg_holdings.get(sno)
+
+        if hold is None or _to_int(hold.get("qty", 0)) <= 0:
+            # Position was completely sold out!
+            realized = _sum_realized_pnl_for_wave(
+                settlement_records,
+                stock_no=sno,
+                opened_date=str(mem.get("opened_date", "")),
+            )
+            mem["status"] = "CLOSED"
+            mem["current_qty"] = 0
+            mem["closed_date"] = today_iso
+            if realized != 0 or not mem.get("realized_pnl"):
+                mem["realized_pnl"] = realized
+            mem["updated_at"] = now_iso
+            updated_memory.append(mem)
+            events.append(
+                {
+                    "type": "CLOSED",
+                    "stock_no": sno,
+                    "stock_name": mem.get("stock_name", sno),
+                    "position_id": pid,
+                    "realized_pnl": mem.get("realized_pnl", 0),
+                }
+            )
+            continue
+
+        # Active holding still open: update qty, avg_cost_price, ratchet stop, and check partial take-profit
+        cur_qty = _to_int(hold["qty"])
+        prev_peak = max(_to_int(mem.get("peak_qty", 0)), _to_int(mem.get("initial_qty", 0)), 1)
+        new_peak = max(prev_peak, cur_qty)
+        avg_cost = _to_float(hold["avg_cost_price"], _to_float(mem.get("avg_cost_price"), 0.0))
+        cur_price = _to_float(hold["current_price"], avg_cost)
+        ma17 = _to_float(hold.get("ma17"), cur_price)
+        tp1 = _to_float(mem.get("initial_tp1"), 0.0)
+        init_sl = _to_float(mem.get("initial_sl"), 0.0)
+        prev_stop = _to_float(mem.get("trailing_stop"), init_sl)
+
+        # Detect Style B partial take-profit execution (~30%+ trimmed near TP1 or after trim advice)
+        last_act = str(mem.get("last_ai_action", ""))
+        near_tp1 = (tp1 > 0 and cur_price >= tp1 * 0.96) or ("分批停利" in last_act)
+        if status == "OPEN" and prev_peak >= 2 and 0 < cur_qty <= int(prev_peak * 0.70) and near_tp1:
+            status = "TP1_PARTIAL_TAKEN"
+            events.append(
+                {
+                    "type": "PARTIAL_TAKEN",
+                    "stock_no": sno,
+                    "stock_name": mem.get("stock_name") or hold["stock_name"],
+                    "position_id": pid,
+                    "prev_qty": prev_peak,
+                    "current_qty": cur_qty,
+                    "tp2": _to_float(mem.get("initial_tp2"), 0.0),
+                }
+            )
+
+        new_stop = compute_ratchet_trailing_stop(
+            prev_trailing_stop=prev_stop,
+            initial_sl=init_sl,
+            avg_cost_price=avg_cost,
+            current_price=cur_price,
+            initial_tp1=tp1,
+            ma17=ma17,
+            status=status,
+        )
+
+        mem["stock_name"] = str(mem.get("stock_name") or hold["stock_name"]).strip()
+        mem["status"] = status
+        mem["peak_qty"] = new_peak
+        mem["current_qty"] = cur_qty
+        mem["avg_cost_price"] = round(avg_cost, 2)
+        mem["trailing_stop"] = new_stop
+        if hold.get("war_room_url"):
+            mem["war_room_url"] = hold["war_room_url"]
+        mem["updated_at"] = now_iso
+        # Explicitly keep `user_note`, `initial_tp1`, `initial_tp2`, `initial_sl`, `entry_thesis` untouched!
+        updated_memory.append(mem)
+
+    # Check holdings that do NOT yet have an active memory card
+    for sno, hold in agg_holdings.items():
+        if sno in active_handled_stocks:
+            continue
+        wave = waves.get(sno, {})
+        opened_str = str(wave.get("opened_date") or "").strip()
+        if not opened_str:
+            # If statements have no record at all for this holding, do not fabricate a recent buy date
+            # unless there is a statement buy on/near today; legacy positions without buy history stay untracked.
+            continue
+
+        pid = f"{opened_str}_{sno}"
+        if pid in known_position_ids:
+            continue
+
+        matched = match_entry_to_picks(
+            sno,
+            opened_str,
+            ai_daily_picks=ai_picks,
+            rebound_watchlist=reb_picks,
+            public_cache=merged_pub_cache,
+            avg_cost_price=_to_float(hold.get("avg_cost_price"), 0.0),
+        )
+        if matched is None:
+            continue
+
+        cur_qty = _to_int(hold["qty"])
+        init_qty = max(_to_int(wave.get("initial_qty", cur_qty)), cur_qty)
+        peak_qty = max(_to_int(wave.get("peak_qty", cur_qty)), cur_qty)
+        avg_cost = _to_float(hold["avg_cost_price"], 0.0)
+        cur_price = _to_float(hold["current_price"], avg_cost)
+        ma17 = _to_float(hold.get("ma17"), cur_price)
+        init_sl = _to_float(matched["initial_sl"], 0.0)
+        tp1 = _to_float(matched["initial_tp1"], 0.0)
+        tp2 = _to_float(matched["initial_tp2"], 0.0)
+
+        init_trailing = compute_ratchet_trailing_stop(
+            prev_trailing_stop=init_sl,
+            initial_sl=init_sl,
+            avg_cost_price=avg_cost,
+            current_price=cur_price,
+            initial_tp1=tp1,
+            ma17=ma17,
+            status="OPEN",
+        )
+
+        new_card = {
+            "position_id": pid,
+            "stock_no": sno,
+            "stock_name": str(hold.get("stock_name") or matched.get("stock_name") or sno).strip(),
+            "status": "OPEN",
+            "entry_source": matched["entry_source"],
+            "source_scan_date": matched["source_scan_date"],
+            "source_rank": matched["source_rank"],
+            "tactical_type": matched["tactical_type"],
+            "opened_date": opened_str,
+            "initial_qty": init_qty,
+            "peak_qty": peak_qty,
+            "current_qty": cur_qty,
+            "avg_cost_price": round(avg_cost, 2),
+            "initial_tp1": tp1,
+            "initial_tp2": tp2,
+            "initial_sl": init_sl,
+            "trailing_stop": init_trailing,
+            "entry_thesis": matched["entry_thesis"],
+            "invalidation_rule": matched["invalidation_rule"],
+            "war_room_url": str(hold.get("war_room_url") or matched.get("war_room_url") or "").strip(),
+            "last_eval_date": "",
+            "last_ai_action": "🟢 順勢續抱",
+            "last_ai_summary": "",
+            "closed_date": "",
+            "realized_pnl": "",
+            "user_note": "",
+            "updated_at": now_iso,
+        }
+        updated_memory.append(new_card)
+        known_position_ids.add(pid)
+        events.append(
+            {
+                "type": "NEW_BOUND",
+                "stock_no": sno,
+                "stock_name": new_card["stock_name"],
+                "position_id": pid,
+                "entry_source": new_card["entry_source"],
+                "source_scan_date": new_card["source_scan_date"],
+                "source_rank": new_card["source_rank"],
+                "avg_cost_price": new_card["avg_cost_price"],
+                "qty": cur_qty,
+                "initial_tp1": tp1,
+                "initial_tp2": tp2,
+                "initial_sl": init_sl,
+            }
+        )
+
+    # Sort OPEN / TP1_PARTIAL_TAKEN first, then CLOSED by opened_date descending
+    status_order = {"OPEN": 0, "TP1_PARTIAL_TAKEN": 1, "CLOSED": 2}
+    updated_memory.sort(
+        key=lambda m: (
+            status_order.get(str(m.get("status", "OPEN")).upper(), 9),
+            str(m.get("opened_date", "")),
+            clean_leading_zero_code(m.get("stock_no", "")),
+        )
+    )
+
+    projected_holdings = sync_holdings_with_memory_cards(holdings_rows, updated_memory)
+    return updated_memory, projected_holdings, events
+
+
+def format_memory_sync_discord_report(
+    *,
+    as_of: date,
+    events: list[dict[str, Any]],
+) -> list[str]:
+    """Format concise `22:45` notification when new memory cards are bound or positions change stage."""
+    if not events:
+        return []
+    lines: list[str] = [f"🌙 【台新 22:45 盤後持股記憶歸因快訊】({as_of.isoformat()})"]
+    for ev in events:
+        etype = ev.get("type")
+        sno = ev.get("stock_no")
+        sname = ev.get("stock_name")
+        if etype == "NEW_BOUND":
+            lines.append(
+                f"📌 **新建倉綁定**：`{sno} {sname}`（{ev['qty']:,} 股｜買入均價 {ev['avg_cost_price']} 元）\n"
+                f"   • 命中來源：`{ev['entry_source']}` ({ev['source_scan_date']} #{ev['source_rank']})\n"
+                f"   • 鎖定錨點：🎯 TP1 `{ev['initial_tp1']}` ｜ 🏆 TP2 `{ev['initial_tp2']}` ｜ 🛡️ 初始停損 `{ev['initial_sl']}`"
+            )
+        elif etype == "PARTIAL_TAKEN":
+            lines.append(
+                f"💰 **已完成分批停利**：`{sno} {sname}` 持股由 {ev['prev_qty']:,} 股減碼至 {ev['current_qty']:,} 股，"
+                f"狀態推進至 `TP1_PARTIAL_TAKEN`，後續主目標鎖定 TP2 `{ev['tp2']}` 元！"
+            )
+        elif etype == "CLOSED":
+            pnl = _to_int(ev.get("realized_pnl", 0))
+            pnl_str = f"（波段已實現損益 {pnl:+,} 元）" if pnl != 0 else ""
+            lines.append(f"🏁 **波段結案平倉**：`{sno} {sname}` 庫存已歸零結案{pnl_str}。")
+    return _chunk_discord_messages(lines)
+
+
+def parse_morning_battle_ai_response(raw_text: str) -> dict[str, Any]:
+    """Extract and normalize JSON output from `08:15` `TAISHIN_MORNING_BATTLE_PROMPT`."""
+    text = (raw_text or "").strip()
+    if not text:
+        return {"morning_battle_headline": "", "positions": []}
+
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL)
+    candidate = m.group(1) if m else text
+    if not m:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidate = text[start : end + 1]
+
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        cleaned = re.sub(r",\s*([\]\}])", r"\1", candidate)
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return {"morning_battle_headline": "", "positions": []}
+
+    if not isinstance(parsed, dict):
+        return {"morning_battle_headline": "", "positions": []}
+
+    pos_list = parsed.get("positions")
+    if not isinstance(pos_list, list):
+        pos_list = []
+
+    norm_positions: list[dict[str, Any]] = []
+    for item in pos_list:
+        if not isinstance(item, dict):
+            continue
+        sno = clean_leading_zero_code(item.get("stock_no") or item.get("stock_id") or "")
+        pid = clean_leading_zero_code(item.get("position_id") or "")
+        if not sno and not pid:
+            continue
+        norm_positions.append(
+            {
+                "position_id": pid,
+                "stock_no": sno,
+                "ai_action_tag": normalize_ai_action_tag(item.get("ai_action_tag")),
+                "recommended_trailing_stop": round(_to_float(item.get("recommended_trailing_stop"), 0.0), 2),
+                "thesis_intact": bool(item.get("thesis_intact", True)),
+                "order_instruction": str(item.get("order_instruction") or "").strip(),
+                "pm_rationale": str(item.get("pm_rationale") or "").strip(),
+            }
+        )
+
+    return {
+        "morning_battle_headline": str(parsed.get("morning_battle_headline") or "").strip(),
+        "positions": norm_positions,
+    }
+
+
+def build_tracked_position_gatekeeper_signals(
+    mem: Mapping[str, Any],
+    hold_agg: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Run deterministic Python checks (TP1/TP2 reach, stop breach, Style B share math, ratchet floor)."""
+    qty = _to_int(hold_agg.get("qty", mem.get("current_qty", 0)))
+    avg_cost = _to_float(hold_agg.get("avg_cost_price"), _to_float(mem.get("avg_cost_price"), 0.0))
+    cur_price = _to_float(hold_agg.get("current_price"), avg_cost)
+    ma17 = _to_float(hold_agg.get("ma17"), cur_price)
+    ma45 = _to_float(hold_agg.get("ma45"), cur_price)
+    ma117 = _to_float(hold_agg.get("ma117"), cur_price)
+    tp1 = _to_float(mem.get("initial_tp1"), 0.0)
+    tp2 = _to_float(mem.get("initial_tp2"), 0.0)
+    init_sl = _to_float(mem.get("initial_sl"), 0.0)
+    prev_stop = _to_float(mem.get("trailing_stop"), init_sl)
+    status = str(mem.get("status", "OPEN")).strip().upper()
+
+    ratchet_floor = compute_ratchet_trailing_stop(
+        prev_trailing_stop=prev_stop,
+        initial_sl=init_sl,
+        avg_cost_price=avg_cost,
+        current_price=cur_price,
+        initial_tp1=tp1,
+        ma17=ma17,
+        status=status,
+    )
+    trim_plan = compute_style_b_trim_plan(qty)
+
+    tp2_reached = tp2 > 0 and cur_price >= tp2 * 0.995
+    tp1_reached = tp1 > 0 and cur_price >= tp1 * 0.99
+    stop_breached = ratchet_floor > 0 and cur_price > 0 and cur_price <= ratchet_floor
+
+    flags: list[str] = []
+    if tp2_reached:
+        flags.append(f"🏆【已達建倉第二目標價 TP2 ({tp2})】")
+    elif tp1_reached and status == "OPEN":
+        flags.append(f"🔔【已達或逼近建倉第一目標價 TP1 ({tp1}) — 待執行風格B賣半鎖利】")
+    elif status == "TP1_PARTIAL_TAKEN":
+        flags.append(f"✅【已完成 TP1 賣半鎖利，目前剩餘部位主攻 TP2 ({tp2})】")
+    if stop_breached:
+        flags.append(f"🚨【收盤價 {cur_price} 已觸及/跌破棘輪防守價 {ratchet_floor}】")
+
+    dist_tp1_pct = round(((tp1 - cur_price) / cur_price * 100.0), 2) if (tp1 > 0 and cur_price > 0) else 0.0
+    dist_tp2_pct = round(((tp2 - cur_price) / cur_price * 100.0), 2) if (tp2 > 0 and cur_price > 0) else 0.0
+
+    return {
+        "qty": qty,
+        "avg_cost_price": avg_cost,
+        "current_price": cur_price,
+        "return_pct": _to_float(hold_agg.get("return_pct"), 0.0),
+        "unrealized_pnl": _to_int(hold_agg.get("unrealized_pnl"), 0),
+        "weight_pct": _to_float(hold_agg.get("weight_pct"), 0.0),
+        "ma17": ma17,
+        "ma45": ma45,
+        "ma117": ma117,
+        "ratchet_stop_floor": ratchet_floor,
+        "trim_plan": trim_plan,
+        "tp1_reached": tp1_reached,
+        "tp2_reached": tp2_reached,
+        "stop_breached": stop_breached,
+        "dist_tp1_pct": dist_tp1_pct,
+        "dist_tp2_pct": dist_tp2_pct,
+        "flags": flags,
+    }
+
+
+async def run_morning_battle_ai_review(
+    active_memories: list[dict[str, Any]],
+    *,
+    agg_holdings: Mapping[str, Mapping[str, Any]],
+    public_cache: Mapping[str, Mapping[str, str]],
+    market_regime: Mapping[str, Any],
+    macro_context: Mapping[str, Any],
+    eval_date: date,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str, str]:
+    """Call `VERTEX_STAGE2_MODEL` once across all active tracked memory cards and clamp stops."""
+    if not active_memories:
+        return active_memories, {}, "", ""
+
+    dossier_blocks: list[str] = []
+    gatekeeper_by_pid: dict[str, dict[str, Any]] = {}
+
+    for idx, mem in enumerate(active_memories, start=1):
+        sno = clean_leading_zero_code(mem.get("stock_no", ""))
+        pid = str(mem.get("position_id", f"{mem.get('opened_date')}_{sno}"))
+        hold = agg_holdings.get(sno, {})
+        gk = build_tracked_position_gatekeeper_signals(mem, hold)
+        gatekeeper_by_pid[pid] = gk
+
+        pub = public_cache.get(sno, {})
+        _, fund_verdict = _parse_stage1_trade_plan(pub.get("ai_summary_json", ""))
+        fund_line = fund_verdict or "維持建倉時財報結論"
+        flag_str = " ".join(gk["flags"]) if gk["flags"] else "🟢【劇本區間行進中】"
+        user_note = str(mem.get("user_note") or "").strip()
+        note_line = f"\n   - 投資人自訂備註：{user_note}" if user_note else ""
+
+        dossier_blocks.append(
+            f"### {idx}. `{sno} {mem.get('stock_name', '')}`（position_id: `{pid}`｜狀態：`{mem.get('status')}`）\n"
+            f"   - 系統硬規則旗標：{flag_str}\n"
+            f"   - 持倉成本與部位：現有 `{gk['qty']:,}` 股（峰值 `{mem.get('peak_qty')}` 股）｜"
+            f"買入均價 `{gk['avg_cost_price']}` 元｜昨收 `{gk['current_price']}` 元｜"
+            f"未實現 `{gk['unrealized_pnl']:+,}` 元 (`{gk['return_pct']:+.2f}%`)｜佔總持倉權重 `{gk['weight_pct']:.1f}%`\n"
+            f"   - 釘死建倉錨點（來源 `{mem.get('entry_source')}` {mem.get('source_scan_date')} #{mem.get('source_rank')}｜{mem.get('tactical_type')}）：\n"
+            f"     * 初始 TP1：`{mem.get('initial_tp1')}` 元（距離 `{gk['dist_tp1_pct']:+.2f}%`）｜"
+            f"初始 TP2：`{mem.get('initial_tp2')}` 元（距離 `{gk['dist_tp2_pct']:+.2f}%`）\n"
+            f"     * 初始停損 SL：`{mem.get('initial_sl')}` 元 ｜ **目前棘輪防守底線 (`ratchet_stop_floor`)：`{gk['ratchet_stop_floor']}` 元**\n"
+            f"     * 風格 B 預設減碼算盤：{gk['trim_plan']['instruction_hint']}\n"
+            f"   - 當時買進劇本：{mem.get('entry_thesis')}\n"
+            f"   - 當時設定失效紅線：{mem.get('invalidation_rule')}\n"
+            f"   - 最新技術與財報快取：17MA=`{gk['ma17']}` / 45MA=`{gk['ma45']}` / 117MA=`{gk['ma117']}` ｜ 財報結論：{fund_line}"
+            f"{note_line}"
+        )
+
+    prompt = TAISHIN_MORNING_BATTLE_PROMPT.format(
+        market_regime_summary=str(market_regime.get("summary") or market_regime.get("light") or "🟡黃燈"),
+        macro_context_block=str(macro_context.get("prompt_block") or "無國際盤快取"),
+        tracked_holdings_dossier="\n\n".join(dossier_blocks),
+    )
+
+    stage2_model = get_vertex_stage2_model()
+    ai_resp = await ask_vertex_ai_with_meta(prompt, model=stage2_model, tag="taishin_morning_brief")
+    parsed = parse_morning_battle_ai_response(ai_resp.text)
+
+    by_pid: dict[str, dict[str, Any]] = {}
+    by_sno: dict[str, dict[str, Any]] = {}
+    for item in parsed.get("positions") or []:
+        if item.get("position_id"):
+            by_pid[item["position_id"]] = item
+        if item.get("stock_no"):
+            by_sno[item["stock_no"]] = item
+
+    decisions_by_sno: dict[str, dict[str, Any]] = {}
+    enriched_memories: list[dict[str, Any]] = []
+    now_iso = _now_iso_in_taipei()
+
+    for mem in active_memories:
+        m = dict(mem)
+        sno = clean_leading_zero_code(m.get("stock_no", ""))
+        pid = str(m.get("position_id", f"{m.get('opened_date')}_{sno}"))
+        gk = gatekeeper_by_pid[pid]
+        floor = gk["ratchet_stop_floor"]
+        cur_px = gk["current_price"]
+        matched_ai = by_pid.get(pid) or by_sno.get(sno)
+
+        if matched_ai:
+            tag = normalize_ai_action_tag(matched_ai.get("ai_action_tag"))
+            # Guardrail: if already took TP1 partial profit, do not repeat "分批停利" unless TP2 reached
+            if m.get("status") == "TP1_PARTIAL_TAKEN" and tag == "💰 分批停利":
+                tag = "🏆 達標收割" if gk["tp2_reached"] else "🟢 順勢續抱"
+
+            rec_stop = _to_float(matched_ai.get("recommended_trailing_stop"), floor)
+            # Ratchet clamp: never allow trailing stop below ratchet_stop_floor, nor absurdly above current_price when holding
+            if rec_stop < floor:
+                final_stop = floor
+            elif cur_px > 0 and rec_stop >= cur_px and not gk["stop_breached"]:
+                final_stop = floor
+            else:
+                final_stop = round(rec_stop, 2)
+
+            order_inst = matched_ai.get("order_instruction") or ""
+            rationale = matched_ai.get("pm_rationale") or ""
+            combined_summary = f"{order_inst}｜{rationale}".strip("｜")
+        else:
+            # Deterministic fallback if AI omitted this position
+            if gk["stop_breached"]:
+                tag = "🚨 觸及停損"
+                order_inst = f"現價跌破防守線 {floor} 元，建議嚴格執行停損出場。"
+            elif gk["tp2_reached"]:
+                tag = "🏆 達標收割"
+                order_inst = f"達成原定第二目標價 TP2 ({m.get('initial_tp2')} 元)，建議獲利收割。"
+            elif gk["tp1_reached"] and m.get("status") == "OPEN":
+                tag = "💰 分批停利"
+                order_inst = gk["trim_plan"]["instruction_hint"]
+            else:
+                tag = "🟢 順勢續抱"
+                order_inst = f"劇本完好續抱，嚴守棘輪防守價 {floor} 元。"
+            final_stop = floor
+            rationale = "依建倉原定目標與棘輪防線規則執行。"
+            combined_summary = f"{order_inst}｜{rationale}"
+
+        m["trailing_stop"] = final_stop
+        m["last_eval_date"] = eval_date.isoformat()
+        m["last_ai_action"] = tag
+        m["last_ai_summary"] = combined_summary[:220]
+        m["updated_at"] = now_iso
+        enriched_memories.append(m)
+
+        decisions_by_sno[sno] = {
+            "ai_action_tag": tag,
+            "trailing_stop": final_stop,
+            "order_instruction": order_inst,
+            "pm_rationale": rationale,
+            "gatekeeper": gk,
+        }
+
+    headline = parsed.get("morning_battle_headline") or "已完成建倉劇本、棘輪防線與隔夜國際盤交叉檢核。"
+    return enriched_memories, decisions_by_sno, headline, ai_resp.model_version
+
+
+def format_morning_brief_discord_report(
+    *,
+    as_of: date,
+    holdings_rows: list[dict[str, Any]],
+    memory_rows: list[dict[str, Any]],
+    decisions_by_sno: Mapping[str, Mapping[str, Any]],
+    today_settlements: list[dict[str, Any]],
+    bank_balance: float | None,
+    market_regime: Mapping[str, Any],
+    macro_context: Mapping[str, Any],
+    battle_headline: str,
+    model_version: str,
+) -> list[str]:
+    """Format the `08:15` Pre-Market Battle Plan & Settlement Alert report for Discord."""
+    lines: list[str] = []
+    tw_light = str(market_regime.get("light") or "🟡黃燈")
+    macro_tone = str(macro_context.get("risk_tone") or "🟡 國際中性震盪")
+    lines.append(f"☀️ 【台新證券 08:15 盤前開盤作戰晨報】({as_of.isoformat()})")
+    if model_version:
+        lines.append(f"🤖 決策模型：{model_version} ｜ 🚦 台股：{tw_light} ｜ 🌍 國際：{macro_tone}")
+    else:
+        lines.append(f"🚦 台股環境：{tw_light} ｜ 🌍 國際環境：{macro_tone}（無波段追蹤股，0 Token 快報模式）")
+
+    # 1. Pre-market T+2 settlement & bank balance check (before 09:00 bank cutoff!)
+    bal_str = f"{int(round(bank_balance)):,} 元" if bank_balance is not None else "未提供"
+    today_net = sum(_to_int(s.get("net_amount", 0)) for s in today_settlements)
+    has_shortfall = any(s.get("shortfall_alert") == "⚠️餘額不足" for s in today_settlements)
+    alert_badge = "🚨 **交割款餘額不足！請於 09:00 前補足款項！**" if has_shortfall else "✅ 交割資金正常"
+    lines.append(f"💰 分戶帳餘額：{bal_str} ｜ 今日應收付交割款：{today_net:+,} 元（{alert_badge}）")
+
+    # 2. Global macro compact snapshot
+    compact_macro = str(macro_context.get("compact_line") or "").strip()
+    if compact_macro:
+        lines.append(f"🌎 隔夜美股與匯率：{compact_macro}")
+    headlines = macro_context.get("headlines") or []
+    if headlines:
+        top_news = "；".join(h.get("title", "") for h in headlines[:2] if h.get("title"))
+        if top_news:
+            lines.append(f"📰 國際要聞：{top_news}")
+    if battle_headline:
+        lines.append(f"🧭 晨會總評：{battle_headline}")
+
+    lines.append("─" * 28)
+
+    agg = _aggregate_holdings_by_stock(holdings_rows)
+    active_memories = [
+        m for m in memory_rows if str(m.get("status", "")).upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+    ]
+    tracked_snos = {clean_leading_zero_code(m.get("stock_no", "")) for m in active_memories}
+
+    total_cost = sum(_to_int(r.get("total_cost", 0)) for r in holdings_rows)
+    total_mv = sum(_to_int(r.get("market_value", 0)) for r in holdings_rows)
+    total_pnl = total_mv - total_cost
+    total_ret = (total_pnl / total_cost * 100.0) if total_cost > 0 else 0.0
+    lines.append(
+        f"📊 帳戶總市值：{total_mv:,} 元 ｜ 總成本：{total_cost:,} 元 ｜ "
+        f"帳面總損益：{total_pnl:+,} 元 ({total_ret:+.2f}%)"
+    )
+
+    # 3. Tracked Position Memory Battle Cards
+    if active_memories:
+        lines.append("")
+        lines.append(f"🎯 **【嚴選波段記憶追蹤 — 09:00 開盤作戰指令】（共 {len(active_memories)} 檔）**")
+        for mem in active_memories:
+            sno = clean_leading_zero_code(mem.get("stock_no", ""))
+            hold = agg.get(sno, {})
+            dec = decisions_by_sno.get(sno, {})
+            gk = dec.get("gatekeeper") or build_tracked_position_gatekeeper_signals(mem, hold)
+            tag = dec.get("ai_action_tag") or mem.get("last_ai_action") or "🟢 順勢續抱"
+            war_link = f" ｜ [戰情室]({mem['war_room_url']})" if mem.get("war_room_url") else ""
+            stage_badge = "已賣半鎖利" if mem.get("status") == "TP1_PARTIAL_TAKEN" else "建倉持有中"
+
+            lines.append(
+                f"🔹 **{sno} {mem.get('stock_name', '')}**（{stage_badge}｜來源 {mem.get('source_scan_date')} #{mem.get('source_rank')}）"
+                f" ➔ **{tag}**{war_link}"
+            )
+            lines.append(
+                f"   • 部位：{gk['qty']:,} 股｜買入均價：`{gk['avg_cost_price']}` ｜ "
+                f"昨收：`{gk['current_price']}` (`{gk['return_pct']:+.2f}%` / `{gk['unrealized_pnl']:+,}` 元)"
+            )
+            lines.append(
+                f"   • 釘死目標：TP1 `{mem.get('initial_tp1')}` ({gk['dist_tp1_pct']:+.1f}%) / "
+                f"TP2 `{mem.get('initial_tp2')}` ({gk['dist_tp2_pct']:+.1f}%) ｜ "
+                f"🛡️ 棘輪防守價：`{mem.get('trailing_stop')}`（初始停損 {mem.get('initial_sl')}）"
+            )
+            order_inst = dec.get("order_instruction") or mem.get("last_ai_summary") or ""
+            rationale = dec.get("pm_rationale") or ""
+            if order_inst:
+                lines.append(f"   • ⚡ **09:00 掛單指令**：{order_inst}")
+            if rationale:
+                lines.append(f"   • 📝 劇本檢核：{rationale}")
+    else:
+        lines.append("")
+        lines.append("📭 目前無命中嚴選記憶卡之波段追蹤部位。")
+
+    # 4. Untracked Holdings (0050 / legacy stocks -> pure PnL display, zero target nagging)
+    untracked_rows = [
+        r for r in holdings_rows if clean_leading_zero_code(r.get("stock_no", "")) not in tracked_snos
+    ]
+    if untracked_rows:
+        lines.append("")
+        lines.append(f"📦 **【長投與其他庫存帳面快照（不設定波段目標價）】（共 {len(untracked_rows)} 筆）**")
+        for r in untracked_rows:
+            sno = clean_leading_zero_code(r.get("stock_no", ""))
+            lines.append(
+                f"   • `{sno} {r['stock_name']}`（{r['order_type']}）：{r['qty']:,} 股 ｜ "
+                f"均價 {r['avg_cost_price']} ➔ 現價 {r['current_price']} "
+                f"({r['return_pct']:+.2f}% / {r['unrealized_pnl']:+,} 元｜權重 {r['weight_pct']:.1f}%)"
+            )
+
+    return _chunk_discord_messages(lines)
+
+
+def _sync_taishin_core_accounting(
+    *,
+    client: TaishinClient,
+    sheet_mgr: TaishinSheetManager | None,
+    today: date,
+    lookback_days: int,
+    dry_run: bool,
+    reports_dir: Path | None,
+) -> dict[str, Any]:
+    """Shared helper to fetch statements, fills, settlements, balance, inventories & technicals."""
+    start_dt = today - timedelta(days=lookback_days)
+    now_iso = _now_iso_in_taipei()
+
+    client.ensure_logged_in()
+    account_no = client.get_account_no_str()
+
+    raw_stmt = client.fetch_account_statement(start_dt, today)
+    raw_fills = client.fetch_filled_history(start_dt, today)
+    raw_fill_details = client.fetch_filled_history_detail(start_dt, today)
+    raw_pnl = client.fetch_realized_profit_and_losses(start_dt, today)
+    raw_hist_settle = client.fetch_history_settlement(start_dt, today)
+    raw_today_settle = client.fetch_today_settlement()
+    bank_balance = client.fetch_bank_balance()
+    raw_inventories = client.fetch_inventories()
+
+    stmt_rows = [
+        normalize_statement_record(r, source_api="STATEMENT", default_account_no=account_no, synced_at=now_iso)
+        for r in raw_stmt
+    ]
+    fill_rows = [
+        normalize_statement_record(r, source_api="FILLED_HISTORY", default_account_no=account_no, synced_at=now_iso)
+        for r in [*raw_fills, *raw_fill_details]
+    ]
+    recent_statements, _ = merge_statement_and_fills(stmt_rows, fill_rows)
+
+    today_settle_rows = [
+        normalize_settlement_or_pnl_record(
+            r, record_type="TODAY_SETTLEMENT", bank_balance=bank_balance, synced_at=now_iso
+        )
+        for r in raw_today_settle
+    ]
+    hist_settle_rows = [
+        normalize_settlement_or_pnl_record(
+            r, record_type="HISTORY_SETTLEMENT", bank_balance=bank_balance, synced_at=now_iso
+        )
+        for r in raw_hist_settle
+    ]
+    pnl_rows = [
+        normalize_settlement_or_pnl_record(
+            r, record_type="REALIZED_PNL", bank_balance=bank_balance, synced_at=now_iso
+        )
+        for r in raw_pnl
+    ]
+    all_settlement_rows = [*today_settle_rows, *hist_settle_rows, *pnl_rows]
+
+    existing_statements: list[dict[str, Any]] = []
+    existing_settlements: list[dict[str, Any]] = []
+    existing_memories: list[dict[str, Any]] = []
+    added_statements = 0
+    added_settlements = 0
+
+    if sheet_mgr is not None and not dry_run:
+        added_statements = sheet_mgr.append_deduplicated_rows(
+            STATEMENT_SHEET_NAME,
+            recent_statements,
+            sort_key="trade_date",
+        )
+        added_settlements = sheet_mgr.append_deduplicated_rows(
+            SETTLEMENT_SHEET_NAME,
+            all_settlement_rows,
+            sort_key="record_date",
+        )
+        existing_statements = sheet_mgr.read_records(STATEMENT_SHEET_NAME)
+        existing_settlements = sheet_mgr.read_records(SETTLEMENT_SHEET_NAME)
+        existing_memories = sheet_mgr.read_records(MEMORY_SHEET_NAME)
+    elif sheet_mgr is not None:
+        try:
+            existing_statements = sheet_mgr.read_records(STATEMENT_SHEET_NAME)
+            existing_settlements = sheet_mgr.read_records(SETTLEMENT_SHEET_NAME)
+            existing_memories = sheet_mgr.read_records(MEMORY_SHEET_NAME)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Deduplicate combined statements in memory
+    seen_stmt_keys: set[str] = set()
+    combined_statements: list[dict[str, Any]] = []
+    for r in [*existing_statements, *recent_statements]:
+        uk = get_unique_key_for_tab(STATEMENT_SHEET_NAME, r)
+        if uk and uk not in seen_stmt_keys:
+            seen_stmt_keys.add(uk)
+            combined_statements.append(r)
+
+    combined_settlements = [*existing_settlements, *all_settlement_rows]
+    tech_map, market_regime = load_local_technical_context(reports_dir=reports_dir, as_of=today)
+    holding_stock_ids = {
+        clean_leading_zero_code(_pick_first(inv, "stock_no", "symbol", "stock_id", "code", default=""))
+        for inv in raw_inventories
+    } - {""}
+    picks_bundle = load_public_picks_for_attribution(reports_dir=reports_dir)
+    public_cache = dict(picks_bundle.get("watchlist_master") or {})
+    missing_pub_ids = holding_stock_ids - set(public_cache.keys())
+    if missing_pub_ids:
+        public_cache.update(load_public_watchlist_cache(missing_pub_ids))
+
+    holdings_rows = build_portfolio_holdings_rows(
+        raw_inventories,
+        statement_records=combined_statements,
+        tech_map=tech_map,
+        public_cache=public_cache,
+        snapshot_date=today,
+        updated_at=now_iso,
+    )
+
+    return {
+        "now_iso": now_iso,
+        "bank_balance": bank_balance,
+        "today_settle_rows": today_settle_rows,
+        "added_statements": added_statements,
+        "added_settlements": added_settlements,
+        "combined_statements": combined_statements,
+        "combined_settlements": combined_settlements,
+        "existing_memories": existing_memories,
+        "holdings_rows": holdings_rows,
+        "tech_map": tech_map,
+        "market_regime": market_regime,
+        "picks_bundle": picks_bundle,
+        "public_cache": public_cache,
+    }
+
+
+def sync_memory(
+    *,
+    client: TaishinClient,
+    sheet_mgr: TaishinSheetManager | None,
+    as_of: date | None = None,
+    lookback_days: int = 7,
+    post_discord: bool = True,
+    force_discord: bool = False,
+    dry_run: bool = False,
+    reports_dir: Path | None = None,
+    picks_bundle_override: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute `22:45` evening sync: match today's buys to recent AI picks & lock `05_Position_Thesis_Memory`."""
+    today = as_of or _today_in_taipei()
+    print(f"[sync-memory] 正在執行 22:45 盤後成交對帳單同步與嚴選記憶歸因 (基準日: {today.isoformat()})...")
+
+    core = _sync_taishin_core_accounting(
+        client=client,
+        sheet_mgr=sheet_mgr,
+        today=today,
+        lookback_days=lookback_days,
+        dry_run=dry_run,
+        reports_dir=reports_dir,
+    )
+    picks_bundle = picks_bundle_override if picks_bundle_override is not None else core["picks_bundle"]
+
+    updated_memory, projected_holdings, events = reconcile_position_memory(
+        existing_memory_rows=core["existing_memories"],
+        holdings_rows=core["holdings_rows"],
+        statement_records=core["combined_statements"],
+        settlement_records=core["combined_settlements"],
+        picks_bundle=picks_bundle,
+        public_cache=core["public_cache"],
+        as_of=today,
+        updated_at=core["now_iso"],
+    )
+
+    if sheet_mgr is not None and not dry_run:
+        sheet_mgr.overwrite_tab(MEMORY_SHEET_NAME, updated_memory)
+        sheet_mgr.overwrite_tab(HOLDINGS_SHEET_NAME, projected_holdings)
+
+    messages = format_memory_sync_discord_report(as_of=today, events=events)
+    if force_discord and not messages:
+        active_cnt = sum(
+            1 for m in updated_memory if str(m.get("status", "")).upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+        )
+        messages = [
+            f"🌙 【台新 22:45 盤後持股記憶歸因同步完成】({today.isoformat()})\n"
+            f"• 今日無新綁定或平倉異動 ｜ 目前追蹤中波段記憶卡：{active_cnt} 檔。"
+        ]
+
+    if messages:
+        print("\n\n".join(messages))
+    else:
+        print(f"[sync-memory] 同步完成（今日無新綁定或平倉事件，保持靜默不發推播）。")
+
+    sent_discord = 0
+    if post_discord and not dry_run and messages:
+        sent_discord = post_to_taishin_discord(messages)
+
+    return {
+        "date": today.isoformat(),
+        "login_count": client.login_count,
+        "added_statements": core["added_statements"],
+        "added_settlements": core["added_settlements"],
+        "memory_rows": updated_memory,
+        "holdings": projected_holdings,
+        "events": events,
+        "messages": messages,
+        "sent_discord": sent_discord,
+    }
+
+
+def run_morning_brief(
+    *,
+    client: TaishinClient,
+    sheet_mgr: TaishinSheetManager | None,
+    as_of: date | None = None,
+    lookback_days: int = 7,
+    run_ai: bool = True,
+    post_discord: bool = True,
+    dry_run: bool = False,
+    reports_dir: Path | None = None,
+    macro_context_override: Mapping[str, Any] | None = None,
+    picks_bundle_override: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute `08:15` Pre-Market Battle Plan: T+2 settlement check + US/Macro overlay + Style B AI review."""
+    today = as_of or _today_in_taipei()
+    print(f"[morning-brief] 正在執行 08:15 盤前交割預警、隔夜國際盤與持股記憶作戰晨報 (基準日: {today.isoformat()})...")
+
+    core = _sync_taishin_core_accounting(
+        client=client,
+        sheet_mgr=sheet_mgr,
+        today=today,
+        lookback_days=lookback_days,
+        dry_run=dry_run,
+        reports_dir=reports_dir,
+    )
+    picks_bundle = picks_bundle_override if picks_bundle_override is not None else core["picks_bundle"]
+
+    updated_memory, holdings_rows, _ = reconcile_position_memory(
+        existing_memory_rows=core["existing_memories"],
+        holdings_rows=core["holdings_rows"],
+        statement_records=core["combined_statements"],
+        settlement_records=core["combined_settlements"],
+        picks_bundle=picks_bundle,
+        public_cache=core["public_cache"],
+        as_of=today,
+        updated_at=core["now_iso"],
+    )
+
+    macro_context = (
+        dict(macro_context_override)
+        if macro_context_override is not None
+        else fetch_global_macro_context()
+    )
+
+    active_memories = [
+        m for m in updated_memory if str(m.get("status", "")).upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+    ]
+    closed_memories = [
+        m for m in updated_memory if str(m.get("status", "")).upper() not in ("OPEN", "TP1_PARTIAL_TAKEN")
+    ]
+    agg_holdings = _aggregate_holdings_by_stock(holdings_rows)
+
+    decisions_by_sno: dict[str, dict[str, Any]] = {}
+    battle_headline = ""
+    model_version = ""
+    ai_called = False
+
+    if run_ai and active_memories:
+        print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，呼叫 VERTEX_STAGE2_MODEL 產出開盤作戰指令...")
+        try:
+            reviewed_active, decisions_by_sno, battle_headline, model_version = asyncio.run(
+                run_morning_battle_ai_review(
+                    active_memories,
+                    agg_holdings=agg_holdings,
+                    public_cache=core["public_cache"],
+                    market_regime=core["market_regime"],
+                    macro_context=macro_context,
+                    eval_date=today,
+                )
+            )
+            ai_called = True
+            updated_memory = [*reviewed_active, *closed_memories]
+        except Exception as err:  # noqa: BLE001
+            logger.warning("08:15 Vertex Stage2 AI review failed; applying deterministic gatekeeper fallback: %s", err)
+            battle_headline = f"AI 暫無法連線，已自動套用建倉目標價與棘輪防守硬規則（{err}）。"
+    elif not active_memories:
+        print("[morning-brief] 目前無命中嚴選記憶卡之未平倉波段股，啟動 0-Token 純 Python 快報模式。")
+
+    final_holdings = sync_holdings_with_memory_cards(holdings_rows, updated_memory)
+
+    if sheet_mgr is not None and not dry_run:
+        sheet_mgr.overwrite_tab(MEMORY_SHEET_NAME, updated_memory)
+        sheet_mgr.overwrite_tab(HOLDINGS_SHEET_NAME, final_holdings)
+
+    messages = format_morning_brief_discord_report(
+        as_of=today,
+        holdings_rows=final_holdings,
+        memory_rows=updated_memory,
+        decisions_by_sno=decisions_by_sno,
+        today_settlements=core["today_settle_rows"],
+        bank_balance=core["bank_balance"],
+        market_regime=core["market_regime"],
+        macro_context=macro_context,
+        battle_headline=battle_headline,
+        model_version=model_version,
+    )
+    print("\n\n".join(messages))
+
+    sent_discord = 0
+    if post_discord and not dry_run:
+        sent_discord = post_to_taishin_discord(messages)
+
+    return {
+        "date": today.isoformat(),
+        "ai_called": ai_called,
+        "model_version": model_version,
+        "active_tracked_count": len(active_memories),
+        "memory_rows": updated_memory,
+        "holdings": final_holdings,
+        "macro_context": macro_context,
+        "bank_balance": core["bank_balance"],
+        "messages": messages,
+        "sent_discord": sent_discord,
+    }
+
+
+def dump_portfolio_context(
+    *,
+    sheet_mgr: TaishinSheetManager | None = None,
+    client: TaishinClient | None = None,
+    refresh_live: bool = False,
+    include_macro: bool = True,
+    as_of: date | None = None,
+    reports_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Assemble read-only portfolio + thesis memory + technical + macro dossier for Antigravity Skill."""
+    today = as_of or _today_in_taipei()
+    mgr = sheet_mgr or TaishinSheetManager()
+
+    holdings_rows = mgr.read_records(HOLDINGS_SHEET_NAME)
+    memory_rows = mgr.read_records(MEMORY_SHEET_NAME)
+    settlement_rows = mgr.read_records(SETTLEMENT_SHEET_NAME)
+    statement_rows = mgr.read_records(STATEMENT_SHEET_NAME)
+
+    tech_map, market_regime = load_local_technical_context(reports_dir=reports_dir, as_of=today)
+    bank_balance: float | None = None
+
+    if refresh_live:
+        active_client = client or TaishinClient()
+        active_client.ensure_logged_in()
+        raw_inv = active_client.fetch_inventories()
+        bank_balance = active_client.fetch_bank_balance()
+        sids = {
+            clean_leading_zero_code(_pick_first(inv, "stock_no", "symbol", "stock_id", "code", default=""))
+            for inv in raw_inv
+        } - {""}
+        pub_cache = load_public_watchlist_cache(sids)
+        holdings_rows = build_portfolio_holdings_rows(
+            raw_inv,
+            statement_records=statement_rows,
+            tech_map=tech_map,
+            public_cache=pub_cache,
+            snapshot_date=today,
+        )
+        holdings_rows = sync_holdings_with_memory_cards(holdings_rows, memory_rows)
+    else:
+        for s in reversed(settlement_rows):
+            if s.get("bank_balance") not in ("", None):
+                bank_balance = _to_float(s.get("bank_balance"), 0.0)
+                break
+
+    holding_sids = {clean_leading_zero_code(r.get("stock_no", "")) for r in holdings_rows} - {""}
+    public_cache = load_public_watchlist_cache(holding_sids)
+    agg = _aggregate_holdings_by_stock(holdings_rows)
+
+    active_cards: list[dict[str, Any]] = []
+    for mem in memory_rows:
+        if str(mem.get("status", "")).upper() not in ("OPEN", "TP1_PARTIAL_TAKEN"):
+            continue
+        sno = clean_leading_zero_code(mem.get("stock_no", ""))
+        hold = agg.get(sno, {})
+        gk = build_tracked_position_gatekeeper_signals(mem, hold)
+        pub_plan, pub_verdict = _parse_stage1_trade_plan((public_cache.get(sno) or {}).get("ai_summary_json", ""))
+        active_cards.append(
+            {
+                **mem,
+                "live_metrics": gk,
+                "latest_fundamental_verdict": pub_verdict,
+                "latest_stage1_trade_plan": pub_plan,
+            }
+        )
+
+    tracked_snos = {clean_leading_zero_code(c.get("stock_no", "")) for c in active_cards}
+    untracked_holdings = [
+        r for r in holdings_rows if clean_leading_zero_code(r.get("stock_no", "")) not in tracked_snos
+    ]
+    closed_cards = [
+        m for m in memory_rows if str(m.get("status", "")).upper() == "CLOSED"
+    ][-10:]
+
+    macro_ctx = fetch_global_macro_context() if include_macro else {}
+
+    total_cost = sum(_to_int(r.get("total_cost", 0)) for r in holdings_rows)
+    total_mv = sum(_to_int(r.get("market_value", 0)) for r in holdings_rows)
+
+    return {
+        "as_of": today.isoformat(),
+        "refresh_live": refresh_live,
+        "account_summary": {
+            "bank_balance": bank_balance,
+            "total_cost": total_cost,
+            "total_market_value": total_mv,
+            "total_unrealized_pnl": total_mv - total_cost,
+            "total_return_pct": round(((total_mv - total_cost) / total_cost * 100.0), 2) if total_cost > 0 else 0.0,
+            "tracked_positions_count": len(active_cards),
+            "untracked_holdings_count": len(untracked_holdings),
+        },
+        "market_regime": market_regime,
+        "macro_context": macro_ctx,
+        "tracked_positions": active_cards,
+        "untracked_holdings": untracked_holdings,
+        "recent_closed_positions": closed_cards,
+        "recent_trades": statement_rows[-15:],
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Section 5: CLI Entrypoint (`taishin_portfolio_service.py`)
 # --------------------------------------------------------------------------- #
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="台新證券 Nova API 歷史對帳單回補、帳務同步與 AI 持股健診服務 (SASD v5.1.0)"
+        description="台新證券 Nova API 歷史對帳單回補、持倉建倉記憶追蹤、盤前作戰晨報與 0050 智慧定投服務 (SASD v5.2.0)"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -1837,17 +3578,46 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p_backfill.add_argument("--dry-run", action="store_true", help="僅預覽抓取筆數，不寫入 Google Sheet")
 
-    # 4. sync-daily
+    # 4. sync-daily (legacy compatible)
     p_sync = subparsers.add_parser(
         "sync-daily",
-        help="每日 11:00 同步近期對帳單 + 最新庫存 + 交割款預警 + AI 持股均價與操作建議",
+        help="[相容舊版] 同步近期對帳單 + 最新庫存 + 交割款預警 + 單次持股健診",
     )
     p_sync.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
     p_sync.add_argument("--dry-run", action="store_true", help="僅在終端機預覽，不寫入 Sheet 亦不發送 Discord")
     p_sync.add_argument("--no-ai", action="store_true", help="僅同步帳務與庫存至 Sheet，不跑 AI 診斷")
     p_sync.add_argument("--no-discord", action="store_true", help="僅寫入 Sheet，不發送 Discord 推播")
 
-    # 5. eval-dca-0050
+    # 5. sync-memory (22:45 Evening Attribution Sync)
+    p_mem = subparsers.add_parser(
+        "sync-memory",
+        help="週一至週五 22:45 同步當日成交與庫存，自動回查近 5 交易日嚴選榜單建立/更新 05_Position_Thesis_Memory",
+    )
+    p_mem.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
+    p_mem.add_argument("--dry-run", action="store_true", help="僅預覽歸因結果，不寫入 Sheet 亦不發送 Discord")
+    p_mem.add_argument("--no-discord", action="store_true", help="不發送 Discord 推播")
+    p_mem.add_argument("--force-discord", action="store_true", help="即使今日無新綁定/平倉事件亦強制發送確認訊息")
+
+    # 6. morning-brief (08:15 Pre-Market Battle Plan)
+    p_morn = subparsers.add_parser(
+        "morning-brief",
+        help="週一至週五 08:15 整合今日交割款預警 + 隔夜美股國際盤 + VERTEX_STAGE2_MODEL 嚴選記憶持股開盤作戰建議",
+    )
+    p_morn.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
+    p_morn.add_argument("--dry-run", action="store_true", help="僅在終端機預覽，不寫入 Sheet 亦不發送 Discord")
+    p_morn.add_argument("--no-ai", action="store_true", help="強制跳過 AI 呼叫，僅輸出量化規則與帳務美股快報")
+    p_morn.add_argument("--no-discord", action="store_true", help="僅寫入 Sheet，不發送 Discord 推播")
+
+    # 7. dump-context (Read-only context exporter for Antigravity portfolio-advisor Skill)
+    p_dump = subparsers.add_parser(
+        "dump-context",
+        help="唯讀匯出完整持股均價、05_Position_Thesis_Memory 記憶卡、均線財報與國際盤 JSON（供 Antigravity Skill 使用）",
+    )
+    p_dump.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
+    p_dump.add_argument("--refresh-live", action="store_true", help="即時登入台新 API 拉取盤中最新庫存與分戶帳餘額")
+    p_dump.add_argument("--no-macro", action="store_true", help="略過抓取外部 Yahoo 國際指數與新聞")
+
+    # 8. eval-dca-0050
     p_dca = subparsers.add_parser(
         "eval-dca-0050",
         help="週一至週五 13:15 0050 每週不定期定額低點評估",
@@ -1905,6 +3675,52 @@ def main(argv: list[str] | None = None) -> int:
             post_discord=not bool(args.no_discord),
             dry_run=bool(args.dry_run),
         )
+        return 0
+
+    def _make_sheet_mgr(dry: bool) -> TaishinSheetManager | None:
+        if not dry:
+            return TaishinSheetManager()
+        try:
+            return TaishinSheetManager()
+        except TaishinPortfolioError:
+            return None
+
+    if args.command == "sync-memory":
+        client = TaishinClient()
+        sheet_mgr = _make_sheet_mgr(bool(args.dry_run))
+        target_dt = parse_flexible_date(args.date) if args.date else None
+        sync_memory(
+            client=client,
+            sheet_mgr=sheet_mgr,
+            as_of=target_dt,
+            post_discord=not bool(args.no_discord),
+            force_discord=bool(args.force_discord),
+            dry_run=bool(args.dry_run),
+        )
+        return 0
+
+    if args.command == "morning-brief":
+        client = TaishinClient()
+        sheet_mgr = _make_sheet_mgr(bool(args.dry_run))
+        target_dt = parse_flexible_date(args.date) if args.date else None
+        run_morning_brief(
+            client=client,
+            sheet_mgr=sheet_mgr,
+            as_of=target_dt,
+            run_ai=not bool(args.no_ai),
+            post_discord=not bool(args.no_discord),
+            dry_run=bool(args.dry_run),
+        )
+        return 0
+
+    if args.command == "dump-context":
+        target_dt = parse_flexible_date(args.date) if args.date else None
+        ctx = dump_portfolio_context(
+            refresh_live=bool(args.refresh_live),
+            include_macro=not bool(args.no_macro),
+            as_of=target_dt,
+        )
+        print(json.dumps(ctx, ensure_ascii=False, indent=2, default=str))
         return 0
 
     if args.command == "eval-dca-0050":

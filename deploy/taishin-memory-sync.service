@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily 11:00 Taishin Securities accounting sync and AI portfolio holdings diagnosis
+Description=Daily 22:45 Taishin Securities statement sync and AI pick position memory attribution
 Wants=network-online.target
 After=network-online.target
 
@@ -12,5 +12,5 @@ Environment=PYTHONUNBUFFERED=1
 UMask=0077
 StandardOutput=journal+console
 StandardError=journal+console
-ExecStart=/home/nick_chung0725/Discord_Service/.venv/bin/python /home/nick_chung0725/Discord_Service/taishin_portfolio_service.py sync-daily
+ExecStart=/home/nick_chung0725/Discord_Service/.venv/bin/python /home/nick_chung0725/Discord_Service/taishin_portfolio_service.py sync-memory
 TimeoutStartSec=infinity

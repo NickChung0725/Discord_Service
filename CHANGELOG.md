@@ -4,6 +4,31 @@
 
 ---
 
+## [v5.2.0] - 2026-11-02
+### ✨ 新增功能 (Added)
+* **台新證券 AI 建倉記憶錨定、風格 B 分批移動停利與 08:15 開盤作戰晨報架構 (SASD v5.2.0)**：
+  * **第 5 張個人 Google Sheet `05_Position_Thesis_Memory`（建倉記憶與目標價鎖定表）**：
+    * 於 [`taishin/taishin_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin/taishin_config.py) 新增第 5 張分頁 `05_Position_Thesis_Memory`（主鍵 `position_id = {stock_no}_{entry_date}_{wave_seq}`），升級 [`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py) 之 `TaishinSheetManager.ensure_schema()` 支援不破壞歷史資料自動向右補齊新欄位。
+    * 實作 `compute_holding_waves_from_statements()` 波段切分與 `match_entry_to_picks()` 嚴選限定歸因：由 `01_Account_Statement` 自動還原每次從 `0 股 -> 買進 -> 清倉` 的完整波段（加碼自動重算均價與 `peak_qty`，不覆寫初始目標價），僅回溯買進日往前 **5 個交易日內**依序配對 `22:00 AI_Daily_Picks (TOP_PICK)` ➔ `22:00 AI_Daily_Picks (WATCHLIST)` ➔ `22:30 Rebound_Watchlist`，鎖定買進當時的 `initial_tp1`、`initial_tp2`、`initial_sl`、`entry_thesis` 與 `invalidation_rule`，徹底消除「每日重算導致目標價漂移」問題。未命中嚴選榜單之長投／自主買進股（如 `0050`）不建立記憶卡、不強派目標價，僅顯示 `📦 帳面損益觀察`。
+  * **風格 B 分批停利（含單張盤中零股拆賣）＋ 單向棘輪移動停利 (`trailing_stop`)**：
+    * 實作 `compute_style_b_trim_plan()` 與 `compute_ratchet_trailing_stop()`：當 `OPEN` 部位達標或逼近 `initial_tp1` 時，自動觸發賣出約 50% 部位建議（`>= 2,000` 股建議賣整張現股；單張 `1,000` 股或零股自動建議掛 `盤中零股` 賣出 `qty // 2` 如 500 股鎖利）；偵測對帳單完成減碼後自動推進為 `TP1_PARTIAL_TAKEN` 並改看 `initial_tp2`。
+    * `trailing_stop` 採「單向往上棘輪 (`max(prev_trailing_stop, candidate)`)」，隨獲利墊高至保本價（`avg_cost * 1.006` 含稅費）與 `17MA` 動態支撐，絕不因回檔而下修防守線。
+  * **隔夜美股與國際情勢自動觀測模組 (`taishin/macro_context.py`)**：
+    * 新增 [`taishin/macro_context.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin/macro_context.py)，自動抓取費城半導體 (`^SOX`)、那斯達克 (`^IXIC`)、標普 500 (`^GSPC`)、台積電 ADR (`TSM`)、輝達 (`NVDA`)、`^VIX` 恐慌指數與美元兌台幣 (`TWD=X`) 漲跌幅，結合近 48 小時國際總經／半導體 Google News RSS 標題（經雜訊過濾），自動判定 `RISK_ON` / `NEUTRAL` / `RISK_OFF` 國際風險燈號。
+  * **本地 Antigravity 專屬顧問技能 (`portfolio-advisor` Skill + `dump-context` CLI)**：
+    * 新增 [`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py) 唯讀子命令 `dump-context`（支援 `--refresh-live` 即時登入台新 API 更新庫存）與 [`.agent/skills/portfolio-advisor/SKILL.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.agent/skills/portfolio-advisor/SKILL.md)，讓使用者在本地 Antigravity 對話詢問庫存時可隨時調閱精準成本均價、建倉記憶與國際盤數據進行深度互動（維持零 Discord 斜線指令暴露個人資產之資安隔離）。
+
+### 🔧 優化與修正 (Changed & Fixed)
+* **22:00 `AI_Daily_Picks` 結構化交易計畫欄位擴充**：
+  * 於 [`quant/fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_config.py) 的 `SHEET_SCHEMAS["AI_Daily_Picks"]` 末端新增 `tactical_type`、`target_price_1`、`target_price_2`、`stop_loss_price` 四欄，並更新 [`quant/alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/alignment_ai_picker.py) 的 `build_pick_rows()` 自動寫入 Stage 2 / Stage 1 `trade_plan` 目標價與停損價，供盤後建倉記憶精準錨定。
+* **台新排程收斂重整（退役 `11:00` 盤中排程，升級為 `22:45` 記憶歸因 ＋ `08:15` 開盤作戰晨報）**：
+  * 移除舊版 `11:00` `deploy/taishin-statement.service` 與 `deploy/taishin-statement.timer`（避免盤中追高殺低與錯失 09:00 交割補款時機）。
+  * 新增 [`deploy/taishin-memory-sync.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/taishin-memory-sync.service) ＋ [`deploy/taishin-memory-sync.timer`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/taishin-memory-sync.timer)（週一至週五 `22:45` 執行 `sync-memory`，平時靜默同步、僅新綁定／分批停利／平倉結案時推播快訊）。
+  * 新增 [`deploy/taishin-morning-brief.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/taishin-morning-brief.service) ＋ [`deploy/taishin-morning-brief.timer`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/taishin-morning-brief.timer)（週一至週五 `08:15` 執行 `morning-brief`，整合 09:00 前 T+2 交割款預警、隔夜美股國際盤與 `VERTEX_STAGE2_MODEL` 嚴選持股開盤掛單建議；若無嚴選記憶持股自動切換 **0-Token 純 Python 快報模式**）。
+  * 擴充 [`tests/test_taishin_nova.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_taishin_nova.py) 與 [`tests/test_alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py) 單元測試（全專案 125 項測試全數通過）。
+
+---
+
 ## [v5.1.0] - 2026-11-01
 ### ✨ 新增功能 (Added)
 * **台新證券 Nova API 歷史對帳單回補、帳務同步與 AI 持股健診模組 (SASD v5.1.0)**：
