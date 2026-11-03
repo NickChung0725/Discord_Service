@@ -12,11 +12,14 @@ SASD v3.5.1:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 import os
 from pathlib import Path
+import re
 import threading
 import time
 from typing import Any
@@ -939,6 +942,247 @@ async def ask_vertex_ai_with_meta(
         raise last_error or RuntimeError("Vertex AI call failed.")
 
     return await asyncio.to_thread(run)
+
+
+# --------------------------------------------------------------------------- #
+# 2b. Vertex AI Batch Prediction (SASD v5.3.0: 21:00 / 20:50 offline batch, 50% discount)
+# --------------------------------------------------------------------------- #
+AiCallResult = AIResponse
+
+DEFAULT_GCS_BUCKET_NAME = "nickchung_bucket"
+DEFAULT_GCS_BATCH_PREFIX = "vertex_batch"
+_BATCH_FAILED_STATES = ("JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED")
+
+
+def _ensure_gcp_credentials_env() -> None:
+    """Auto-mount service account key for ADC when GOOGLE_APPLICATION_CREDENTIALS is unset/invalid."""
+    current = (os.environ.get("GOOGLE_APPLICATION_CREDENTIALS") or "").strip()
+    if current and Path(current).is_file():
+        return
+    root = Path(__file__).resolve().parent.parent
+    for candidate in (root / "certs" / "sheetbot.json", Path("./sheetbot.json"), root / "sheetbot.json"):
+        if candidate.is_file():
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(candidate.resolve())
+            return
+    # On a GCP VM the metadata-service account may be used; do not raise here.
+
+
+def is_vertex_batch_enabled(config_override: bool | None = None) -> bool:
+    """Combine an explicit override (CLI / scanner config) with env VERTEX_BATCH_ENABLED (default True)."""
+    if config_override is not None:
+        return bool(config_override)
+    raw = (os.getenv("VERTEX_BATCH_ENABLED") or "true").strip().lower()
+    return raw not in ("0", "false", "no", "off", "")
+
+
+def get_vertex_batch_stage1_model() -> str:
+    return (
+        os.getenv("VERTEX_BATCH_STAGE1_MODEL")
+        or os.getenv("VERTEX_STAGE1_MODEL")
+        or os.getenv("STAGE1_MODEL")
+        or os.getenv("VERTEX_MODEL")
+        or DEFAULT_VERTEX_MODEL
+    ).strip()
+
+
+def get_vertex_batch_stage2_model() -> str:
+    return (
+        os.getenv("VERTEX_BATCH_STAGE2_MODEL")
+        or os.getenv("VERTEX_STAGE2_MODEL")
+        or os.getenv("VERTEX_MODEL")
+        or DEFAULT_VERTEX_MODEL
+    ).strip()
+
+
+def get_gcs_bucket_name() -> str:
+    return (os.getenv("GCS_BUCKET_NAME") or DEFAULT_GCS_BUCKET_NAME).strip()
+
+
+def get_gcs_batch_prefix() -> str:
+    return (os.getenv("GCS_BATCH_PREFIX") or DEFAULT_GCS_BATCH_PREFIX).strip().strip("/")
+
+
+def _batch_local_dir() -> Path:
+    return _finmind_reports_dir() / ".state" / "batch"
+
+
+def _batch_extract_text(response: Any) -> str:
+    if not isinstance(response, dict):
+        return ""
+    candidates = response.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    return "".join(str(p.get("text", "")) for p in parts if isinstance(p, dict))
+
+
+def _gcs_upload_file(project_id: str, bucket_name: str, blob_name: str, local_path: Path) -> None:
+    from google.cloud import storage
+
+    client = storage.Client(project=project_id or None)
+    client.bucket(bucket_name).blob(blob_name).upload_from_filename(str(local_path))
+
+
+def _gcs_download_outputs(project_id: str, output_uri: str) -> list[str]:
+    """Return text lines of every non-input .jsonl blob under the output prefix."""
+    from google.cloud import storage
+
+    if not output_uri.startswith("gs://"):
+        raise RuntimeError(f"Unsupported GCS output uri: {output_uri}")
+    bucket_name, _, prefix = output_uri[len("gs://"):].partition("/")
+    client = storage.Client(project=project_id or None)
+    lines: list[str] = []
+    for blob in client.list_blobs(bucket_name, prefix=prefix):
+        name = str(getattr(blob, "name", ""))
+        if not name.endswith(".jsonl") or "inputs" in name:
+            continue
+        data = blob.download_as_text(encoding="utf-8") if hasattr(blob, "download_as_text") else blob.download_as_bytes().decode("utf-8")
+        lines.extend(line for line in data.splitlines() if line.strip())
+    return lines
+
+
+def _resolve_batch_output_uri(job: Any, fallback: str) -> str:
+    info = getattr(job, "output_info", None) if hasattr(job, "output_info") else None
+    if info:
+        uri = getattr(info, "gcs_output_directory", None)
+        if isinstance(uri, str) and uri:
+            return uri
+    try:
+        uri = getattr(job.output.gcs_destination, "output_uri_prefix", None)
+        if isinstance(uri, str) and uri:
+            return uri
+    except AttributeError:
+        pass
+    return fallback
+
+
+async def run_vertex_batch_requests(
+    requests_map: Mapping[str, str],
+    *,
+    model: str | None = None,
+    job_prefix: str = "ai_pick_stage1",
+    poll_interval_seconds: float = 60.0,
+    temperature: float | None = None,
+    tag: str = "vertex_batch",
+) -> dict[str, AiCallResult]:
+    """Submit prompts as one Vertex AI Batch job, block-poll until done, return results by custom_id."""
+    if not requests_map:
+        return {}
+
+    from google.genai.types import CreateBatchJobConfig
+
+    _ensure_gcp_credentials_env()
+    project_id = (os.getenv("GOOGLE_CLOUD_PROJECT_ID") or "").strip()
+    if not project_id:
+        raise MissingVertexConfigError("GOOGLE_CLOUD_PROJECT_ID is not configured.")
+    location = (os.getenv("GOOGLE_CLOUD_LOCATION") or DEFAULT_VERTEX_LOCATION).strip()
+    target_model = (model or get_vertex_batch_stage1_model()).strip()
+    bucket = get_gcs_bucket_name()
+    prefix = get_gcs_batch_prefix()
+
+    batch_id = f"{job_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    local_dir = _batch_local_dir()
+    local_dir.mkdir(parents=True, exist_ok=True)
+    local_file = local_dir / f"{batch_id}_input.jsonl"
+    with local_file.open("w", encoding="utf-8") as fh:
+        for custom_id, prompt in requests_map.items():
+            request: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+            if temperature is not None:
+                request["generationConfig"] = {"temperature": temperature}
+            fh.write(json.dumps({"custom_id": str(custom_id), "request": request}, ensure_ascii=False) + "\n")
+
+    started = time.perf_counter()
+    input_blob = f"{prefix}/inputs/{batch_id}.jsonl"
+    await asyncio.to_thread(_gcs_upload_file, project_id, bucket, input_blob, local_file)
+    gcs_input_uri = f"gs://{bucket}/{input_blob}"
+    gcs_output_uri = f"gs://{bucket}/{prefix}/outputs/{batch_id}/"
+
+    client = genai.Client(vertexai=True, project=project_id, location=location)
+    batch_job = await asyncio.to_thread(
+        client.batches.create,
+        model=target_model,
+        src=gcs_input_uri,
+        config=CreateBatchJobConfig(dest=gcs_output_uri, display_name=batch_id),
+    )
+    job_name = str(batch_job.name)
+    print(f"[vertex-batch] Job 已建立: {job_name} (模型: {target_model}, 筆數: {len(requests_map)})")
+
+    loc_match = re.search(r"/locations/([^/]+)/", job_name)
+    job_location = loc_match.group(1) if loc_match else location
+    query_client = genai.Client(vertexai=True, project=project_id, location=job_location)
+
+    job: Any = batch_job
+    wait_started = time.monotonic()
+    while True:
+        await asyncio.sleep(poll_interval_seconds)
+        job = await asyncio.to_thread(query_client.batches.get, name=job_name)
+        state = job.state.name if hasattr(job.state, "name") else str(job.state)
+        elapsed = (time.monotonic() - wait_started) / 60.0
+        print(f"[vertex-batch] {job_name} 狀態: {state} (已等待 {elapsed:.1f} 分鐘)")
+        if state == "JOB_STATE_SUCCEEDED":
+            break
+        if state in _BATCH_FAILED_STATES:
+            raise RuntimeError(
+                f"Vertex AI Batch 任務失敗 ({state}): {getattr(job, 'error', '未知錯誤')}"
+            )
+
+    output_uri = _resolve_batch_output_uri(job, gcs_output_uri)
+    lines = await asyncio.to_thread(_gcs_download_outputs, project_id, output_uri)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+    results: dict[str, AiCallResult] = {}
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        custom_id = str(record.get("custom_id", "")).strip()
+        if custom_id not in requests_map:
+            continue
+        response = record.get("response") or {}
+        full_text = _batch_extract_text(response)
+        if not full_text:
+            continue
+        model_version = (
+            response.get("modelVersion") or response.get("model_version") or f"{target_model} (vertex-batch)"
+        )
+        usage = response.get("usageMetadata") or {}
+        meta = AIResponse(
+            provider="vertex_ai_batch",
+            requested_model=target_model,
+            model_version=str(model_version),
+            text=full_text,
+            prompt_tokens=usage.get("promptTokenCount"),
+            output_tokens=usage.get("candidatesTokenCount"),
+        )
+        results[custom_id] = meta
+        call_tag = f"{tag}:{custom_id}"
+        _print_ai_telemetry(
+            provider=meta.provider,
+            tag=call_tag,
+            requested_model=target_model,
+            model_version=meta.model_version,
+            prompt_tokens=meta.prompt_tokens,
+            output_tokens=meta.output_tokens,
+            elapsed_ms=elapsed_ms,
+            status="ok",
+        )
+        _append_ai_log(
+            _fmt_ai_log_block(
+                provider=meta.provider,
+                requested_model=target_model,
+                model_version=meta.model_version,
+                tag=call_tag,
+                prompt=requests_map[custom_id],
+                output_text=full_text,
+                prompt_tokens=meta.prompt_tokens,
+                output_tokens=meta.output_tokens,
+                elapsed_ms=elapsed_ms,
+                attempt_notes=[f"@@AI_BATCH@@ job={job_name} batch_id={batch_id}"],
+                error=None,
+            )
+        )
+    return results
 
 
 # --------------------------------------------------------------------------- #

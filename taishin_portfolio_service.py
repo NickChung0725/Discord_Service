@@ -977,6 +977,7 @@ def build_portfolio_holdings_rows(
         ma17 = round(_to_float(tech.get("ma17"), current_price), 2)
         ma45 = round(_to_float(tech.get("ma45"), current_price), 2)
         ma117 = round(_to_float(tech.get("ma117"), current_price), 2)
+        ma189 = round(_to_float(tech.get("ma189"), current_price), 2)
 
         # Deterministic baseline advice (replaced by AI when AI diagnosis runs)
         default_tag, default_target, default_stop, default_advice = _build_fallback_holding_advice(
@@ -1005,6 +1006,7 @@ def build_portfolio_holdings_rows(
                 "ma17": ma17,
                 "ma45": ma45,
                 "ma117": ma117,
+                "ma189": ma189,
                 "ai_action_tag": default_tag,
                 "ai_target_price": default_target,
                 "ai_stop_loss": default_stop,
@@ -1176,7 +1178,7 @@ async def run_portfolio_ai_diagnosis(
             f"{idx}. 【{sno} {h['stock_name']}】({h['order_type']}) "
             f"股數={h['qty']}｜買入均價={h['avg_cost_price']}｜現價={h['current_price']}｜"
             f"未實現損益={h['unrealized_pnl']} ({h['return_pct']:+.2f}%)｜權重={h['weight_pct']:.1f}%｜"
-            f"均線：17MA={h['ma17']} / 45MA={h['ma45']} / 117MA={h['ma117']}｜"
+            f"均線：17MA={h['ma17']} / 45MA={h['ma45']} / 117MA={h['ma117']} / 189MA={h['ma189']}｜"
             f"基本面快取：{fund_brief}"
         )
 
@@ -1262,7 +1264,7 @@ def format_daily_sync_discord_report(
                 f"({r['return_pct']:+.2f}% / {r['unrealized_pnl']:+,} 元)"
             )
             lines.append(
-                f"   • 均線：17MA={r['ma17']} / 45MA={r['ma45']} / 117MA={r['ma117']} ｜ "
+                f"   • 均線：17MA={r['ma17']} / 45MA={r['ma45']} / 117MA={r['ma117']} / 189MA={r['ma189']} ｜ "
                 f"🎯 目標價：{r['ai_target_price']} ｜ 🛡️ 停損/保本價：{r['ai_stop_loss']}"
             )
             lines.append(f"   • 診斷：{r['ai_advice_summary']}")
@@ -2387,6 +2389,7 @@ def _aggregate_holdings_by_stock(holdings_rows: list[dict[str, Any]]) -> dict[st
                 "ma17": _to_float(r.get("ma17"), 0.0),
                 "ma45": _to_float(r.get("ma45"), 0.0),
                 "ma117": _to_float(r.get("ma117"), 0.0),
+                "ma189": _to_float(r.get("ma189"), 0.0),
                 "weight_pct": _to_float(r.get("weight_pct"), 0.0),
                 "war_room_url": str(r.get("war_room_url", "")).strip(),
             }
@@ -2820,6 +2823,7 @@ def build_tracked_position_gatekeeper_signals(
     ma17 = _to_float(hold_agg.get("ma17"), cur_price)
     ma45 = _to_float(hold_agg.get("ma45"), cur_price)
     ma117 = _to_float(hold_agg.get("ma117"), cur_price)
+    ma189 = _to_float(hold_agg.get("ma189"), cur_price)
     tp1 = _to_float(mem.get("initial_tp1"), 0.0)
     tp2 = _to_float(mem.get("initial_tp2"), 0.0)
     init_sl = _to_float(mem.get("initial_sl"), 0.0)
@@ -2864,6 +2868,7 @@ def build_tracked_position_gatekeeper_signals(
         "ma17": ma17,
         "ma45": ma45,
         "ma117": ma117,
+        "ma189": ma189,
         "ratchet_stop_floor": ratchet_floor,
         "trim_plan": trim_plan,
         "tp1_reached": tp1_reached,
@@ -2918,7 +2923,7 @@ async def run_morning_battle_ai_review(
             f"     * 風格 B 預設減碼算盤：{gk['trim_plan']['instruction_hint']}\n"
             f"   - 當時買進劇本：{mem.get('entry_thesis')}\n"
             f"   - 當時設定失效紅線：{mem.get('invalidation_rule')}\n"
-            f"   - 最新技術與財報快取：17MA=`{gk['ma17']}` / 45MA=`{gk['ma45']}` / 117MA=`{gk['ma117']}` ｜ 財報結論：{fund_line}"
+            f"   - 最新技術與財報快取：17MA=`{gk['ma17']}` / 45MA=`{gk['ma45']}` / 117MA=`{gk['ma117']}` / 189MA=`{gk['ma189']}` ｜ 財報結論：{fund_line}"
             f"{note_line}"
         )
 

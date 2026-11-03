@@ -35,7 +35,11 @@ for _sub in (_ROOT, _ROOT / "services", _ROOT / "quant", _ROOT / "taishin"):
 from ai_service import (
     DEFAULT_VERTEX_MODEL,
     ask_vertex_ai_with_meta,
+    get_vertex_batch_stage1_model,
+    get_vertex_batch_stage2_model,
     get_vertex_stage2_model,
+    is_vertex_batch_enabled,
+    run_vertex_batch_requests,
 )
 from finmind_stock_scanner import (
     DISCORD_API_BASE_URL,
@@ -70,6 +74,7 @@ DEFAULT_MAX_CANDIDATES = 25
 DEFAULT_MAX_TOP_PICKS = 5
 DEFAULT_PORTFOLIO_MODEL = DEFAULT_VERTEX_MODEL
 DEFAULT_CALL_INTERVAL_SECONDS = 13.0
+DEFAULT_BATCH_POLL_SECONDS = 60.0
 DISCORD_CHUNK_LIMIT = 1800
 
 _VERDICT_EMOJI = {"高度可信": "🟢", "待驗證": "🟡", "存疑": "🔴"}
@@ -363,8 +368,27 @@ async def analyze_candidates(
     force_ai: bool,
     publish_all: bool,
     call_interval: float,
+    use_vertex_batch: bool = False,
+    batch_model: str | None = None,
+    poll_interval: float = 60.0,
+    target_date: date | None = None,
 ) -> tuple[dict[str, dict[str, object]], list[tuple[str, str]]]:
-    """Sync + diagnose each candidate; one stock failing never aborts the batch."""
+    """Sync + diagnose each candidate; one stock failing never aborts the batch.
+
+    SASD v5.3.0: with ``use_vertex_batch`` the cache-miss stocks are packed into a single
+    Vertex AI Batch job (Phase A prepare -> Phase B batch -> Phase C finalize).
+    """
+    if use_vertex_batch:
+        return await _analyze_candidates_batch(
+            frame,
+            cache,
+            analyzer,
+            force_ai=force_ai,
+            publish_all=publish_all,
+            batch_model=batch_model,
+            poll_interval=poll_interval,
+            target_date=target_date,
+        )
     results: dict[str, dict[str, object]] = {}
     failures: list[tuple[str, str]] = []
     total = len(frame)
@@ -398,6 +422,102 @@ async def analyze_candidates(
         print(f"[{position}/{total}] {label} ✓ cached={report.cached}")
         if not report.cached and position < total:
             await asyncio.sleep(call_interval)  # stay under the free-tier RPM
+    return results, failures
+
+
+async def _analyze_candidates_batch(
+    frame: pd.DataFrame,
+    cache: FundamentalCacheManager,
+    analyzer: FundamentalAnalyzer,
+    *,
+    force_ai: bool,
+    publish_all: bool,
+    batch_model: str | None,
+    poll_interval: float,
+    target_date: date | None,
+) -> tuple[dict[str, dict[str, object]], list[tuple[str, str]]]:
+    results: dict[str, dict[str, object]] = {}
+    failures: list[tuple[str, str]] = []
+    pending_preps: dict[str, dict] = {}
+    batch_prompts: dict[str, str] = {}
+    closes: dict[str, float | None] = {}
+    labels: dict[str, str] = {}
+    total = len(frame)
+
+    # Phase A: FinMind sync + cache check (only cache misses go into the batch JSONL)
+    for position, row in enumerate(frame.itertuples(index=False), start=1):
+        stock_id = str(row.stock_id)
+        label = f"{stock_id} {getattr(row, 'stock_name', '')}"
+        labels[stock_id] = label
+        close = _parse_optional_num(getattr(row, "close", None))
+        closes[stock_id] = close
+        try:
+            await asyncio.to_thread(cache.check_and_sync_stock, stock_id, False)
+            prep = await analyzer.prepare_diagnosis_context(
+                stock_id, force_ai=force_ai, publish_war_room=publish_all
+            )
+            if prep["cached"] is True:
+                report = prep["report"]
+                snapshot = await asyncio.to_thread(analyzer.build_quant_snapshot, stock_id, close=close)
+                results[stock_id] = {
+                    "report": report,
+                    "snapshot": snapshot,
+                    "summary": report.summary_json or report.ai_text,
+                }
+                print(f"[{position}/{total}] {label} ✓ cached=True")
+            else:
+                pending_preps[stock_id] = prep
+                batch_prompts[stock_id] = prep["prompt"]
+                print(f"[{position}/{total}] {label} → 納入 Vertex Batch")
+        except FundamentalCacheError as error:
+            failures.append((stock_id, f"財報資料不足：{error}"))
+            print(f"[{position}/{total}] {label} ✗ {error}")
+        except Exception as error:  # noqa: BLE001
+            failures.append((stock_id, f"分析失敗：{type(error).__name__}: {error}"))
+            print(f"[{position}/{total}] {label} ✗ {type(error).__name__}: {error}")
+
+    # Phase B: submit one batch job and block-poll (skipped when everything was cached)
+    batch_outputs: dict[str, object] = {}
+    if batch_prompts:
+        day = (target_date or date.today()).isoformat()
+        try:
+            batch_outputs = await run_vertex_batch_requests(
+                batch_prompts,
+                model=batch_model or get_vertex_batch_stage1_model(),
+                job_prefix=f"stage1_diag_{day}",
+                poll_interval_seconds=poll_interval,
+                tag="stage1_batch",
+            )
+        except Exception as error:  # noqa: BLE001
+            for stock_id in pending_preps:
+                failures.append((stock_id, f"Vertex Batch 失敗：{type(error).__name__}: {error}"))
+            print(f"[vertex-batch] Stage 1 批次失敗：{type(error).__name__}: {error}")
+            pending_preps = {}
+
+    # Phase C: finalize each stock; a single bad response only fails that stock
+    for stock_id, prep in pending_preps.items():
+        ai_meta = batch_outputs.get(stock_id)
+        if ai_meta is None:
+            failures.append((stock_id, "Vertex Batch 未回傳該股結果"))
+            print(f"{labels[stock_id]} ✗ Vertex Batch 未回傳該股結果")
+            continue
+        try:
+            report = await analyzer.finalize_diagnosis_from_ai(
+                stock_id, prep, ai_meta, publish_war_room=publish_all
+            )
+            snapshot = await asyncio.to_thread(
+                analyzer.build_quant_snapshot, stock_id, close=closes.get(stock_id)
+            )
+        except Exception as error:  # noqa: BLE001
+            failures.append((stock_id, f"分析失敗：{type(error).__name__}: {error}"))
+            print(f"{labels[stock_id]} ✗ {type(error).__name__}: {error}")
+            continue
+        results[stock_id] = {
+            "report": report,
+            "snapshot": snapshot,
+            "summary": report.summary_json or report.ai_text,
+        }
+        print(f"{labels[stock_id]} ✓ cached=False (vertex-batch)")
     return results, failures
 
 
@@ -698,6 +818,8 @@ async def run_portfolio_selection(
     market_regime: Mapping[str, object] | None = None,
     strategy_context: str = "",
     selection_mode: str = "trend",
+    use_vertex_batch: bool = False,
+    poll_interval: float = 60.0,
 ) -> object:
     market_light_str = (
         str(market_regime.get("summary") or market_regime.get("light") or "🟡黃燈")
@@ -719,6 +841,18 @@ async def run_portfolio_selection(
         + f"【今日候選資料卡（共 {len(dossiers)} 檔）】\n\n"
         + "\n\n".join(dossiers)
     )
+    if use_vertex_batch:
+        batch_res = await run_vertex_batch_requests(
+            {"PORTFOLIO_STAGE2": prompt},
+            model=model or get_vertex_batch_stage2_model(),
+            job_prefix="stage2_portfolio",
+            poll_interval_seconds=poll_interval,
+            tag="portfolio_select_batch",
+        )
+        meta = batch_res.get("PORTFOLIO_STAGE2")
+        if meta is None:
+            raise RuntimeError("Vertex Batch 未回傳 Stage 2 跨股總決策結果")
+        return meta
     meta = await ask_vertex_ai_with_meta(prompt, model=model, tag="portfolio_select")
     return meta
 
@@ -1067,18 +1201,40 @@ def _cfg(config: Mapping[str, object], key: str, default: object) -> object:
     return default if value is None else value
 
 
+def resolve_batch_settings(
+    config: Mapping[str, object], use_batch: bool | None
+) -> tuple[bool, bool, float]:
+    """Return (stage1_batch, stage2_batch, poll_interval). Priority: CLI > scanner json > env."""
+    if use_batch is not None:
+        stage1 = bool(use_batch)
+        stage2 = bool(use_batch)
+    else:
+        cfg1 = config.get("ai_picker_use_vertex_batch")
+        cfg2 = config.get("ai_picker_stage2_use_vertex_batch")
+        stage1 = is_vertex_batch_enabled(None if cfg1 is None else bool(cfg1))
+        stage2 = is_vertex_batch_enabled(None if cfg2 is None else bool(cfg2))
+    try:
+        env_poll = float(os.getenv("VERTEX_BATCH_POLL_SECONDS") or DEFAULT_BATCH_POLL_SECONDS)
+    except ValueError:
+        env_poll = DEFAULT_BATCH_POLL_SECONDS
+    poll = float(_cfg(config, "vertex_batch_poll_interval_seconds", env_poll))
+    return stage1, stage2, poll
+
+
 async def run_pipeline(
     config: Mapping[str, object],
     *,
     target_date: date,
     force_ai: bool = False,
     dry_run: bool = False,
+    use_batch: bool | None = None,
 ) -> int:
     output_root = Path(str(config["output_directory"]))
     daily_dir = output_root / "daily"
     max_candidates = int(_cfg(config, "ai_picker_max_candidates", DEFAULT_MAX_CANDIDATES))
     max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
-    portfolio_model = get_vertex_stage2_model()
+    stage1_batch, stage2_batch, batch_poll = resolve_batch_settings(config, use_batch)
+    portfolio_model = get_vertex_batch_stage2_model() if stage2_batch else get_vertex_stage2_model()
     call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
     publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
     post_discord = bool(_cfg(config, "post_ai_picks_to_discord", True)) and not dry_run
@@ -1132,6 +1288,9 @@ async def run_pipeline(
             force_ai=force_ai,
             publish_all=publish_all,
             call_interval=call_interval,
+            use_vertex_batch=stage1_batch,
+            poll_interval=batch_poll,
+            target_date=target_date,
         )
 
     analyzed = selected.loc[selected["stock_id"].isin(results.keys())].reset_index(drop=True)
@@ -1167,6 +1326,8 @@ async def run_pipeline(
                 model=portfolio_model,
                 market_regime=market_regime,
                 selection_mode="trend",
+                use_vertex_batch=stage2_batch,
+                poll_interval=batch_poll,
             )
             raw_text = str(getattr(portfolio_meta, "text", "") or "")
         except Exception as error:  # noqa: BLE001
@@ -1286,11 +1447,18 @@ def run_from_cli(
     target_date: str | None = None,
     force_ai: bool = False,
     dry_run: bool = False,
+    use_batch: bool | None = None,
 ) -> int:
     config = load_scan_config(config_path)
     parsed_date = date.fromisoformat(target_date) if target_date else _today_in_taipei()
     return asyncio.run(
-        run_pipeline(config, target_date=parsed_date, force_ai=force_ai, dry_run=dry_run)
+        run_pipeline(
+            config,
+            target_date=parsed_date,
+            force_ai=force_ai,
+            dry_run=dry_run,
+            use_batch=use_batch,
+        )
     )
 
 
@@ -1304,6 +1472,7 @@ async def run_rebound_pipeline(
     dry_run: bool = False,
     skip_gsheet: bool = False,
     skip_discord: bool = False,
+    use_batch: bool | None = None,
 ) -> int:
     """22:30 型態 A（高點急跌回踩長均線反彈）獨立量化掃描、Rebound_Watchlist 同步與彈性 AI 嚴選流程。"""
     output_root = output_dir or Path(str(config["output_directory"]))
@@ -1421,7 +1590,8 @@ async def run_rebound_pipeline(
     if should_run_ai and not rebound_df.empty:
         max_candidates = int(_cfg(config, "ai_picker_max_candidates", DEFAULT_MAX_CANDIDATES))
         max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
-        portfolio_model = get_vertex_stage2_model()
+        stage1_batch, stage2_batch, batch_poll = resolve_batch_settings(config, use_batch)
+        portfolio_model = get_vertex_batch_stage2_model() if stage2_batch else get_vertex_stage2_model()
         call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
         publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
 
@@ -1441,6 +1611,9 @@ async def run_rebound_pipeline(
                 force_ai=force_ai,
                 publish_all=publish_all,
                 call_interval=call_interval,
+                use_vertex_batch=stage1_batch,
+                poll_interval=batch_poll,
+                target_date=target_date,
             )
 
         analyzed = selected.loc[selected["stock_id"].isin(ai_results.keys())].reset_index(drop=True)
@@ -1466,6 +1639,8 @@ async def run_rebound_pipeline(
                 market_regime=market_regime,
                 strategy_context=rebound_context,
                 selection_mode="rebound",
+                use_vertex_batch=stage2_batch,
+                poll_interval=batch_poll,
             )
             raw_text = str(getattr(portfolio_meta, "text", "") or "")
             decision = parse_portfolio_json(raw_text, set(ai_results.keys()), max_top)
@@ -1597,6 +1772,7 @@ def run_rebound_from_cli(
     dry_run: bool = False,
     skip_gsheet: bool = False,
     skip_discord: bool = False,
+    use_batch: bool | None = None,
 ) -> int:
     config = load_scan_config(config_path)
     parsed_date = date.fromisoformat(target_date) if target_date else _today_in_taipei()
@@ -1610,6 +1786,7 @@ def run_rebound_from_cli(
             dry_run=dry_run,
             skip_gsheet=skip_gsheet,
             skip_discord=skip_discord,
+            use_batch=use_batch,
         )
     )
 
@@ -1623,12 +1800,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", help="指定分析日期 YYYY-MM-DD（預設今日）")
     parser.add_argument("--force-ai", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--batch", dest="batch", action="store_true", default=None, help="強制使用 Vertex AI Batch")
+    parser.add_argument("--no-batch", dest="batch", action="store_false", help="強制使用即時 API")
     args = parser.parse_args(argv)
     return run_from_cli(
         config_path=args.config,
         target_date=args.date,
         force_ai=args.force_ai,
         dry_run=args.dry_run,
+        use_batch=args.batch,
     )
 
 

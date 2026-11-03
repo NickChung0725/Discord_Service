@@ -656,6 +656,7 @@ def evaluate_market_regime(
         "MA17": None,
         "MA45": None,
         "MA117": None,
+        "MA189": None,
         "summary": f"🟡黃燈（{benchmark_label} 預設震盪中性）",
     }
     if benchmark_prices is None or benchmark_prices.empty or "close" not in benchmark_prices.columns:
@@ -675,6 +676,8 @@ def evaluate_market_regime(
     ma17 = float(latest["MA17"])
     ma45 = float(latest["MA45"])
     ma117 = float(latest["MA117"]) if pd.notna(latest.get("MA117")) else ma45
+    ma189_raw = latest.get("MA189")
+    ma189 = float(ma189_raw) if pd.notna(ma189_raw) else None
 
     prev_ma17 = float(usable.iloc[-2]["MA17"]) if len(usable) >= 2 else ma17
     prev_ma45 = float(usable.iloc[-2]["MA45"]) if len(usable) >= 2 else ma45
@@ -691,8 +694,10 @@ def evaluate_market_regime(
         light = "🟡黃燈"
         status = "震盪盤整環境（跌破或測試 17MA 但守住長均線，提高型態 A 反彈權重）"
 
+    ma189_text = f"{ma189:,.2f}" if ma189 is not None else "資料不足"
     summary = (
-        f"{light}｜{benchmark_label} 收盤 {close:,.2f}（17MA {ma17:,.2f}／45MA {ma45:,.2f}／117MA {ma117:,.2f}）— {status}"
+        f"{light}｜{benchmark_label} 收盤 {close:,.2f}"
+        f"（17MA {ma17:,.2f}／45MA {ma45:,.2f}／117MA {ma117:,.2f}／189MA {ma189_text}）— {status}"
     )
     return {
         "light": light,
@@ -702,6 +707,7 @@ def evaluate_market_regime(
         "MA17": round(ma17, 2),
         "MA45": round(ma45, 2),
         "MA117": round(ma117, 2),
+        "MA189": round(ma189, 2) if ma189 is not None else None,
         "summary": summary,
     }
 
@@ -723,7 +729,7 @@ def fetch_or_load_market_regime(
     if cache_path is not None and cache_path.is_file():
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if isinstance(cached, dict) and cached.get("light"):
+            if isinstance(cached, dict) and cached.get("light") and "MA189" in cached:
                 return cached
         except Exception:
             pass
@@ -2455,6 +2461,14 @@ def _cleanup_old_daily_reports(
         if file_date < cutoff:
             path.unlink()
 
+    # SASD v5.3.0: cleanup local Vertex AI Batch input JSONL (finmind_reports/.state/batch/*.jsonl)
+    batch_dir = daily_directory.parent / ".state" / "batch"
+    if batch_dir.is_dir():
+        cutoff_ts = datetime.combine(cutoff, datetime.min.time()).timestamp()
+        for path in batch_dir.iterdir():
+            if path.is_file() and path.suffix == ".jsonl" and path.stat().st_mtime < cutoff_ts:
+                path.unlink()
+
     if logs_dir.is_dir():
         for path in logs_dir.iterdir():
             if not path.is_file():
@@ -3344,6 +3358,14 @@ def _make_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--date", help="指定分析日期 YYYY-MM-DD（預設今日）")
     analyze_parser.add_argument("--force-ai", action="store_true", help="忽略單股 AI 快取，強制重新診斷")
     analyze_parser.add_argument("--dry-run", action="store_true", help="不寫入 Sheets、不推播 Discord，只輸出結果")
+    analyze_parser.add_argument(
+        "--batch",
+        dest="batch",
+        action="store_true",
+        default=None,
+        help="強制啟用 Vertex AI Batch（未指定時讀 ai_picker_use_vertex_batch 與 VERTEX_BATCH_ENABLED）",
+    )
+    analyze_parser.add_argument("--no-batch", dest="batch", action="store_false", help="強制改用即時 API，不使用 Vertex AI Batch")
 
     init_parser = subparsers.add_parser(
         "init-universe",
@@ -3383,6 +3405,14 @@ def _make_parser() -> argparse.ArgumentParser:
     rebound_parser.add_argument("--dry-run", action="store_true", help="只在終端機印出結果，不寫入 Sheets 與 Discord")
     rebound_parser.add_argument("--no-gsheet", action="store_true", help="不更新 Google Sheets Rebound_Watchlist")
     rebound_parser.add_argument("--no-discord", action="store_true", help="不推播 Discord 訊息")
+    rebound_parser.add_argument(
+        "--batch",
+        dest="batch",
+        action="store_true",
+        default=None,
+        help="強制啟用 Vertex AI Batch（未指定時讀 ai_picker_use_vertex_batch 與 VERTEX_BATCH_ENABLED）",
+    )
+    rebound_parser.add_argument("--no-batch", dest="batch", action="store_false", help="強制改用即時 API，不使用 Vertex AI Batch")
     return parser
 
 
@@ -3401,6 +3431,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_date=args.date,
                 force_ai=args.force_ai,
                 dry_run=args.dry_run,
+                use_batch=args.batch,
             )
 
         if args.command == "analyze-rebound":
@@ -3415,6 +3446,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 skip_gsheet=args.no_gsheet,
                 skip_discord=args.no_discord,
+                use_batch=args.batch,
             )
 
         if args.command == "recalc-signals":

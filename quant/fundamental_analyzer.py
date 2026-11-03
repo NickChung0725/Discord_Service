@@ -10,6 +10,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -20,6 +21,7 @@ import logging
 import os
 from pathlib import Path
 import re
+from typing import Any
 import xml.etree.ElementTree as ET
 
 import pandas as pd
@@ -787,14 +789,14 @@ class FundamentalAnalyzer:
             return f"{lines[0]}\n{badge}\n{rest}"
         return f"{badge}\n{text}"
 
-    async def run_full_diagnosis(
+    async def prepare_diagnosis_context(
         self,
         stock_id: str,
         *,
         force_ai: bool = False,
         publish_war_room: bool = True,
-        master: bool = False,
-    ) -> DiagnosisReport:
+    ) -> dict[str, Any]:
+        """Data-prep half of the diagnosis: cache check + prompt assembly (no AI call)."""
         watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
         records = self.cache._get_records_cached(watchlist)  # noqa: SLF001
         row = next(
@@ -857,7 +859,7 @@ class FundamentalAnalyzer:
 
             cached_text = self._inject_taxonomy_badge(cached_text, tax_badge)
 
-            return DiagnosisReport(
+            report = DiagnosisReport(
                 stock_id=stock_id,
                 ai_text=cached_text,
                 war_room_url=war_room_url,
@@ -866,6 +868,7 @@ class FundamentalAnalyzer:
                 summary_json=cached_summary,
                 model_version=str(row.get("ai_model_version", "")).strip() if row else "",
             )
+            return {"cached": True, "report": report, "stock_id": stock_id}
 
         context = self.build_markdown_context(stock_id, include_outlook=True)
         # Stage 0 軟性警示：不擋股票，僅注入「系統硬傷警示」交由 AI 診斷。
@@ -875,21 +878,43 @@ class FundamentalAnalyzer:
             context += "\n\n🚨 系統硬傷警示（Python 預篩，請於 Step 5~7 列入風險並反映於評分與操作定位）：\n" + "\n".join(
                 f"- {w}" for w in hard_warnings
             )
-        latest_close = hard_metrics.get("close")
         prompt = PROMPT_TEMPLATES["full_diagnosis"].replace("{DATA_PACKAGE_PLACEHOLDER}", context)
-        meta = await ask_gemini_diagnosis_with_meta(prompt, tag=f"stock_diag:{stock_id}", master=master)
-        raw_ai_text = meta.text
-        human_text, _parsed = self._split_ai_output(raw_ai_text, latest_close=latest_close)
-        human_text = f"分析模型：{meta.model_version}\n" + human_text
+        return {
+            "cached": False,
+            "prompt": prompt,
+            "stock_id": stock_id,
+            "cache_period": cache_period,
+            "latest_close": hard_metrics.get("close"),
+            "tax_badge": tax_badge,
+            "war_room_url": (str(row.get("war_room_url", "")).strip() or None) if row else None,
+        }
 
-        war_room_url = str(row.get("war_room_url", "")).strip() or None if row else None
+    async def finalize_diagnosis_from_ai(
+        self,
+        stock_id: str,
+        prep_data: Mapping[str, Any],
+        ai_meta: Any,
+        *,
+        publish_war_room: bool = True,
+    ) -> DiagnosisReport:
+        """Post-processing half: parse AI output, publish war room, update watchlist cache."""
+        watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
+        cache_period = prep_data.get("cache_period")
+        latest_close = prep_data.get("latest_close")
+        tax_badge = str(prep_data.get("tax_badge") or "")
+
+        raw_ai_text = ai_meta.text
+        human_text, _parsed = self._split_ai_output(raw_ai_text, latest_close=latest_close)
+        human_text = f"分析模型：{ai_meta.model_version}\n" + human_text
+
+        war_room_url = prep_data.get("war_room_url")
         if publish_war_room:
             try:
                 war_room_url = await self.render_and_publish_war_room_html(stock_id, human_text)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to render/publish war room for %s: %s", stock_id, exc)
 
-        summary = self._summarize_ai(raw_ai_text, model_version=meta.model_version, latest_close=latest_close)
+        summary = self._summarize_ai(raw_ai_text, model_version=ai_meta.model_version, latest_close=latest_close)
         self.cache._update_watchlist_master(  # noqa: SLF001
             watchlist,
             stock_id,
@@ -897,7 +922,7 @@ class FundamentalAnalyzer:
                 "ai_cache_day": datetime.now(TAIPEI_TIMEZONE).date().isoformat(),
                 "ai_cached_period": cache_period or "",
                 "ai_summary_json": summary,
-                "ai_model_version": meta.model_version,
+                "ai_model_version": ai_meta.model_version,
                 "war_room_url": war_room_url or "",
             },
         )
@@ -911,7 +936,25 @@ class FundamentalAnalyzer:
             cached=False,
             cache_period=cache_period,
             summary_json=summary,
-            model_version=meta.model_version,
+            model_version=ai_meta.model_version,
+        )
+
+    async def run_full_diagnosis(
+        self,
+        stock_id: str,
+        *,
+        force_ai: bool = False,
+        publish_war_room: bool = True,
+        master: bool = False,
+    ) -> DiagnosisReport:
+        prep = await self.prepare_diagnosis_context(
+            stock_id, force_ai=force_ai, publish_war_room=publish_war_room
+        )
+        if prep["cached"]:
+            return prep["report"]
+        meta = await ask_gemini_diagnosis_with_meta(prep["prompt"], tag=f"stock_diag:{stock_id}", master=master)
+        return await self.finalize_diagnosis_from_ai(
+            stock_id, prep, meta, publish_war_room=publish_war_room
         )
 
     async def run_targeted_qa(self, stock_id: str, user_prompt: str) -> str:

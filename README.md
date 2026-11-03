@@ -160,6 +160,14 @@ VERTEX_MODEL=gemini-2.5-flash-lite
 VERTEX_STAGE1_MODEL=gemini-3.8-flash
 VERTEX_STAGE2_MODEL=gemini-2.5-pro
 
+# Vertex AI Batch 與 GCS 設定（SASD v5.3.0：21:00 / 20:50 AI 選股離線批次，50% 折扣）
+VERTEX_BATCH_ENABLED=true
+GCS_BUCKET_NAME=nickchung_bucket
+GCS_BATCH_PREFIX=vertex_batch
+VERTEX_BATCH_POLL_SECONDS=60
+VERTEX_BATCH_STAGE1_MODEL=gemini-2.5-flash-lite
+VERTEX_BATCH_STAGE2_MODEL=gemini-2.5-pro
+
 # 3. FinMind 台股數據 API 設定
 FINMIND_API_TOKEN=你的_FinMind_API_Token
 
@@ -225,6 +233,11 @@ uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD --dry
 
 # 正式執行 21:00 AI 財報選股並推播至 Discord 與 Google Sheets
 uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD
+
+# v5.3.0：強制開啟 / 關閉 Vertex AI Batch（未指定時讀 finmind_scanner.json 的 ai_picker_use_vertex_batch 與 .env VERTEX_BATCH_ENABLED）
+uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD --batch
+uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD --no-batch
+uv run python finmind_stock_scanner.py analyze-rebound --date YYYY-MM-DD --run-ai --batch
 
 # ※ 21:00 單股診斷呼叫節流：ai_picker_call_interval_seconds 已調整為 13.0 秒（避免免費額度 429）
 
@@ -338,11 +351,13 @@ sudo systemctl restart discordbot.service
 
 # 查看即時執行日誌
 journalctl -u discordbot.service -f
-
+```
 # 一鍵更新改版部署（使用 --inexact 保留手動 pip 安裝之 taishin_sdk）
+```bash
 cd ~/Discord_Service && git pull && uv sync --inexact && sudo systemctl restart discordbot
-
+```
 # 停止機器人服務
+```bash
 sudo systemctl stop discordbot
 ```
 
@@ -369,3 +384,14 @@ pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" "C:\path\to\lo
 # 上傳整個資料夾（加 -r，例如上傳憑證或資料庫）
 pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r "C:\path\to\certs" nick_chung0725@8.229.251.176:/home/nick_chung0725/Discord_Service/certs
 ```
+
+
+---
+
+## ☁️ Vertex AI Batch 離線批次（SASD v5.3.0）
+
+* 每日 21:00 `analyze-alignment`（及 20:50 `analyze-rebound --run-ai`）的 **Stage 1 單股診斷** 與 **Stage 2 跨股總決策** 預設走 Vertex AI Batch API（50% Token 折扣），免除 `sleep(13s)` 與 429 限流；`/stock_ai`、`/ai`、08:15 晨報仍為即時 API。
+* 流程：FinMind 同步與快取檢查 → 只把 Cache Miss 的股票打包成一份 JSONL 上傳 GCS → 建立 Batch Job 並每 60 秒輪詢 → 解析輸出（以 `custom_id` 對齊）→ 戰情室 / Sheets / Discord。全數命中快取時不會建立 Stage 1 Job。
+* 開關優先序：CLI `--batch/--no-batch` > `finmind_scanner.json`（`ai_picker_use_vertex_batch`、`ai_picker_stage2_use_vertex_batch`、`vertex_batch_poll_interval_seconds`）> `.env` `VERTEX_BATCH_ENABLED`。
+* `deploy/finmind-ai-pick.service`、`deploy/finmind-rebound-ai.service` 已設 `TimeoutStartSec=infinity` 與 `PYTHONUNBUFFERED=1`；本地 JSONL 暫存於 `finmind_reports/.state/batch/`，依 `local_retention_days` 自動清理。
+* 憑證：使用 ADC，自動探測 `GOOGLE_APPLICATION_CREDENTIALS` ➔ `certs/sheetbot.json` ➔ `./sheetbot.json`。

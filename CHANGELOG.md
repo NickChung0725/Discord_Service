@@ -4,6 +4,25 @@
 
 ---
 
+## [v5.3.0] - 2026-11-03
+### 🔧 優化與修正 (Fixed)
+* **大盤紅綠燈快取補上 189MA**：[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py) 的 `evaluate_market_regime()` 原本只計算並儲存 17/45/117MA，現在 `{date}_market_regime.json` 與 summary 都會包含 `MA189`（資料不足時為 null / 顯示「資料不足」）；舊快取缺少 `MA189` 時會自動重新計算。
+* **持股追蹤補上 189MA**：[`taishin/taishin_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin/taishin_config.py) 的 `02_Portfolio_Holdings` 新增 `ma189` 欄位（接在 `ma117` 後，開啟時自動補表頭）；[`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py) 持股資料、盤前/盤後報告、AI 診斷提示與嚴選建倉追蹤提示均加入 189MA。
+### ✨ 新增功能 (Added)
+* **21:00 AI 順勢選股與 20:50 反彈選股導入 Vertex AI Batch API 離線批次 (SASD v5.3.0)**：
+  * [`services/ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/services/ai_service.py) 新增 `run_vertex_batch_requests()`（JSONL 打包 ➔ GCS 上傳 ➔ Batch Job ➔ 原地輪詢 ➔ 依 `custom_id` 解析並寫入 `YYYY-MM-DD_ai_calls.log`）、`_ensure_gcp_credentials_env()`、`is_vertex_batch_enabled()`、`get_vertex_batch_stage1_model()` / `get_vertex_batch_stage2_model()` / `get_gcs_bucket_name()`。
+  * [`quant/fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_analyzer.py) 將診斷拆為 `prepare_diagnosis_context()` 與 `finalize_diagnosis_from_ai()`，`run_full_diagnosis()` 行為不變。
+  * [`quant/alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/alignment_ai_picker.py) 的 `analyze_candidates()` 與 `run_portfolio_selection()` 支援 Batch（Cache-First，僅 Cache Miss 送批次，單股失敗隔離）。
+  * [`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py) `analyze-alignment` / `analyze-rebound` 新增 `--batch` / `--no-batch`。
+  * 新增 `.env` 變數 `VERTEX_BATCH_ENABLED`、`GCS_BUCKET_NAME`、`GCS_BATCH_PREFIX`、`VERTEX_BATCH_POLL_SECONDS`、`VERTEX_BATCH_STAGE1_MODEL`、`VERTEX_BATCH_STAGE2_MODEL`；[`finmind_scanner.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_scanner.json) 新增 `ai_picker_use_vertex_batch`、`ai_picker_stage2_use_vertex_batch`、`vertex_batch_poll_interval_seconds`；`pyproject.toml` 新增 `google-cloud-storage>=2.14.0`。
+  * 新增 [`tests/test_vertex_batch.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_vertex_batch.py)（JSONL 對齊、輪詢、Location 萃取、快取混合、失敗拋錯）。
+
+### 🔧 優化與修正 (Changed & Fixed)
+* [`deploy/finmind-ai-pick.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-ai-pick.service) 與 [`deploy/finmind-rebound-ai.service`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-rebound-ai.service) 確認含 `TimeoutStartSec=infinity` 與 `PYTHONUNBUFFERED=1`，避免 oneshot 逾時殺掉等待中的批次。
+* `_cleanup_old_daily_reports()` 同步清理 `finmind_reports/.state/batch/` 過期 `.jsonl`。
+
+---
+
 ## [v5.2.0] - 2026-11-02
 ### ✨ 新增功能 (Added)
 * **台新證券 AI 建倉記憶錨定、風格 B 分批移動停利與 08:15 開盤作戰晨報架構 (SASD v5.2.0)**：

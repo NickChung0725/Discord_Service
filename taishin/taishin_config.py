@@ -54,6 +54,7 @@ TAISHIN_SHEET_SCHEMAS: dict[str, list[str]] = {
         "ma17",
         "ma45",
         "ma117",
+        "ma189",
         "ai_action_tag",
         "ai_target_price",
         "ai_stop_loss",
