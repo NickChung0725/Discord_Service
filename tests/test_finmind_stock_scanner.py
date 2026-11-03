@@ -493,6 +493,8 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertEqual(calls[1]["allowed_mentions"], {"replied_user": False})
         # Continuation should not repeat heading / （續）
         self.assertNotIn("（續）", calls[1]["content"])
+        self.assertIn("1. 2000 測試股0", calls[0]["content"])
+        self.assertNotIn("`", calls[0]["content"])
         # Alignment report should not contain Markdown bold markers
         self.assertNotIn("**", calls[0]["content"])
         self.assertNotIn("**", calls[1]["content"])
@@ -549,6 +551,9 @@ class FinMindStockScannerTests(unittest.TestCase):
         self.assertEqual(calls[1]["allowed_mentions"], {"replied_user": False})
         # Continuation should not repeat heading / （續）
         self.assertNotIn("（續）", calls[1]["content"])
+        self.assertIn("1. 3000 反彈股0", calls[0]["content"])
+        self.assertIn("└ 踩 45MA (+0.8%)", calls[0]["content"])
+        self.assertNotIn("`", calls[0]["content"])
 
     def test_scan_writes_prices_signals_and_failures(self) -> None:
         prices = pd.DataFrame(

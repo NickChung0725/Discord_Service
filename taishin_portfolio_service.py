@@ -1226,9 +1226,9 @@ def format_daily_sync_discord_report(
     today_net = sum(_to_int(s.get("net_amount", 0)) for s in today_settlements)
     has_shortfall = any(s.get("shortfall_alert") == "⚠️餘額不足" for s in today_settlements)
     alert_badge = "⚠️ 交割款餘額不足預警！" if has_shortfall else "✅ 交割資金正常"
-    lines.append(
-        f"💰 分戶帳餘額：{bal_str} ｜ 今日應收付交割款：{today_net:+,} 元（{alert_badge}）"
-    )
+    # lines.append(
+    #     f"💰 分戶帳餘額：{bal_str} ｜ 今日應收付交割款：{today_net:+,} 元（{alert_badge}）"
+    # )
     lines.append(
         f"📥 帳務增量同步：對帳單新增 {added_statements} 筆 ｜ 交割/已實現損益新增 {added_settlements} 筆"
     )
@@ -3036,7 +3036,7 @@ def format_morning_brief_discord_report(
     today_net = sum(_to_int(s.get("net_amount", 0)) for s in today_settlements)
     has_shortfall = any(s.get("shortfall_alert") == "⚠️餘額不足" for s in today_settlements)
     alert_badge = "🚨 **交割款餘額不足！請於 09:00 前補足款項！**" if has_shortfall else "✅ 交割資金正常"
-    lines.append(f"💰 分戶帳餘額：{bal_str} ｜ 今日應收付交割款：{today_net:+,} 元（{alert_badge}）")
+    # lines.append(f"💰 分戶帳餘額：{bal_str} ｜ 今日應收付交割款：{today_net:+,} 元（{alert_badge}）")
 
     # 2. Global macro compact snapshot
     compact_macro = str(macro_context.get("compact_line") or "").strip()
@@ -3062,10 +3062,11 @@ def format_morning_brief_discord_report(
     total_mv = sum(_to_int(r.get("market_value", 0)) for r in holdings_rows)
     total_pnl = total_mv - total_cost
     total_ret = (total_pnl / total_cost * 100.0) if total_cost > 0 else 0.0
-    lines.append(
-        f"📊 帳戶總市值：{total_mv:,} 元 ｜ 總成本：{total_cost:,} 元 ｜ "
-        f"帳面總損益：{total_pnl:+,} 元 ({total_ret:+.2f}%)"
-    )
+    
+    # lines.append(
+    #     f"📊 帳戶總市值：{total_mv:,} 元 ｜ 總成本：{total_cost:,} 元 ｜ "
+    #     f"帳面總損益：{total_pnl:+,} 元 ({total_ret:+.2f}%)"
+    # )
 
     # 3. Tracked Position Memory Battle Cards
     if active_memories:

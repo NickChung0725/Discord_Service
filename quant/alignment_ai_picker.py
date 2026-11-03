@@ -1353,6 +1353,10 @@ async def run_rebound_pipeline(
         f"（失敗 {scan_fail_count} 檔）｜大盤環境：{market_regime.get('summary', market_light)}"
     )
     if not rebound_df.empty:
+        try:
+            rebound_df = enrich_with_taxonomy(rebound_df, config, target_date)
+        except Exception:
+            logger.warning('[rebound] 細分產業補齊失敗', exc_info=True)
         preview_cols = [
             c
             for c in [
@@ -1557,9 +1561,17 @@ async def run_rebound_pipeline(
         return 0
 
     if post_discord:
+        rebound_channel_id = str(
+            config.get("rebound_channel_id")
+            or config.get("alignment_channel_id")
+            or channel_id
+            or os.getenv("ALIGNMENT_SIGNALS_CHANNEL_ID")
+            or os.getenv("STOCK_CHANNEL_ID")
+            or ""
+        ).strip()
         sent_scan = post_rebound_report_to_discord(
             rebound_df,
-            channel_id=channel_id,
+            channel_id=rebound_channel_id,
             bot_token=bot_token,
             as_of=target_date,
             failed_count=scan_fail_count,

@@ -782,7 +782,7 @@ def _load_taxonomy_cache_readonly(
 def _taxonomy_report_line(
     stock_id: object, taxonomy_map: Mapping[str, Mapping[str, object]]
 ) -> str:
-    """回傳報表行尾縮排的細分產業與同業標籤（無資料回傳空字串）。"""
+    """回傳縮排的細分產業與同業標籤（無資料回傳空字串）。"""
     rec = taxonomy_map.get(str(stock_id).strip())
     if not rec:
         return ""
@@ -792,7 +792,83 @@ def _taxonomy_report_line(
         badge = format_taxonomy_badge(rec)
     except Exception:  # noqa: BLE001
         return ""
-    return f"\n  └─ {badge}" if badge else ""
+    return f"   └─ {badge}" if badge else ""
+
+
+def _compact_vol_tag(vol_status: object) -> str:
+    """將量能狀態濃縮為適合手機與 LINE 閱讀的短標籤（如 '💧量縮 0.46x'）。"""
+    if vol_status is None or pd.isna(vol_status):
+        return ""
+    s = str(vol_status).strip()
+    if not s or s in ("-", "nan"):
+        return ""
+    ratio_match = re.search(r"(\d+(?:\.\d+)?x)", s)
+    ratio_part = f" {ratio_match.group(1)}" if ratio_match else ""
+    short_map = (
+        ("量縮整理", "💧量縮"),
+        ("量能平穩", "➡️平穩"),
+        ("溫和放量", "📈溫和放量"),
+        ("放量點火", "🔥放量"),
+        ("天量過熱", "⚠️天量"),
+        ("低量冷門", "⚠️低量"),
+    )
+    for key, label in short_map:
+        if key in s:
+            return f"{label}{ratio_part}"
+    return s
+
+
+def _compact_industry(industry: object) -> str:
+    """濃縮台股產業分類名稱，減少手機版面折行。"""
+    if industry is None or pd.isna(industry):
+        return ""
+    s = str(industry).strip()
+    if not s or s == "nan":
+        return ""
+    s = s.replace("電腦及週邊設備業", "電腦週邊").replace("電子零組件業", "電子零組件")
+    if len(s) > 2 and s.endswith("工業"):
+        return s[:-2]
+    if len(s) > 2 and s.endswith(("業", "類")):
+        return s[:-1]
+    return s
+
+
+def _format_compact_regime_tag(market_regime: Mapping[str, object] | None) -> str:
+    """回傳精簡的大盤燈號標籤（如 '🟡黃燈（震盪盤整）'）。"""
+    if not market_regime:
+        return ""
+    light = str(market_regime.get("light", "")).strip()
+    status_full = str(market_regime.get("status", "")).strip()
+    if light and light != "⚪未知":
+        short_status = status_full.split("（", 1)[0].replace("環境", "").strip()
+        return f"{light}（{short_status}）" if short_status else light
+    summary = str(market_regime.get("summary", "")).strip()
+    return summary
+
+
+def _format_compact_regime_note(
+    market_regime: Mapping[str, object] | None, *, mode: str = "alignment"
+) -> str:
+    """回傳單行精簡大盤操作提示。"""
+    if not market_regime:
+        return ""
+    light = str(market_regime.get("light", "")).strip()
+    status_full = str(market_regime.get("status", "")).strip()
+    detail = (
+        status_full.split("（", 1)[1].rstrip("）").strip()
+        if "（" in status_full
+        else ""
+    )
+    if "無基準日線" in detail:
+        detail = ""
+    if mode == "rebound":
+        if "🔴" in light:
+            return "🛡️ 警示：大盤跌破 45MA 且下彎，搶反彈請嚴濾現金流並嚴守停損"
+        if "🟡" in light:
+            return f"💡 說明：{detail or '跌破或測試 17MA 但守長均線，提高反彈權重'}"
+    if detail:
+        return f"💡 說明：{detail}"
+    return ""
 
 
 def format_alignment_report(
@@ -802,61 +878,70 @@ def format_alignment_report(
     market_regime: Mapping[str, object] | None = None,
 ) -> list[str]:
     report_date = (as_of or _today_in_taipei()).isoformat()
-    heading = (
-        f"📊 {report_date} MA 均線排列訊號"
-        "\n條件：MA3 >= 所有均線；17/45MA 處於即將金叉（-1.5%~0%）或剛金叉起漲（0%~+2.5%）；"
-        "且 MA45 > MA117 > MA189"
-    )
-    if market_regime and market_regime.get("summary"):
-        heading += f"\n🚦 大盤紅綠燈：{market_regime['summary']}"
+    count = len(alignment_signals)
+    regime_tag = _format_compact_regime_tag(market_regime)
+    regime_part = f" ｜ 🚦 大盤：{regime_tag}" if regime_tag else ""
+    heading_lines = [
+        f"📊【MA 均線排列起漲訊號】{report_date}",
+        f"🎯 符合標的：{count} 檔{regime_part}",
+    ]
+    regime_note = _format_compact_regime_note(market_regime, mode="alignment")
+    if regime_note:
+        heading_lines.append(regime_note)
     if failed_count:
-        heading += f"\n⚠️ 有 {failed_count} 檔股票資料抓取失敗，以下僅列成功分析的股票。"
+        heading_lines.append(
+            f"⚠️ 有 {failed_count} 檔股票資料抓取失敗，以下僅列成功分析的股票。"
+        )
+    heading_lines.append("━━━━━━━━━━━━━━━━━━━━")
+    heading = "\n".join(heading_lines)
     if alignment_signals.empty:
         return [heading + "\n今日沒有符合條件的股票。"]
 
     taxonomy_map = _load_taxonomy_cache_readonly()
     chunks: list[str] = []
     current = heading
-    for row in alignment_signals.itertuples(index=False):
-        gap_val = getattr(
-            row,
-            "MA17_MA45_gap_percent",
-            getattr(row, "gap_percent", 0.0),
-        )
+    for idx, row in enumerate(alignment_signals.itertuples(index=False), start=1):
         signal_label = getattr(row, "signal", None)
-        signal_part = f" | {signal_label}" if signal_label else ""
-        ma3_val = getattr(row, "MA3", None)
-        ma3_part = (
-            f" | MA3 {float(ma3_val):,.2f}"
-            if ma3_val is not None and not pd.isna(ma3_val)
-            else ""
-        )
+        signal_part = f"｜{signal_label}" if signal_label else ""
         trend_label = getattr(row, "ma17_trend", None)
-        trend_part = f" | 17MA走勢 {trend_label}" if trend_label else ""
 
         vol_lots = _parse_optional_float(getattr(row, "vol_lots", None))
-        vol_ma20 = _parse_optional_float(getattr(row, "vol_ma20_lots", None))
         vol_status = getattr(row, "vol_status", None)
+        vol_tag = _compact_vol_tag(vol_status)
         vol_part = ""
         if vol_lots is not None:
-            ma20_str = f"｜20日均 {int(round(vol_ma20)):,}張" if vol_ma20 is not None else ""
-            status_str = (
-                f" ({vol_status}{ma20_str})"
-                if vol_status and str(vol_status) not in ("", "-", "nan")
-                else ""
-            )
-            vol_part = f" | 量 {int(round(vol_lots)):,}張{status_str}"
+            status_str = f" ({vol_tag})" if vol_tag else ""
+            vol_part = f"｜量 {int(round(vol_lots)):,}張{status_str}"
 
+        sub_lines: list[str] = []
+        if trend_label and str(trend_label).strip() not in ("", "-", "nan"):
+            sub_lines.append(f"   └ 17MA：{trend_label}")
+        tax_line = _taxonomy_report_line(row.stock_id, taxonomy_map)
+        if tax_line:
+            sub_lines.append(tax_line)
+
+        sub_block = ("\n" + "\n".join(sub_lines)) if sub_lines else ""
         line = (
-            f"\n{row.stock_id} {row.stock_name}{signal_part} | 收盤 {float(row.close):,.2f}"
-            f"{vol_part}"
-            f"{trend_part}"
-            f"{_taxonomy_report_line(row.stock_id, taxonomy_map)}"
+            f"\n{idx}. {row.stock_id} {row.stock_name}{signal_part}"
+            f"｜收盤 {float(row.close):,.2f}{vol_part}"
+            f"{sub_block}"
         )
         if len(current) + len(line) > 1800:
             chunks.append(current)
-            current = heading + "\n（續）"
+            current = heading_lines[0] + "\n（續）"
+            line = (
+                f"\n{idx}. {row.stock_id} {row.stock_name}{signal_part}"
+                f"｜收盤 {float(row.close):,.2f}{vol_part}"
+                f"{sub_block}"
+            )
         current += line
+
+    footer = (
+        "\n━━━━━━━━━━━━━━━━━━━━\n"
+        "📌 完整均線數據已記錄於 Sheets「MA_Signal_Tracker」"
+    )
+    if len(current) + len(footer) <= 1950:
+        current += footer
     chunks.append(current)
     return chunks
 
@@ -964,26 +1049,21 @@ def format_rebound_report(
     market_regime: Mapping[str, object] | None = None,
     ai_executed: bool = False,
 ) -> list[str]:
-    """格式化 20:50 型態 A（高點急跌回踩長均線反彈）Discord 快報。"""
+    """格式化 20:50 型態 A（高點急跌回踩長均線反彈）Discord 快報（手機/LINE 雙行卡片版）。"""
     report_date = (as_of or _today_in_taipei()).isoformat()
     count = len(rebound_signals)
+    regime_tag = _format_compact_regime_tag(market_regime)
+    regime_part = f" ｜ 🚦 大盤：{regime_tag}" if regime_tag else ""
     heading_lines = [
-        f"🪃 【20:50 型態 A：高點回跌回踩長均線反彈清單】{report_date}",
-        f"🎯 今日符合反彈條件標的總數：{count} 檔",
-        "條件：MA45 >= MA117 > MA189｜近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 >=10%｜回踩 45MA/117MA（-1.5%~+2.5%）｜反彈至 17MA 空間 >=5%｜K線收盤強度 >=0.55",
+        f"🪃【型態 A：高點回跌回踩長均線反彈清單】{report_date}",
+        f"🎯 符合標的：{count} 檔{regime_part}",
     ]
-    if market_regime and market_regime.get("summary"):
-        heading_lines.append(f"🚦 大盤紅綠燈：{market_regime['summary']}")
-        if "🔴" in str(market_regime.get("light", "")):
-            heading_lines.append("🛡️ 空頭防禦警示：目前大盤跌破 45MA 且下彎，搶反彈請嚴格過濾基本面與自由現金流，嚴守停損！")
-        elif "🟡" in str(market_regime.get("light", "")):
-            heading_lines.append("💡 震盪盤整環境：大盤處於黃燈區間，系統提高「型態 A 反彈清單」關注權重。")
+    regime_note = _format_compact_regime_note(market_regime, mode="rebound")
+    if regime_note:
+        heading_lines.append(regime_note)
     if failed_count:
         heading_lines.append(f"⚠️ 有 {failed_count} 檔股票分析過程發生異常。")
-    if not ai_executed and count > 0:
-        heading_lines.append(
-            "📌 第一階段觀測模式：已寫入 Google Sheets `Rebound_Watchlist`。若欲啟動 AI 深度診斷與嚴選，請執行 `analyze-rebound --run-ai`。"
-        )
+    heading_lines.append("━━━━━━━━━━━━━━━━━━━━")
     heading = "\n".join(heading_lines)
 
     if rebound_signals.empty:
@@ -992,23 +1072,48 @@ def format_rebound_report(
     taxonomy_map = _load_taxonomy_cache_readonly()
     chunks: list[str] = []
     current = heading
-    for row in rebound_signals.itertuples(index=False):
+    for idx, row in enumerate(rebound_signals.itertuples(index=False), start=1):
+        ind_short = _compact_industry(getattr(row, "industry_category", ""))
+        ind_part = f"（{ind_short}）" if ind_short else ""
         vol_lots = _parse_optional_float(getattr(row, "vol_lots", None))
         vol_status = getattr(row, "vol_status", "-")
-        vol_str = f" | 量 {int(round(vol_lots)):,}張 ({vol_status})" if vol_lots is not None else ""
+        vol_tag = _compact_vol_tag(vol_status)
+        if vol_lots is not None:
+            tag_str = f" ({vol_tag})" if vol_tag else ""
+            vol_str = f" ｜ 量 {int(round(vol_lots)):,}張{tag_str}"
+        else:
+            vol_str = ""
+
+        sub_lines = [
+            f"   └ 踩 {row.support_ma} ({float(row.support_gap_pct):+.1f}%)"
+            f" ｜ 距 17MA +{float(row.potential_return_pct):.1f}%{vol_str}"
+        ]
+        tax_line = _taxonomy_report_line(row.stock_id, taxonomy_map)
+        if tax_line:
+            sub_lines.append(tax_line)
+        sub_block = "\n".join(sub_lines)
         line = (
-            f"\n• {row.stock_id} {row.stock_name}（{getattr(row, 'industry_category', '')}）"
-            f"｜收盤 {float(row.close):,.2f}｜60日高 {float(row.high_60d):,.2f}"
-            f"（跌 {float(row.drop_amount):,.2f}元 / -{float(row.drop_pct):.1f}%）"
-            f"｜回踩 {row.support_ma} {float(row.support_price):,.2f}（{float(row.support_gap_pct):+.2f}%）"
-            f"｜17MA目標 {float(row.target_ma17):,.2f}（空間 +{float(row.potential_return_pct):.1f}%）"
-            f"｜收盤強度 {float(row.close_strength):.2f}{vol_str}"
-            f"{_taxonomy_report_line(row.stock_id, taxonomy_map)}"
+            f"\n{idx}. {row.stock_id} {row.stock_name}{ind_part}"
+            f"｜收盤 {float(row.close):,.2f}｜強度 {float(row.close_strength):.2f}\n"
+            f"{sub_block}"
         )
         if len(current) + len(line) > 1800:
             chunks.append(current)
             current = heading_lines[0] + "\n（續）"
+            line = (
+                f"\n{idx}. {row.stock_id} {row.stock_name}{ind_part}"
+                f"｜收盤 {float(row.close):,.2f}｜強度 {float(row.close_strength):.2f}\n"
+                f"{sub_block}"
+            )
         current += line
+
+    if not ai_executed and count > 0:
+        footer = (
+            "\n━━━━━━━━━━━━━━━━━━━━\n"
+            "📌 詳細篩選條件已記錄於 Sheets「Rebound_Watchlist」"
+        )
+        if len(current) + len(footer) <= 1950:
+            current += footer
     chunks.append(current)
     return chunks
 
@@ -2183,6 +2288,12 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
         raise ValueError(
             "post_alignment_to_discord 為 true 時，stock_channel_id 必須是數字 ID。"
         )
+    for channel_key in ("alignment_channel_id", "rebound_channel_id"):
+        if channel_key in config:
+            if not isinstance(config.get(channel_key), str) or not str(
+                config[channel_key]
+            ).isdigit():
+                raise ValueError(f"設定 {channel_key} 必須是數字 ID 字串。")
     if "sync_alignment_to_gsheet" in config and not isinstance(
         config.get("sync_alignment_to_gsheet"), bool
     ):
@@ -2813,9 +2924,16 @@ def scan_configured_universe(
         bot_token = (
             os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or ""
         ).strip()
+        target_channel = str(
+            config.get("alignment_channel_id")
+            or config.get("stock_channel_id")
+            or os.getenv("ALIGNMENT_SIGNALS_CHANNEL_ID")
+            or os.getenv("STOCK_CHANNEL_ID")
+            or ""
+        ).strip()
         post_alignment_report_to_discord(
             alignment_signals,
-            channel_id=str(config["stock_channel_id"]),
+            channel_id=target_channel,
             bot_token=bot_token,
             as_of=today,
             failed_count=len(failures) + len(failed_groups),
@@ -2929,6 +3047,36 @@ def recalc_from_cache(
         ]
         print(alignments[display_columns].to_string(index=False))
 
+    if not alignments.empty and not dry_run:
+        try:
+            from taxonomy_service import TaxonomyService
+
+            stock_map = dict(
+                zip(
+                    prices["stock_id"].astype(str).str.strip(),
+                    prices["stock_name"].astype(str).str.strip()
+                    if "stock_name" in prices.columns
+                    else prices["stock_id"].astype(str).str.strip(),
+                )
+            )
+            tax_path = Path(
+                str(
+                    config.get(
+                        "taxonomy_cache_path",
+                        output_root / ".state" / "stock_taxonomy.json",
+                    )
+                )
+            )
+            TaxonomyService(
+                cache_path=tax_path,
+                ttl_days=int(config.get("taxonomy_ttl_days", 90)),
+                sheet_tab_name=str(
+                    config.get("taxonomy_gsheet_tab_name", "08_Stock_Taxonomy")
+                ),
+            ).ensure_batch(alignments, stock_map, as_of=today)
+        except Exception:
+            logger.warning("[recalc] 細分產業知識庫補齊失敗", exc_info=True)
+
     if dry_run:
         print("[recalc] --dry-run：未寫入任何檔案、Google Sheets 與 Discord。")
         return alignments
@@ -2961,9 +3109,16 @@ def recalc_from_cache(
         bot_token = (
             os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or ""
         ).strip()
+        target_channel = str(
+            config.get("alignment_channel_id")
+            or config.get("stock_channel_id")
+            or os.getenv("ALIGNMENT_SIGNALS_CHANNEL_ID")
+            or os.getenv("STOCK_CHANNEL_ID")
+            or ""
+        ).strip()
         post_alignment_report_to_discord(
             alignments,
-            channel_id=str(config["stock_channel_id"]),
+            channel_id=target_channel,
             bot_token=bot_token,
             as_of=today,
             failed_count=failed_count,
@@ -3146,8 +3301,11 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     scan_parser.add_argument(
         "--channel-id",
-        default=os.getenv("STOCK_CHANNEL_ID", "").strip(),
-        help="Discord 頻道 ID（預設讀取 STOCK_CHANNEL_ID 環境變數）",
+        default=(
+            os.getenv("ALIGNMENT_SIGNALS_CHANNEL_ID", "").strip()
+            or os.getenv("STOCK_CHANNEL_ID", "").strip()
+        ),
+        help="Discord 頻道 ID（預設讀取 ALIGNMENT_SIGNALS_CHANNEL_ID 或 STOCK_CHANNEL_ID 環境變數）",
     )
     scan_parser.add_argument(
         "--no-sync-gsheet",

@@ -19,6 +19,10 @@
     * 新增 [`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py) 唯讀子命令 `dump-context`（支援 `--refresh-live` 即時登入台新 API 更新庫存）與 [`.agent/skills/portfolio-advisor/SKILL.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.agent/skills/portfolio-advisor/SKILL.md)，讓使用者在本地 Antigravity 對話詢問庫存時可隨時調閱精準成本均價、建倉記憶與國際盤數據進行深度互動（維持零 Discord 斜線指令暴露個人資產之資安隔離）。
 
 ### 🔧 優化與修正 (Changed & Fixed)
+* **19:00 MA 均線排列訊號與 20:50 型態 A 反彈清單推播頻道改至 `alignment_signals` 並升級手機／LINE 雙行卡片版型**：
+  * 於 [`finmind_scanner.json`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_scanner.json)、[`.env`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.env) 與 [`.env.example`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/.env.example) 新增 `alignment_channel_id`、`rebound_channel_id` 與 `ALIGNMENT_SIGNALS_CHANNEL_ID=1566830891299508426`，將 19:00 均線排列訊號與 20:50 型態 A 高點回跌回踩長均線反彈清單獨立推播至專屬頻道 `alignment_signals#1566830891299508426`（21:00 AI 嚴選報告維持推播至 `STOCK_CHANNEL_ID`）。
+  * 重構 [`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py) 之 `format_alignment_report()` 與 `format_rebound_report()`，導入**精簡標頭 ＋ 數字序號 (`1.`, `2.`) ＋ 緊湊單換行（每檔股票間無空行） ＋ 完整細分產業與相似同業標籤 (`└─ 🏷️`)**，並在 `recalc_from_cache` 與 `run_rebound_pipeline` 加入細分產業自動補齊機制，大幅提升轉傳 LINE 與手機窄螢幕閱讀體驗。
+  * 同步更新 [`quant/alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/alignment_ai_picker.py)、[`tests/test_finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_finmind_stock_scanner.py) 與 [`README.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/README.md)。
 * **型態 A 跌深反彈掃描定時排程由 22:30 改至 20:50**：
   * 將 [`deploy/finmind-rebound-ai.timer`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/deploy/finmind-rebound-ai.timer) 觸發時間由 `22:30` 調整為 `20:50`（`OnCalendar=Mon..Fri *-*-* 20:50:00 Asia/Taipei`），在 19:00~20:00 全市場掃描完成後、21:00 AI 嚴選選股前 10 分鐘精準產出型態 A 跌深回踩均線之績優股。
   * 強化 [`quant/alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/alignment_ai_picker.py) 之 `run_rebound_pipeline` 與成交量回補函式，若當日日線未及產出時自動向前回溯讀取最新交易日之 `prices.csv` 與大盤燈號快取，提供雙重防禦保護。
