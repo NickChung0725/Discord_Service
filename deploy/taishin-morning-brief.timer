@@ -3,7 +3,7 @@ Description=Run Taishin Securities pre-market settlement check & AI morning batt
 
 [Timer]
 OnCalendar=Mon..Fri *-*-* 08:15:00 Asia/Taipei
-Persistent=true
+Persistent=false
 Unit=taishin-morning-brief.service
 
 [Install]

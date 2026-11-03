@@ -3,7 +3,7 @@ Description=Run FinMind alignment-signal AI stock picker on weekdays at 21:00
 
 [Timer]
 OnCalendar=Mon..Fri *-*-* 21:00:00 Asia/Taipei
-Persistent=true
+Persistent=false
 Unit=finmind-ai-pick.service
 
 [Install]

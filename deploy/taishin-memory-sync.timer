@@ -3,7 +3,7 @@ Description=Run Taishin Securities statement & position thesis memory attributio
 
 [Timer]
 OnCalendar=Mon..Fri *-*-* 22:45:00 Asia/Taipei
-Persistent=true
+Persistent=false
 Unit=taishin-memory-sync.service
 
 [Install]

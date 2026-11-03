@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -180,6 +181,8 @@ def _sheet_cell_value(value: Any) -> Any:
     if value is None:
         return ""
     if pd.isna(value):
+        return ""
+    if isinstance(value, (float, int)) and math.isinf(value):
         return ""
     return value
 
