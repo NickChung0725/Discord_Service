@@ -21,5 +21,5 @@ certs/
 test_log.PY
 scripts/test_log.py
 .vscode/
-Findmind_API_TEST.txt
 .agent/
+scripts/
