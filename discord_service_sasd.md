@@ -1,7 +1,7 @@
 # Discord_Service 系統分析與設計規格書 (SASD)
 
 * **專案名稱**：Discord_Service — 台股量化分析、AI 雙層診斷與台新證券智慧作戰系統
-* **版本**：v5.4.0 (Single Source of Truth)
+* **版本**：v5.5.0 (Single Source of Truth)
 * **最後更新日期**：2026-11-04
 * **運行環境**：Google Cloud Platform (GCP Compute Engine) + Linux `systemd` + Python 3.11 (`uv`)
 
@@ -162,8 +162,8 @@ graph TB
 4. `04_Monthly_Revenue`：月營收明細（單月營收、MoM、YoY、累計 YoY）。
 5. `05_Valuation_PER_PBR`：每日估值指標（本益比 PER、股價淨值比 PBR、殖利率）。
 6. `06_Dividend_History`：歷年股利政策與配息穩定度。
-7. `07_Institutional_Chips`：三大法人（外資、投信、自營商）買賣超彙整。
-8. `08_Margin_Trading`：融資融券餘額與變化率。
+7. `07_Chip_Summary`：三大法人籌碼與個股融資融券維持率快取表（v5.5.0 擴充：`margin_balance_lots`、`margin_utilization_pct`、`margin_chg_5d_lots`、`margin_chg_20d_lots`、`short_margin_ratio_pct`、`est_margin_maint_pct` 估算融資維持率、`chip_quadrant_tag` 資法人對作四象限標籤）。
+8. `08_Stock_Taxonomy`：細分次產業分類知識庫與同業標籤快取。
 9. `09_Shareholding_Dispersion`：大戶與散戶集保股權分散表。
 10. `10_SubSector_Taxonomy`：個股次產業分類映射與產業特性標籤。
 11. `11_Guidance_Claims`：AI 萃取之公司法說會指引、產能擴充與新產品時程宣稱。
@@ -178,7 +178,19 @@ graph TB
 
 ---
 
-### 2.4 全日自動化排程與時序圖
+### 2.4 全日自動化排程與時序圖 (Single Source of Truth)
+
+> 📌 **開發鐵則**：以下排程時間僅由作業系統層級之 `systemd` timers 控制，**嚴禁在 Python 業務邏輯、函式預設參數、Prompt 模板或 Discord 訊息標題中寫死時間字串**。所有報表標題與程式碼邏輯一律改為「功能導向描述」。
+
+| 排程時間 (CST) | Systemd Timer / Service | 執行入口與核心職責 | 標準化 Discord 報表標題（無時間前綴） |
+| :--- | :--- | :--- | :--- |
+| **08:00** | `discordbot.service` | 台北早安氣象推播 (`weather_service.py`) | `🌤️ **台北今日天氣**` |
+| **08:15** | `taishin-morning-brief.timer` | 盤前交割預警、隔夜美股與波段持股開盤作戰指令 (`taishin_portfolio_service.py morning-brief`) | `☀️ 【台新證券 盤前開盤作戰晨報】` |
+| **13:15** | `taishin-dca-0050.timer` | 0050 每週智慧尋底定投評估 (`taishin_portfolio_service.py eval-dca-0050`) | `📈 【0050 每週智慧尋底定投評估】` |
+| **19:00** | `finmind-scan.timer` | 全市場日K、均線、大盤紅綠燈與融資水位掃描 (`finmind_stock_scanner.py`) | `📊 【台股盤後量化掃描快報】` |
+| **20:50** | `finmind-rebound-ai.timer` | 型態 A 急跌回踩長均線反彈選股 (`alignment_ai_picker.py` rebound mode) | `🎯 【型態 A 反彈 AI 嚴選決策報告】` |
+| **21:00** | `finmind-ai-pick.timer` | 均線多頭順勢選股與 Stage 2 跨股總決策 (`alignment_ai_picker.py` trend mode) | `🎯 【AI 嚴選進場決策報告】` |
+| **22:45** | `taishin-memory-sync.timer` | 盤後對帳單同步與建倉記憶歸因 (`taishin_portfolio_service.py sync-memory`) | `🌙 【台新 盤後持股記憶歸因快訊】` |
 
 ```mermaid
 sequenceDiagram
@@ -417,6 +429,7 @@ flowchart TD
 
 | 版本號 | 發布日期 | 核心架構決策與改版重點 (Key Changes & ADRs) | 影響模組 |
 | :--- | :--- | :--- | :--- |
+| **v5.5.0** | 2026-11-04 | 1. **大盤與個股融資籌碼風控整合**：串接 TWSE/TPEx 官方免費 OpenAPI 取得大盤融資（`fetch_market_margin_snapshot`），升級 `evaluate_market_regime` 辨識「散戶凹單未洗清」與「融資斷頭宣洩」並動態給出建議總持倉上限 (`recommended_max_exposure_pct`)。<br/>2. **07_Chip_Summary 融資擴充**：串接 FinMind `TaiwanStockMarginPurchaseShortSale` 實作估算融資維持率 (`est_margin_maint_pct`) 與「資法人對作四象限標籤 (`chip_quadrant_tag`)」，賦能 Stage 0 硬性排雷與 Stage 1/2 Prompt。<br/>3. **全專案硬編碼時間字串徹底解耦**：移除所有程式碼、Docstring、Prompt 與報表標題之寫死排程時間，統一由本規格書第 2.4 節與 `systemd` 控制。<br/>4. **0050 DCA 恐慌殺融資加碼**：當大盤融資單日暴減 $\le -40$ 億或 5 日累計暴減 $\le -90$ 億時自動提高定投評分與加碼倍數。 | `finmind_stock_scanner.py`<br>`quant/fundamental_cache.py`<br>`quant/fundamental_config.py`<br>`quant/fundamental_analyzer.py`<br>`quant/alignment_ai_picker.py`<br>`services/ai_service.py`<br>`taishin_portfolio_service.py`<br>`taishin/taishin_config.py` |
 | **v5.4.0** | 2026-11-04 | 1. **Vertex AI Batch 改用 BigQuery 交換媒介**：每批獨立 `input_{seq}` / `predictions_{seq}` 暫存表（`vertex_batch_staging`，5 天自動到期），移除 GCS 依賴。<br/>2. **AI 日誌集中化**：Batch 與 Online Gemini 呼叫皆以免費 `load_table_from_json` 寫入 `discord_service.ai_prompt_logs`（失敗只記 Warning，不中斷主流程）。 | `services/ai_service.py`<br>`quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`taishin_portfolio_service.py`<br>`services/stock_ai_command.py` |
 | **v5.3.0** | 2026-11-03 | 1. **導入 Vertex AI Batch API 離線批次架構**：將 20:50 反彈與 21:00 順勢選股改為打包 JSONL 上傳 GCS 非同步推論，並將 `fundamental_analyzer.py` 拆分為 `prepare_diagnosis_context()` 與 `finalize_diagnosis_from_ai()`。<br/>2. **全面整合 189MA 長天期均線**：大盤紅綠燈快取 (`evaluate_market_regime`) 與台新持股表 (`02_Portfolio_Holdings`)、AI 晨報/健診 Prompt 全面補齊 `MA189`。 | `services/ai_service.py`<br>`quant/fundamental_analyzer.py`<br>`quant/alignment_ai_picker.py`<br>`finmind_stock_scanner.py`<br>`taishin_portfolio_service.py` |
 | **v5.2.x** | 2026-10 | 1. **台新開盤作戰晨報與建倉記憶庫上線**：新增 `05_Position_Thesis_Memory`，實作「風格 B（TP1 調節 50% + 單向棘輪移動停利）」。<br/>2. **整合隔夜美股總經 (`macro_context.py`)**：盤前自動抓取費半、TSM ADR、NVDA、VIX、匯率判定 `RISK_ON / NEUTRAL / RISK_OFF`。 | `taishin_portfolio_service.py`<br>`taishin/macro_context.py`<br>`taishin/taishin_config.py` |

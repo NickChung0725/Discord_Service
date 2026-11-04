@@ -2,7 +2,7 @@
 - Google AI Studio (free tier via GEMINI_API_KEY / GEMINI_MODEL): used for general /ai, /stock_ai,
   and per-stock fundamental diagnosis.
 - Google Cloud Vertex AI (paid tier via GOOGLE_CLOUD_PROJECT_ID / GOOGLE_CLOUD_LOCATION / VERTEX_API_KEY
-  / VERTEX_MODEL): used for the 22:00 / 22:30 cross-stock portfolio selection decision.
+  / VERTEX_MODEL): used for the Stage 2 cross-stock portfolio selection decision.
 
 SASD v3.5.1:
 - Migrate Google AI Studio calls from `client.interactions.create` to `client.models.generate_content`.
@@ -102,7 +102,7 @@ def _is_retryable_gemini_error(error: BaseException) -> bool:
 
 
 def _is_diag_retryable_error(error: BaseException) -> bool:
-    """22:00 單股診斷專用：只針對 free-tier 常見 429/503 類問題做長等待重試。"""
+    """Stage 1 單股診斷專用：只針對 free-tier 常見 429/503 類問題做長等待重試。"""
     text = f"{type(error).__name__} {error}".lower()
     return any(marker in text for marker in ("429", "503", "resource_exhausted", "quota", "unavailable"))
 
@@ -655,7 +655,7 @@ async def ask_gemini_diagnosis_with_meta(
     Routing (2026-10):
     - master=True（/stock_ai 大師模式）：直接走 Vertex AI（VERTEX_STAGE1_MODEL）。
     - master=False：先走 Google AI Studio（STAGE1_MODEL）做長等待重試；若仍失敗，
-      自動升級至 Vertex AI（VERTEX_STAGE1_MODEL）確保 22:00 排程/手動診斷可完成。
+      自動升級至 Vertex AI（VERTEX_STAGE1_MODEL）確保排程/手動單股診斷可完成。
     """
 
     vertex_stage1_model = get_vertex_stage1_model()
@@ -699,14 +699,14 @@ async def ask_gemini_diagnosis_with_meta(
 
 
 # --------------------------------------------------------------------------- #
-# 2. Google Cloud Vertex AI (Paid Tier - for 22:00 / 22:30 Portfolio Decision)
+# 2. Google Cloud Vertex AI (Paid Tier - for Stage 2 Portfolio Decision)
 # --------------------------------------------------------------------------- #
 def get_vertex_model() -> str:
     """Return configured Vertex AI model from .env VERTEX_MODEL.
 
     NOTE: Newer routing prefers stage-specific env vars:
     - VERTEX_STAGE1_MODEL: /stock_ai 專題問答、多股比較、以及 Stage 1 失敗時的付費備援
-    - VERTEX_STAGE2_MODEL: 22:00 / 22:30 跨股彙總決策（Stage 2）
+    - VERTEX_STAGE2_MODEL: 跨股彙總決策（Stage 2）
 
     This function remains for backward compatibility and as a fallback when stage-specific
     vars are not configured.
@@ -726,7 +726,7 @@ def get_vertex_stage1_model() -> str:
 
 
 def get_vertex_stage2_model() -> str:
-    """Return Vertex AI model for Stage 2 portfolio decision (22:00 / 22:30)."""
+    """Return Vertex AI model for Stage 2 portfolio decision."""
 
     return (
         os.getenv("VERTEX_STAGE2_MODEL")

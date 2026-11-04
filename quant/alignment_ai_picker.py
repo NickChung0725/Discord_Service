@@ -1,4 +1,4 @@
-"""22:00 pipeline: fundamental + earnings-outlook analysis of the day's alignment_signals,
+"""Daily AI stock selection pipeline: fundamental + earnings-outlook analysis of alignment_signals,
 followed by a single cross-stock AI call that picks the best entry candidates.
 
 Stages (SASD v3.2.0):
@@ -85,7 +85,7 @@ _RANK_EMOJI = {1: "🥇", 2: "🥈", 3: "🥉"}
 # Stage 1: candidates
 # --------------------------------------------------------------------------- #
 def load_alignment_candidates(daily_dir: Path, target_date: date) -> pd.DataFrame | None:
-    """Return the day's alignment signals, or None when the 19:00 job produced no file."""
+    """Return the day's alignment signals, or None when the daily scanner job produced no file."""
     path = daily_dir / f"{target_date.isoformat()}_alignment_signals.csv"
     if not path.is_file():
         return None
@@ -797,8 +797,8 @@ _PORTFOLIO_REBOUND_RULE = (
 def _apply_portfolio_prompt_overrides(prompt: str, *, selection_mode: str) -> str:
     """依選股模式動態調整 Stage 2 Prompt 的關鍵規則。
 
-    - trend：22:00 順勢金叉（預設）
-    - rebound：22:30 型態 A 回踩長均線反彈
+    - trend：均線多頭順勢金叉（預設）
+    - rebound：型態 A 回踩長均線反彈
     """
 
     mode = (selection_mode or "").strip().lower()
@@ -899,7 +899,7 @@ def format_pick_report(
     model: str,
     model_version: str = "",
     market_regime: Mapping[str, object] | None = None,
-    title_label: str = "22:00 AI 嚴選進場決策報告",
+    title_label: str = "AI 嚴選進場決策報告",
 ) -> list[str]:
     """Render Discord messages (each <= DISCORD_CHUNK_LIMIT chars)."""
     rows = _row_lookup(frame)
@@ -1247,10 +1247,10 @@ async def run_pipeline(
 
     candidates = load_alignment_candidates(daily_dir, target_date)
     if candidates is None:
-        print(f"[skip] 找不到 {target_date.isoformat()}_alignment_signals.csv（休市或 19:00 任務未產出）。")
+        print(f"[skip] 找不到 {target_date.isoformat()}_alignment_signals.csv（休市或盤後掃描任務未產出）。")
         return 0
     if candidates.empty:
-        message = f"📭 今日 ({target_date.isoformat()}) 無符合強勢均線排列之個股，22:00 AI 財報選股略過。"
+        message = f"📭 今日 ({target_date.isoformat()}) 無符合強勢均線排列之個股，AI 財報選股略過。"
         print(message)
         if post_discord:
             post_messages_to_discord([message], channel_id, bot_token)
@@ -1298,7 +1298,7 @@ async def run_pipeline(
 
     analyzed = selected.loc[selected["stock_id"].isin(results.keys())].reset_index(drop=True)
     if analyzed.empty and not pre_filtered_avoid:
-        message = f"❌ {target_date.isoformat()} 22:00 AI 選股失敗：所有候選股的財報分析皆失敗。"
+        message = f"❌ {target_date.isoformat()} AI 選股失敗：所有候選股的財報分析皆失敗。"
         print(message)
         if post_discord:
             post_messages_to_discord([message], channel_id, bot_token)
@@ -1335,7 +1335,7 @@ async def run_pipeline(
             raw_text = str(getattr(portfolio_meta, "text", "") or "")
         except Exception as error:  # noqa: BLE001
             message = (
-                f"❌ {target_date.isoformat()} 22:00 AI 彙總選股失敗"
+                f"❌ {target_date.isoformat()} AI 彙總選股失敗"
                 f"（Vertex AI 模型 `{portfolio_model}` 呼叫異常，為確保決策品質未降級至免費版）："
                 f"{type(error).__name__}: {error}"
             )
@@ -1477,7 +1477,7 @@ async def run_rebound_pipeline(
     skip_discord: bool = False,
     use_batch: bool | None = None,
 ) -> int:
-    """22:30 型態 A（高點急跌回踩長均線反彈）獨立量化掃描、Rebound_Watchlist 同步與彈性 AI 嚴選流程。"""
+    """型態 A（高點急跌回踩長均線反彈）獨立量化掃描、Rebound_Watchlist 同步與彈性 AI 嚴選流程。"""
     output_root = output_dir or Path(str(config["output_directory"]))
     daily_dir = output_root / "daily"
     prices_path = daily_dir / f"{target_date.isoformat()}_prices.csv"
@@ -1491,7 +1491,7 @@ async def run_rebound_pipeline(
             except Exception:
                 pass
     if not prices_path.is_file():
-        print(f"[skip] 找不到 {prices_path}（休市或 19:00 任務未產出）。")
+        print(f"[skip] 找不到 {prices_path}（休市或盤後掃描任務未產出）。")
         return 0
 
     prices = pd.read_csv(prices_path, dtype={"stock_id": str})
@@ -1631,7 +1631,7 @@ async def run_rebound_pipeline(
                 for i, row in enumerate(analyzed.to_dict("records"), start=1)
             ]
             rebound_context = (
-                "本批次為【22:30 型態 A：高點急跌回踩長均線（45MA/117MA）反彈清單】。"
+                "本批次為【型態 A：高點急跌回踩長均線（45MA/117MA）反彈清單】。"
                 "請特別針對「均值回歸反彈空間（目標 17MA 與 +12% 正乖離）」、「長均線支撐防守力道」、"
                 "「法人近 5 日是否趁急跌逢低承接（或連續大賣需降級排雷）」及「自由現金流 FCF 品質」進行嚴選。"
             )
@@ -1686,7 +1686,7 @@ async def run_rebound_pipeline(
                 model=portfolio_model,
                 model_version=portfolio_model_version,
                 market_regime=market_regime,
-                title_label="20:50 型態 A 反彈 AI 嚴選決策報告",
+                title_label="型態 A 反彈 AI 嚴選決策報告",
             )
             if not dry_run:
                 payload = {
@@ -1798,7 +1798,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     load_dotenv()
-    parser = argparse.ArgumentParser(description="22:00 alignment_signals 財報分析與 AI 嚴選進場標的")
+    parser = argparse.ArgumentParser(description="alignment_signals 財報分析與 AI 嚴選進場標的")
     parser.add_argument("--config", type=Path, default=Path("finmind_scanner.json"))
     parser.add_argument("--date", help="指定分析日期 YYYY-MM-DD（預設今日）")
     parser.add_argument("--force-ai", action="store_true")

@@ -800,6 +800,26 @@ class FundamentalCacheManager:
         delta = self._delta_by_content(df_sheet, full, key_col="pk_key")
         return full, delta
 
+    def _find_prices_for_margin_calc(self, stock_id: str) -> pd.DataFrame:
+        """從本地 finmind_reports/daily 讀取包含該 stock_id 的最新日線 DataFrame（含 date, close）。"""
+        reports_dir = Path("finmind_reports/daily")
+        if not reports_dir.is_dir():
+            return pd.DataFrame()
+        csv_files = sorted(reports_dir.glob("*_prices.csv"))
+        if not csv_files:
+            return pd.DataFrame()
+        latest_file = csv_files[-1]
+        try:
+            df = pd.read_csv(latest_file, dtype={"stock_id": str, "date": str})
+            sub = df[df["stock_id"].astype(str).str.strip() == str(stock_id).strip()].copy()
+            if not sub.empty:
+                sub["date"] = sub["date"].astype(str)
+                sub["close"] = pd.to_numeric(sub["close"], errors="coerce")
+                return sub[["date", "close"]].dropna()
+        except Exception:
+            pass
+        return pd.DataFrame()
+
     def _sync_chip_summary(
         self,
         stock_id: str,
@@ -896,6 +916,100 @@ class FundamentalCacheManager:
 
         trade_week = self._to_iso_trade_week(latest_date)
 
+        # 3) 個股融資融券 (TaiwanStockMarginPurchaseShortSale)
+        margin_balance_lots = float("nan")
+        margin_utilization_pct = float("nan")
+        margin_chg_5d_lots = 0.0
+        margin_chg_20d_lots = 0.0
+        short_margin_ratio_pct = 0.0
+        est_margin_maint_pct = float("nan")
+
+        try:
+            df_margin = self._finmind.get_data(
+                dataset="TaiwanStockMarginPurchaseShortSale",
+                data_id=stock_id,
+                start_date=start_date,
+                end_date=today.isoformat(),
+            )
+        except Exception as error:
+            warnings.append("chip_margin_fetch_failed")
+            logger.warning("Margin purchase/short sale fetch failed for %s: %s", stock_id, error)
+            df_margin = None
+
+        if df_margin is not None and not df_margin.empty and "date" in df_margin.columns:
+            df_margin = df_margin.copy().sort_values("date").reset_index(drop=True)
+            df_margin["date"] = df_margin["date"].astype(str)
+
+            latest_m = df_margin.iloc[-1]
+            if str(latest_m.get("date", "")) > latest_date:
+                latest_date = str(latest_m["date"])
+
+            bal = pd.to_numeric(latest_m.get("MarginPurchaseTodayBalance"), errors="coerce")
+            limit = pd.to_numeric(latest_m.get("MarginPurchaseLimit"), errors="coerce")
+            short_bal = pd.to_numeric(latest_m.get("ShortSaleTodayBalance"), errors="coerce")
+
+            if pd.notna(bal):
+                margin_balance_lots = float(bal)
+                if pd.notna(limit) and float(limit) > 0:
+                    margin_utilization_pct = round(margin_balance_lots / float(limit) * 100.0, 2)
+
+                if margin_balance_lots > 0 and pd.notna(short_bal):
+                    short_margin_ratio_pct = round(float(short_bal) / margin_balance_lots * 100.0, 2)
+                else:
+                    short_margin_ratio_pct = 0.0
+
+            n_rows = len(df_margin)
+            if n_rows >= 6:
+                bal_5d_ago = pd.to_numeric(df_margin.iloc[-6].get("MarginPurchaseTodayBalance"), errors="coerce")
+                if pd.notna(bal_5d_ago) and pd.notna(bal):
+                    margin_chg_5d_lots = round(float(bal) - float(bal_5d_ago), 1)
+            elif n_rows >= 2:
+                bal_first = pd.to_numeric(df_margin.iloc[0].get("MarginPurchaseTodayBalance"), errors="coerce")
+                if pd.notna(bal_first) and pd.notna(bal):
+                    margin_chg_5d_lots = round(float(bal) - float(bal_first), 1)
+
+            if n_rows >= 21:
+                bal_20d_ago = pd.to_numeric(df_margin.iloc[-21].get("MarginPurchaseTodayBalance"), errors="coerce")
+                if pd.notna(bal_20d_ago) and pd.notna(bal):
+                    margin_chg_20d_lots = round(float(bal) - float(bal_20d_ago), 1)
+            elif n_rows >= 2:
+                bal_first = pd.to_numeric(df_margin.iloc[0].get("MarginPurchaseTodayBalance"), errors="coerce")
+                if pd.notna(bal_first) and pd.notna(bal):
+                    margin_chg_20d_lots = round(float(bal) - float(bal_first), 1)
+
+            # 估算個股近 20 日融資維持率 (est_margin_maint_pct)
+            try:
+                prices_df = self._find_prices_for_margin_calc(stock_id)
+                if prices_df is not None and not prices_df.empty:
+                    merged_p = pd.merge(df_margin, prices_df[["date", "close"]], on="date", how="inner")
+                    if not merged_p.empty:
+                        tail_20 = merged_p.tail(20)
+                        buys = pd.to_numeric(tail_20.get("MarginPurchaseBuy"), errors="coerce").fillna(0.0)
+                        closes = pd.to_numeric(tail_20.get("close"), errors="coerce").fillna(0.0)
+                        sum_buys = float(buys.sum())
+                        latest_close = float(closes.iloc[-1]) if len(closes) > 0 else 0.0
+
+                        if sum_buys > 0:
+                            vwap_cost = float((buys * closes).sum()) / sum_buys
+                        else:
+                            vwap_cost = float(closes.mean()) if len(closes) > 0 else 0.0
+
+                        if vwap_cost > 0 and latest_close > 0:
+                            est_margin_maint_pct = round((latest_close / vwap_cost) * 166.7, 1)
+            except Exception as e:
+                logger.debug("est_margin_maint_pct calculation skipped for %s: %s", stock_id, e)
+
+        # 4) 資法人對作四象限標籤 (chip_quadrant_tag)
+        three_inst_5 = round(foreign_5 + trust_5 + dealer_5, 1)
+        if three_inst_5 > 0 and margin_chg_5d_lots <= 0:
+            chip_quadrant_tag = "🟢法人鎖碼(法人買+融資減)"
+        elif three_inst_5 > 0 and margin_chg_5d_lots > 0:
+            chip_quadrant_tag = "🟡人氣齊聚(資法人同買)"
+        elif three_inst_5 < 0 and margin_chg_5d_lots > 0:
+            chip_quadrant_tag = "🔴散戶接刀/主力出貨(法人賣+融資增)"
+        else:
+            chip_quadrant_tag = "⚡籌碼雙退/清洗浮額(法人賣+融資減)"
+
         row = {
             "pk_key": f"{stock_id}_{trade_week}",
             "stock_id": stock_id,
@@ -909,8 +1023,16 @@ class FundamentalCacheManager:
             "trust_net_buy_20d_lots": trust_20,
             "dealer_net_buy_5d_lots": dealer_5,
             "dealer_net_buy_20d_lots": dealer_20,
-            "three_inst_net_5d_lots": round(foreign_5 + trust_5 + dealer_5, 1),
+            "three_inst_net_5d_lots": three_inst_5,
             "three_inst_net_20d_lots": round(foreign_20 + trust_20 + dealer_20, 1),
+            # v5.5.0 新增個股信用交易與斷頭風控欄位
+            "margin_balance_lots": margin_balance_lots,
+            "margin_utilization_pct": margin_utilization_pct,
+            "margin_chg_5d_lots": margin_chg_5d_lots,
+            "margin_chg_20d_lots": margin_chg_20d_lots,
+            "short_margin_ratio_pct": short_margin_ratio_pct,
+            "est_margin_maint_pct": est_margin_maint_pct,
+            "chip_quadrant_tag": chip_quadrant_tag,
             "updated_at": _now_in_taipei().isoformat(timespec="seconds"),
         }
 

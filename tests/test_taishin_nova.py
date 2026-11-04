@@ -533,7 +533,7 @@ class TestTaishinNova(unittest.TestCase):
             weekly_budget_twd=10000,
         )
         self.assertTrue(fri_decision["should_buy"])
-        self.assertIn("週五 13:15 保底定投", fri_decision["trigger_reason"])
+        self.assertIn("週五保底定投", fri_decision["trigger_reason"])
         self.assertGreaterEqual(fri_decision["multiplier"], 0.6)
         self.assertLessEqual(fri_decision["multiplier"], 1.5)
         self.assertGreater(fri_decision["order_qty_shares"], 0)

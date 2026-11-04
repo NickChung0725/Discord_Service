@@ -70,7 +70,7 @@ RSS_MAX_AGE_DAYS = 180
 RSS_TITLE_SUMMARY_DUP_RATIO = 0.85
 RSS_NO_CONTENT_NOTE = "（僅有媒體標題，無公開具體展望數據，嚴禁據此推論）"
 
-# Stage 0 硬性排雷門檻（/stock_ai 軟性警示；22:00 排程硬性攔截）
+# Stage 0 硬性排雷門檻（/stock_ai 軟性警示；排程選股硬性攔截）
 HARD_MIN_VOLUME_LOTS = 300
 HARD_MIN_CONTRACT_LIAB_YI = 1.0
 
@@ -132,7 +132,7 @@ def filter_and_clean_rss(
 def build_hard_warnings(metrics: dict) -> list[str]:
     """Stage 0 硬傷判斷（共用）：回傳觸發的警示文字清單；資料缺漏者不判定。
 
-    metrics 鍵：vol_lots、op_margin_pct、contract_liab（億）。
+    metrics 鍵：vol_lots、op_margin_pct、contract_liab（億）、three_inst_net_5d_lots、margin_chg_5d_lots、margin_utilization_pct、est_margin_maint_pct。
     """
     warnings: list[str] = []
     vol = metrics.get("vol_lots")
@@ -146,6 +146,32 @@ def build_hard_warnings(metrics: dict) -> list[str]:
         cl_text = "N/A" if contract_liab is None else f"{contract_liab:,.2f} 億"
         warnings.append(
             f"最近一季本業虧損（營益率 {op_margin:.2f}%）且合約負債 {cl_text} < {HARD_MIN_CONTRACT_LIAB_YI:g} 億，無訂單保護"
+        )
+    # v5.5.0 籌碼與融資斷頭風控硬傷
+    inst_5d = metrics.get("three_inst_net_5d_lots")
+    m_chg_5d = metrics.get("margin_chg_5d_lots")
+    m_util = metrics.get("margin_utilization_pct")
+    if (
+        inst_5d is not None
+        and inst_5d < -500
+        and m_chg_5d is not None
+        and m_chg_5d > 500
+        and m_util is not None
+        and m_util >= 30.0
+    ):
+        warnings.append(
+            f"籌碼背離硬傷：近5日三大法人賣超 {abs(inst_5d):,.0f} 張但融資逆勢大增 {m_chg_5d:,.0f} 張（使用率 {m_util:.1f}%），屬主力倒貨散戶接刀結構"
+        )
+
+    est_mmr = metrics.get("est_margin_maint_pct")
+    if (
+        est_mmr is not None
+        and 130.0 <= est_mmr <= 142.0
+        and m_chg_5d is not None
+        and m_chg_5d > 0
+    ):
+        warnings.append(
+            f"斷頭踩踏警戒：估算融資維持率僅 {est_mmr:.1f}% 逼近 130% 追繳線且融資尚未退場，極易引發多殺多斷頭賣壓"
         )
     return warnings
 
@@ -721,7 +747,16 @@ class FundamentalAnalyzer:
 
     def get_hard_screen_metrics(self, stock_id: str) -> dict:
         """Stage 0：取最新收盤/日量（本地 prices.csv）與最近一季營益率、合約負債（億）。缺資料者為 None。"""
-        metrics: dict = {"close": None, "vol_lots": None, "op_margin_pct": None, "contract_liab": None}
+        metrics: dict = {
+            "close": None,
+            "vol_lots": None,
+            "op_margin_pct": None,
+            "contract_liab": None,
+            "three_inst_net_5d_lots": None,
+            "margin_chg_5d_lots": None,
+            "margin_utilization_pct": None,
+            "est_margin_maint_pct": None,
+        }
         try:
             prices = self._find_latest_prices_csv_for_stock(stock_id)
             if not prices.empty:
@@ -749,6 +784,18 @@ class FundamentalAnalyzer:
                 metrics["contract_liab"] = _to_float(latest.get("contract_liab_亿元"))
         except Exception:  # noqa: BLE001
             logger.debug("hard-screen wide metrics unavailable for %s", stock_id, exc_info=True)
+        try:
+            chip_df = self.cache._read_stock_rows(self.cache._get_worksheet("07_Chip_Summary"), stock_id)  # noqa: SLF001
+            if not chip_df.empty:
+                if "raw_date" in chip_df.columns:
+                    chip_df = chip_df.sort_values("raw_date")
+                latest_chip = chip_df.iloc[-1].to_dict()
+                metrics["three_inst_net_5d_lots"] = _to_float(latest_chip.get("three_inst_net_5d_lots"))
+                metrics["margin_chg_5d_lots"] = _to_float(latest_chip.get("margin_chg_5d_lots"))
+                metrics["margin_utilization_pct"] = _to_float(latest_chip.get("margin_utilization_pct"))
+                metrics["est_margin_maint_pct"] = _to_float(latest_chip.get("est_margin_maint_pct"))
+        except Exception:  # noqa: BLE001
+            logger.debug("hard-screen chip metrics unavailable for %s", stock_id, exc_info=True)
         return metrics
 
     @staticmethod
@@ -1484,14 +1531,19 @@ class FundamentalAnalyzer:
                 return {}
             return frame.iloc[-1].to_dict()
 
-        def _fmt(value: object, suffix: str = "") -> str:
+        def _fmt(value: object, suffix: object = "", decimals: int = 2) -> str:
             if value is None or value == "" or (isinstance(value, float) and pd.isna(value)):
                 return "N/A"
+            dec = decimals
+            suf = str(suffix) if suffix != "" else ""
+            if isinstance(suffix, int):
+                dec = suffix
+                suf = ""
             try:
                 number = float(value)
             except (TypeError, ValueError):
                 return str(value)
-            return f"{number:,.2f}{suffix}"
+            return f"{number:,.{dec}f}{suf}"
 
         wide_df = _history("05_AI_Metrics_Wide")
         rev_df = _history("01_Monthly_Revenue")
@@ -1525,6 +1577,12 @@ class FundamentalAnalyzer:
                 f"（20日 {_fmt(chip.get('foreign_holding_chg_20d'), '%')}）｜外資 5日/20日 {_fmt(chip.get('foreign_net_buy_5d_lots'))}"
                 f"/{_fmt(chip.get('foreign_net_buy_20d_lots'))} 張｜投信 5日/20日 {_fmt(chip.get('trust_net_buy_5d_lots'))}"
                 f"/{_fmt(chip.get('trust_net_buy_20d_lots'))} 張｜三大法人 5日 {_fmt(chip.get('three_inst_net_5d_lots'))} 張"
+            ),
+            (
+                f"  - 信用籌碼與維持率：{chip.get('chip_quadrant_tag', 'N/A')}｜"
+                f"融資餘額 {_fmt(chip.get('margin_balance_lots'), 0)} 張（使用率 {_fmt(chip.get('margin_utilization_pct'), '%')}）｜"
+                f"融資 5日/20日增減 {_fmt(chip.get('margin_chg_5d_lots'), 0)}/{_fmt(chip.get('margin_chg_20d_lots'), 0)} 張｜"
+                f"估算融資維持率 {_fmt(chip.get('est_margin_maint_pct'), '%')}｜券資比 {_fmt(chip.get('short_margin_ratio_pct'), '%')}"
             ),
         ]
         lines.extend(self.build_snapshot_trend_lines(wide_df, rev_df, bs_latest, close))

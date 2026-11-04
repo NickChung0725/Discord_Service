@@ -638,11 +638,176 @@ def classify_rebound_signal(
     }
 
 
+def fetch_market_margin_snapshot(
+    history_path: Path | None = None,
+    as_of: date | None = None,
+    timeout: float = 12.0,
+) -> dict[str, Any]:
+    """官方免費抓取上市櫃融資總表（TWSE / TPEx OpenAPI 與官方備援），並計算全市場融資增減。
+
+    不消耗 FinMind 配額，網路異常 Graceful Degradation 回傳空 dict。
+    """
+    today = as_of or _today_in_taipei()
+    today_str = today.isoformat()
+
+    twse_today_yi: float | None = None
+    twse_prev_yi: float | None = None
+    tpex_today_yi: float | None = None
+    tpex_prev_yi: float | None = None
+
+    # 1. 上市 (TWSE) 信用交易統計
+    twse_urls = [
+        "https://openapi.twse.com.tw/v1/exchangeReport/MI_MARGN",
+        "https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?response=json",
+    ]
+    for url in twse_urls:
+        try:
+            req = Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, list):
+                for row in data:
+                    item_name = str(row.get("項目") or row.get("股票名稱") or "")
+                    if "融資金額" in item_name or "融資(仟元)" in item_name:
+                        prev_val = str(row.get("前日餘額") or row.get("融資前日餘額") or "").replace(",", "").strip()
+                        today_val = str(row.get("今日餘額") or row.get("融資今日餘額") or "").replace(",", "").strip()
+                        if prev_val and today_val:
+                            twse_prev_yi = float(prev_val) / 100000.0
+                            twse_today_yi = float(today_val) / 100000.0
+                            break
+            elif isinstance(data, dict):
+                tables = data.get("tables", [])
+                for t in tables:
+                    table_data = t.get("data", [])
+                    for row in table_data:
+                        if isinstance(row, list) and len(row) >= 6 and "融資金額" in str(row[0]):
+                            prev_val = str(row[4]).replace(",", "").strip()
+                            today_val = str(row[5]).replace(",", "").strip()
+                            twse_prev_yi = float(prev_val) / 100000.0
+                            twse_today_yi = float(today_val) / 100000.0
+                            break
+                    if twse_today_yi is not None:
+                        break
+            if twse_today_yi is not None:
+                break
+        except Exception:
+            logger.debug("Failed to fetch TWSE margin from %s", url, exc_info=True)
+
+    # 2. 上櫃 (TPEx) 信用交易統計
+    tpex_urls = [
+        "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance",
+        "https://www.tpex.org.tw/web/stock/margin_trading/margin_balance/margin_bal_result.php?l=zh-tw&o=json",
+    ]
+    for url in tpex_urls:
+        try:
+            req = Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+            with urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if isinstance(data, dict):
+                tables = data.get("tables", [])
+                for t in tables:
+                    summary = t.get("summary", [])
+                    for srow in summary:
+                        if isinstance(srow, list) and len(srow) >= 7 and "融資" in str(srow[1]):
+                            prev_val = str(srow[2]).replace(",", "").strip()
+                            today_val = str(srow[6]).replace(",", "").strip()
+                            if prev_val and today_val:
+                                tpex_prev_yi = float(prev_val) / 100000.0
+                                tpex_today_yi = float(today_val) / 100000.0
+                                break
+                    if tpex_today_yi is not None:
+                        break
+            elif isinstance(data, list):
+                for row in data:
+                    cname = str(row.get("CompanyName") or "")
+                    if "融資" in cname or "合計" in cname:
+                        prev_val = str(row.get("MarginPurchaseBalancePreviousDay") or "").replace(",", "").strip()
+                        today_val = str(row.get("MarginPurchaseBalance") or "").replace(",", "").strip()
+                        if prev_val and today_val:
+                            tpex_prev_yi = float(prev_val) / 100000.0
+                            tpex_today_yi = float(today_val) / 100000.0
+                            break
+            if tpex_today_yi is not None:
+                break
+        except Exception:
+            logger.debug("Failed to fetch TPEx margin from %s", url, exc_info=True)
+
+    if twse_today_yi is None and tpex_today_yi is None:
+        return {}
+
+    twse_margin_yi = round(twse_today_yi or 0.0, 2)
+    tpex_margin_yi = round(tpex_today_yi or 0.0, 2)
+    total_margin_yi = round(twse_margin_yi + tpex_margin_yi, 2)
+
+    # 3. 本地滾動歷史紀錄 (保留近 30 個交易日)
+    hist_file = history_path or Path("finmind_reports/.state/market_margin_history.json")
+    history: dict[str, dict[str, Any]] = {}
+    if hist_file.is_file():
+        try:
+            loaded = json.loads(hist_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                history = loaded
+            elif isinstance(loaded, list):
+                history = {str(item.get("date")): item for item in loaded if item.get("date")}
+        except Exception:
+            logger.debug("Failed to load existing margin history from %s", hist_file, exc_info=True)
+
+    history[today_str] = {
+        "date": today_str,
+        "twse_margin_yi": twse_margin_yi,
+        "tpex_margin_yi": tpex_margin_yi,
+        "total_margin_yi": total_margin_yi,
+    }
+
+    sorted_dates = sorted(history.keys())
+    if len(sorted_dates) > 30:
+        sorted_dates = sorted_dates[-30:]
+        history = {d: history[d] for d in sorted_dates}
+
+    try:
+        hist_file.parent.mkdir(parents=True, exist_ok=True)
+        hist_file.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        logger.debug("Failed to persist margin history to %s", hist_file, exc_info=True)
+
+    cur_idx = sorted_dates.index(today_str) if today_str in sorted_dates else len(sorted_dates) - 1
+    if cur_idx >= 1:
+        prev_d = sorted_dates[cur_idx - 1]
+        prev_tot = float(history[prev_d].get("total_margin_yi") or 0.0)
+        margin_chg_1d_yi = round(total_margin_yi - prev_tot, 2)
+    elif twse_prev_yi is not None or tpex_prev_yi is not None:
+        prev_tot = (twse_prev_yi or 0.0) + (tpex_prev_yi or 0.0)
+        margin_chg_1d_yi = round(total_margin_yi - prev_tot, 2)
+    else:
+        margin_chg_1d_yi = 0.0
+
+    if cur_idx >= 5:
+        d5 = sorted_dates[cur_idx - 5]
+        tot5 = float(history[d5].get("total_margin_yi") or 0.0)
+        margin_chg_5d_yi = round(total_margin_yi - tot5, 2)
+    elif cur_idx > 0:
+        d0 = sorted_dates[0]
+        tot0 = float(history[d0].get("total_margin_yi") or 0.0)
+        margin_chg_5d_yi = round(total_margin_yi - tot0, 2)
+    else:
+        margin_chg_5d_yi = margin_chg_1d_yi
+
+    return {
+        "date": today_str,
+        "twse_margin_yi": twse_margin_yi,
+        "tpex_margin_yi": tpex_margin_yi,
+        "total_margin_yi": total_margin_yi,
+        "margin_chg_1d_yi": margin_chg_1d_yi,
+        "margin_chg_5d_yi": margin_chg_5d_yi,
+    }
+
+
 def evaluate_market_regime(
     benchmark_prices: pd.DataFrame,
     benchmark_label: str = "0050",
+    margin_info: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
-    """依據大盤基準（0050 或 TAIEX）日線均線位階計算大盤環境紅綠燈。
+    """依據大盤基準（0050 或 TAIEX）日線均線位階與融資水位計算大盤環境紅綠燈。
 
     - 🟢綠燈：大盤 >= 17MA 且 17MA 向上（偏多環境，順勢主推 17/45MA 金叉突破）
     - 🟡黃燈：大盤跌破 17MA 但守住 45MA/117MA，或處於震盪整理（提高型態 A 反彈清單權重）
@@ -657,6 +822,10 @@ def evaluate_market_regime(
         "MA45": None,
         "MA117": None,
         "MA189": None,
+        "margin_info": dict(margin_info) if margin_info else None,
+        "margin_regime": None,
+        "recommended_max_exposure_pct": None,
+        "recommended_top_picks_cap": 5,
         "summary": f"🟡黃燈（{benchmark_label} 預設震盪中性）",
     }
     if benchmark_prices is None or benchmark_prices.empty or "close" not in benchmark_prices.columns:
@@ -699,6 +868,45 @@ def evaluate_market_regime(
         f"{light}｜{benchmark_label} 收盤 {close:,.2f}"
         f"（17MA {ma17:,.2f}／45MA {ma45:,.2f}／117MA {ma117:,.2f}／189MA {ma189_text}）— {status}"
     )
+
+    margin_regime: str | None = None
+    recommended_max_exposure_pct: str | None = None
+    recommended_top_picks_cap = 5
+
+    if margin_info and margin_info.get("total_margin_yi") is not None:
+        total_yi = float(margin_info.get("total_margin_yi") or 0.0)
+        chg_1d = float(margin_info.get("margin_chg_1d_yi") or 0.0)
+        chg_5d = float(margin_info.get("margin_chg_5d_yi") or 0.0)
+
+        if light in ("🟡黃燈", "🔴紅燈"):
+            if chg_1d <= -40.0 or chg_5d <= -90.0:
+                margin_regime = "⚡ 融資斷頭宣洩（留意止穩黃金坑）"
+                recommended_max_exposure_pct = "35% ~ 50%"
+                recommended_top_picks_cap = 3
+            elif chg_1d > 0 or chg_5d > -15.0:
+                margin_regime = "🚨 散戶凹單未洗清（提防多殺多斷頭）"
+                recommended_max_exposure_pct = "<= 25%"
+                recommended_top_picks_cap = 2
+            else:
+                margin_regime = "🟢 籌碼逐步沉澱"
+                recommended_max_exposure_pct = "35% ~ 50%"
+                recommended_top_picks_cap = 3
+        else:  # 🟢綠燈
+            if chg_5d >= 80.0:
+                margin_regime = "⚠️ 高檔散戶槓桿過熱"
+                recommended_max_exposure_pct = "50%"
+                recommended_top_picks_cap = 3
+            else:
+                margin_regime = "🟢 籌碼健康"
+                recommended_max_exposure_pct = "70% ~ 80%"
+                recommended_top_picks_cap = 5
+
+        summary += (
+            f"｜💳 大盤融資 {total_yi:,.1f} 億"
+            f"（單日 {chg_1d:+.1f} 億 / 5日 {chg_5d:+.1f} 億｜{margin_regime}）"
+            f"｜🛡️ 建議總持倉上限：{recommended_max_exposure_pct}"
+        )
+
     return {
         "light": light,
         "status": status,
@@ -708,6 +916,10 @@ def evaluate_market_regime(
         "MA45": round(ma45, 2),
         "MA117": round(ma117, 2),
         "MA189": round(ma189, 2) if ma189 is not None else None,
+        "margin_info": dict(margin_info) if margin_info else None,
+        "margin_regime": margin_regime,
+        "recommended_max_exposure_pct": recommended_max_exposure_pct,
+        "recommended_top_picks_cap": recommended_top_picks_cap,
         "summary": summary,
     }
 
@@ -718,6 +930,7 @@ def fetch_or_load_market_regime(
     as_of: date | None = None,
     loader: DataLoader | None = None,
     benchmark_id: str = "0050",
+    margin_info: Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     """優先從當日緩存或本地 prices.csv 讀取大盤紅綠燈，若無則透過 FinMind 抓取 0050 日線並快取。"""
     today = as_of or _today_in_taipei()
@@ -730,9 +943,17 @@ def fetch_or_load_market_regime(
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if isinstance(cached, dict) and cached.get("light") and "MA189" in cached:
-                return cached
+                if "margin_regime" in cached or margin_info is None:
+                    return cached
         except Exception:
             pass
+
+    if margin_info is None:
+        hist_p = daily_directory.parent / ".state" / "market_margin_history.json" if daily_directory else None
+        try:
+            margin_info = fetch_market_margin_snapshot(hist_p, as_of=today)
+        except Exception:
+            margin_info = None
 
     if daily_directory is not None:
         prices_path = daily_directory / f"{today.isoformat()}_prices.csv"
@@ -741,7 +962,7 @@ def fetch_or_load_market_regime(
                 prices_df = pd.read_csv(prices_path, dtype={"stock_id": str})
                 sub = prices_df.loc[prices_df["stock_id"].astype(str).str.strip() == benchmark_id].copy()
                 if not sub.empty:
-                    regime = evaluate_market_regime(sub, benchmark_label=benchmark_id)
+                    regime = evaluate_market_regime(sub, benchmark_label=benchmark_id, margin_info=margin_info)
                     if cache_path is not None:
                         cache_path.write_text(
                             json.dumps(regime, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -755,7 +976,7 @@ def fetch_or_load_market_regime(
             start_date = (pd.Timestamp(today) - pd.DateOffset(months=INDICATOR_HISTORY_MONTHS)).strftime("%Y-%m-%d")
             df = _fetch_stock_prices(loader, benchmark_id, start_date, today.isoformat())
             if not df.empty:
-                regime = evaluate_market_regime(df, benchmark_label=benchmark_id)
+                regime = evaluate_market_regime(df, benchmark_label=benchmark_id, margin_info=margin_info)
                 if cache_path is not None:
                     cache_path.parent.mkdir(parents=True, exist_ok=True)
                     cache_path.write_text(
@@ -765,7 +986,7 @@ def fetch_or_load_market_regime(
         except Exception:
             logger.warning("Failed to fetch market regime benchmark %s", benchmark_id, exc_info=True)
 
-    return evaluate_market_regime(pd.DataFrame(), benchmark_label=benchmark_id)
+    return evaluate_market_regime(pd.DataFrame(), benchmark_label=benchmark_id, margin_info=margin_info)
 
 
 TAXONOMY_CACHE_DEFAULT_PATH = Path("finmind_reports/.state/stock_taxonomy.json")
@@ -1055,7 +1276,7 @@ def format_rebound_report(
     market_regime: Mapping[str, object] | None = None,
     ai_executed: bool = False,
 ) -> list[str]:
-    """格式化 20:50 型態 A（高點急跌回踩長均線反彈）Discord 快報（手機/LINE 雙行卡片版）。"""
+    """格式化型態 A（高點急跌回踩長均線反彈）Discord 快報（手機/LINE 雙行卡片版）。"""
     report_date = (as_of or _today_in_taipei()).isoformat()
     count = len(rebound_signals)
     regime_tag = _format_compact_regime_tag(market_regime)
@@ -2608,7 +2829,7 @@ def sync_rebound_watchlist_to_gsheet(
     tab_name: str = REBOUND_WATCHLIST_SHEET_NAME,
     replace_date: bool = True,
 ) -> int:
-    """將 20:50 型態 A 反彈清單同步寫入 Google Sheets Rebound_Watchlist。"""
+    """將型態 A 反彈清單同步寫入 Google Sheets Rebound_Watchlist。"""
     resolved_credentials = (
         credentials_path
         if credentials_path is not None
@@ -2857,7 +3078,7 @@ def scan_configured_universe(
                     loader=loader,
                     benchmark_id=benchmark_id,
                 )
-            # 若 prices.csv 尚未包含該大盤代號，將大盤基準日線追加至 prices.csv，方便 22:00/22:30 秒級重算
+            # 若 prices.csv 尚未包含該大盤代號，將大盤基準日線追加至 prices.csv，方便後續 AI 嚴選流程秒級重算
             prices_frame = report_files["prices"]
             if not prices_frame.empty and benchmark_id not in prices_frame["stock_id"].astype(str).values:
                 try:
@@ -2991,7 +3212,7 @@ def recalc_signals_from_prices(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """純本地運算：以已存檔的 prices.csv（內含完整均線與成交量）重新套用訊號規則。
 
-    不呼叫 FinMind API；prices.csv 內的 MA3~MA189 為 19:00 以近一年資料算好的值，
+    不呼叫 FinMind API；prices.csv 內的 MA3~MA189 為盤後掃描以近一年資料算好的值，
     因此直接沿用，不在截短後的半年視窗內重算（否則 MA189 會變空值）。
     """
     signals: list[dict[str, object]] = []
@@ -3347,7 +3568,7 @@ def _make_parser() -> argparse.ArgumentParser:
 
     analyze_parser = subparsers.add_parser(
         "analyze-alignment",
-        help="21:00 流程：對當日 alignment_signals 做財報/法說分析並由 AI 嚴選進場標的",
+        help="AI 嚴選流程：對當日 alignment_signals 做財報/法說分析並由 AI 嚴選進場標的",
     )
     analyze_parser.add_argument(
         "--config",
@@ -3381,7 +3602,7 @@ def _make_parser() -> argparse.ArgumentParser:
 
     rebound_parser = subparsers.add_parser(
         "analyze-rebound",
-        help="20:50 流程：執行型態 A（高點回跌回踩長均線反彈）掃描、寫入 Rebound_Watchlist 並彈性決定是否啟動 AI 嚴選",
+        help="型態 A 反彈流程：執行型態 A（高點回跌回踩長均線反彈）掃描、寫入 Rebound_Watchlist 並彈性決定是否啟動 AI 嚴選",
     )
     rebound_parser.add_argument(
         "--config",

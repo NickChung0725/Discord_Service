@@ -4,6 +4,28 @@
 
 ---
 
+## [v5.5.0] - 2026-11-04
+### ✨ 新增功能 (Added)
+* **大盤層級融資籌碼風控整合**：
+  * [`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py) 新增 `fetch_market_margin_snapshot()`，直接串接 TWSE / TPEx 官方免費 OpenAPI 與官方 RWD 備援，不消耗 FinMind 配額，本地自動維護 `finmind_reports/.state/market_margin_history.json` 滾動 30 交易日紀錄。
+  * 升級 `evaluate_market_regime()`：依據大盤均線位階與全市場融資增減判定 `margin_regime`（如 `🚨 散戶凹單未洗清（提防多殺多斷頭）`、`⚡ 融資斷頭宣洩（留意止穩黃金坑）`、`⚠️ 高檔散戶槓桿過熱`、`🟢 籌碼健康`）與建議總資金投入上限 (`recommended_max_exposure_pct`)、動態限制入選檔數。
+* **個股層級 07_Chip_Summary 融資維持率與資法人對作標籤擴充**：
+  * [`quant/fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_config.py) 擴充 `SHEET_SCHEMAS["07_Chip_Summary"]` 7 個新欄位：`margin_balance_lots`、`margin_utilization_pct`、`margin_chg_5d_lots`、`margin_chg_20d_lots`、`short_margin_ratio_pct`、`est_margin_maint_pct`、`chip_quadrant_tag`。
+  * [`quant/fundamental_cache.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_cache.py) 的 `_sync_chip_summary()` 串接 FinMind `TaiwanStockMarginPurchaseShortSale`，精確計算近 20 日融資買進成交量加權成本（VWAP）與估算維持率 (`est_margin_maint_pct`)，並依據法人與融資動態自動分類「資法人對作四象限標籤」。
+* **Stage 0 硬性排雷與 Stage 1/2 Prompt 賦能**：
+  * [`quant/fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_analyzer.py) 的 `get_hard_screen_metrics()` 讀取最新融資數據，`build_hard_warnings()` 新增「主力出貨／散戶接刀硬傷」與「融資維持率逼近 130% 追繳臨界區之斷頭踩踏警戒」硬性排雷；資料卡 [B] 區新增信用籌碼與維持率診斷行。
+  * [`quant/fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_config.py) 的 Stage 1 `full_diagnosis` Step 4 與 Stage 2 `portfolio_selection` Prompt 全面升級，納入融資對作風控與建議持倉水位。
+* **0050 智慧定投恐慌殺融資加碼**：
+  * [`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py) 的 `evaluate_0050_dip_decision()` 與 `run_eval_dca_0050()` 結合大盤融資變化：當大盤融資單日暴減 $\le -40$ 億或 5 日累計暴減 $\le -90$ 億時自動觸發「大盤融資斷頭清洗」加碼訊號（分數 +15，定投倍數逼近 1.5x）。
+* **單元測試套件**：新增 [`tests/test_margin_features.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_margin_features.py) 完整覆蓋大盤融資解析、四象限分類、維持率估算、硬傷警告與 0050 殺融資加碼。
+
+### 🔧 優化與修正 (Changed & Decoupled)
+* **全專案硬編碼排程時間字串徹底解耦**：
+  * 清理 [`quant/alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/alignment_ai_picker.py)、[`quant/fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_analyzer.py)、[`quant/fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_config.py)、[`services/ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/services/ai_service.py)、[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py)、[`taishin/taishin_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin/taishin_config.py)、[`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py) 與 [`taishin/macro_context.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin/macro_context.py) 中殘留之所有硬編碼時間字串（`22:00`、`22:30`、`20:50`、`21:00`、`08:15`、`22:45`、`13:15`、`11:00`、`19:00`），全面改為功能與策略導向描述。
+  * 全系統排程時間集中由 [`discord_service_sasd.md`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/discord_service_sasd.md) 第 2.4 節（Single Source of Truth）與 `systemd` 定時器控制。
+  * 更新 [`tests/test_taishin_nova.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_taishin_nova.py) 之保底定投斷言字串。
+
+---
 ## [v5.4.0] - 2026-11-04
 ### ✨ 新增功能 (Added)
 * **Vertex AI Batch 改用 BigQuery 交換媒介**：[`services/ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/services/ai_service.py) 的 `run_vertex_batch_requests()` 改為每批建立獨立 `vertex_batch_staging.input_{seq}`（`load_table_from_json`）並由 Vertex 寫入 `predictions_{seq}`；新增 `ensure_staging_dataset()`（`default_table_expiration_ms = 432000000`，5 天自動到期）與單表 `expires` 雙重保險。

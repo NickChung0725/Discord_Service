@@ -776,7 +776,7 @@ def backfill_history(
 
 
 # --------------------------------------------------------------------------- #
-# Section 4.2: Daily 11:00 Accounting Sync & AI Holdings Diagnosis (`sync-daily`)
+# Section 4.2: Daily Accounting Sync & AI Holdings Diagnosis (`sync-daily`)
 # --------------------------------------------------------------------------- #
 def load_local_technical_context(
     reports_dir: Path | None = None,
@@ -1215,10 +1215,10 @@ def format_daily_sync_discord_report(
     model_version: str,
     market_regime: Mapping[str, Any],
 ) -> list[str]:
-    """Format the 11:00 personal accounting & AI holdings diagnosis Discord report."""
+    """Format personal accounting & AI holdings diagnosis Discord report."""
     lines: list[str] = []
     light = str(market_regime.get("light") or "🟡黃燈")
-    lines.append(f"🏦 【台新證券 11:00 個人帳務同步與 AI 持股健診】({as_of.isoformat()})")
+    lines.append(f"🏦 【台新證券 個人帳務同步與 AI 持股健診】({as_of.isoformat()})")
     if model_version:
         lines.append(f"🤖 分析模型：{model_version} ｜ 🚦 大盤環境：{light}")
     else:
@@ -1352,7 +1352,7 @@ def sync_daily(
     dry_run: bool = False,
     reports_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Execute the daily 11:00 accounting sync, holdings snapshot, and AI cost-basis diagnosis."""
+    """Execute the daily accounting sync, holdings snapshot, and AI cost-basis diagnosis."""
     today = as_of or _today_in_taipei()
     start_dt = today - timedelta(days=lookback_days)
     now_iso = _now_iso_in_taipei()
@@ -1578,6 +1578,8 @@ def evaluate_0050_dip_decision(
     eval_date: date,
     already_bought_this_week: bool,
     weekly_budget_twd: float = DEFAULT_DCA_0050_WEEKLY_BUDGET_TWD,
+    market_margin_chg_1d_yi: float | None = None,
+    market_margin_chg_5d_yi: float | None = None,
 ) -> dict[str, Any]:
     """Calculate `dip_score` (0~100), determine whether to trigger 0050 DCA buy, and compute share quantity."""
     close_price = _to_float(metrics.get("close_price"), 0.0)
@@ -1610,6 +1612,17 @@ def evaluate_0050_dip_decision(
         triggers.append(f"近10日高點回落({drop_10d_pct:.2f}%>=2.5%)")
         score += min(20, int(round(drop_10d_pct * 5)))
 
+    # v5.5.0 大盤恐慌殺融資加碼觸發
+    if (
+        (market_margin_chg_1d_yi is not None and market_margin_chg_1d_yi <= -40.0)
+        or (market_margin_chg_5d_yi is not None and market_margin_chg_5d_yi <= -90.0)
+    ):
+        if market_margin_chg_1d_yi is not None and market_margin_chg_1d_yi <= -40.0:
+            triggers.append(f"大盤融資斷頭清洗(單日{market_margin_chg_1d_yi:+.0f}億)")
+        else:
+            triggers.append(f"大盤融資斷頭清洗(5日{market_margin_chg_5d_yi:+.0f}億)")
+        score += 15
+
     dip_score = max(0, min(100, score))
     iso_cal = eval_date.isocalendar()
     iso_year_week = f"{iso_cal.year:04d}-W{iso_cal.week:02d}"
@@ -1626,7 +1639,7 @@ def evaluate_0050_dip_decision(
         if triggers:
             trigger_reason = "🎯 週五低點觸發：" + "、".join(triggers)
         else:
-            trigger_reason = "📅 週五 13:15 保底定投（週一至週四未觸發低點）"
+            trigger_reason = "📅 週五保底定投（週一至週四未觸發低點）"
     else:
         trigger_reason = "⏳ 尚未出現低點訊號，持續觀望等待"
 
@@ -1729,7 +1742,7 @@ def eval_dca_0050(
     dry_run: bool = False,
     reports_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Run the 13:15 0050 Smart Weekly DCA evaluation and optional intraday-odd order placement."""
+    """Run the 0050 Smart Weekly DCA evaluation and optional intraday-odd order placement."""
     today = eval_date or _today_in_taipei()
     iso_cal = today.isocalendar()
     iso_year_week = f"{iso_cal.year:04d}-W{iso_cal.week:02d}"
@@ -1754,11 +1767,33 @@ def eval_dca_0050(
         else _check_already_bought_0050_this_week(sheet_mgr, iso_year_week, today)
     )
 
+    # Try to load recent market margin changes from history
+    m_1d, m_5d = None, None
+    m_hist_file = (reports_dir or Path("finmind_reports")) / ".state" / "market_margin_history.json"
+    if m_hist_file.is_file():
+        try:
+            m_hist_data = json.loads(m_hist_file.read_text(encoding="utf-8"))
+            if isinstance(m_hist_data, dict) and m_hist_data:
+                sorted_d = sorted(m_hist_data.keys())
+                today_k = today.isoformat()
+                cur_i = sorted_d.index(today_k) if today_k in sorted_d else len(sorted_d) - 1
+                cur_tot = float(m_hist_data[sorted_d[cur_i]].get("total_margin_yi") or 0.0)
+                if cur_i >= 1:
+                    m_1d = round(cur_tot - float(m_hist_data[sorted_d[cur_i - 1]].get("total_margin_yi") or 0.0), 2)
+                if cur_i >= 5:
+                    m_5d = round(cur_tot - float(m_hist_data[sorted_d[cur_i - 5]].get("total_margin_yi") or 0.0), 2)
+                elif cur_i > 0:
+                    m_5d = round(cur_tot - float(m_hist_data[sorted_d[0]].get("total_margin_yi") or 0.0), 2)
+        except Exception:
+            pass
+
     decision = evaluate_0050_dip_decision(
         metrics,
         eval_date=today,
         already_bought_this_week=already_bought,
         weekly_budget_twd=budget,
+        market_margin_chg_1d_yi=m_1d,
+        market_margin_chg_5d_yi=m_5d,
     )
 
     order_mode = "DRY_RUN"
@@ -1826,7 +1861,7 @@ def eval_dca_0050(
 
 
 # --------------------------------------------------------------------------- #
-# Section 4.4: Position Thesis Memory, Style B Gatekeeper, 22:45 & 08:15 Engine (SASD v5.2.0)
+# Section 4.4: Position Thesis Memory, Style B Gatekeeper, Attribution & Battle Brief Engine
 # --------------------------------------------------------------------------- #
 def extract_first_price(value: Any, default: float = 0.0) -> float:
     """Extract the primary numeric price from free-form text like '1,020 元 (17MA+12%)' or '收盤-4% (95.2元)'.
@@ -2138,7 +2173,7 @@ def match_entry_to_picks(
     Priority:
       1. `AI_Daily_Picks` (`category == "TOP_PICK"`)
       2. `AI_Daily_Picks` (`category == "WATCHLIST"`)
-      3. `Rebound_Watchlist` (20:50 Pattern A)
+      3. `Rebound_Watchlist` (Pattern A Rebound)
 
     Returns `None` if the stock was NOT in any actionable list within the window (e.g. `0050`,
     legacy holdings, or discretionary trades).
@@ -2211,7 +2246,7 @@ def match_entry_to_picks(
         tactical = (
             str(matched.get("tactical_type") or pub_plan.get("tactical_type") or "🎯 短中期波段持有 (5~20日)").strip()
         )
-        thesis = str(matched.get("entry_thesis") or pub_verdict or "依據 22:00 AI 嚴選訊號建倉").strip()
+        thesis = str(matched.get("entry_thesis") or pub_verdict or "依據 AI 嚴選訊號建倉").strip()
         invalidation = str(
             matched.get("risk_note") or pub_plan.get("invalidation") or "跌破關鍵防守均線或基本面轉弱退場"
         ).strip()
@@ -2231,7 +2266,7 @@ def match_entry_to_picks(
             "war_room_url": war_url,
         }
 
-    # 3. Search Rebound_Watchlist (20:50 Pattern A)
+    # 3. Search Rebound_Watchlist (Pattern A Rebound)
     reb_matches: list[tuple[date, dict[str, Any]]] = []
     for row in rebound_watchlist:
         if clean_leading_zero_code(row.get("stock_id", "")) != sno:
@@ -2267,7 +2302,7 @@ def match_entry_to_picks(
             sl = round(support_px * 0.97, 2) if support_px > 0 else round(base_px * 0.95, 2)
 
         thesis = (
-            f"【22:30 型態A反彈】回踩 {support_ma} ({support_px}) 均值回歸，第一目標反壓 17MA ({tp1})"
+            f"【型態A反彈】回踩 {support_ma} ({support_px}) 均值回歸，第一目標反壓 17MA ({tp1})"
             + (f"｜{reb_verdict}" if reb_verdict else "")
         )
         invalidation = str(
@@ -2730,10 +2765,10 @@ def format_memory_sync_discord_report(
     as_of: date,
     events: list[dict[str, Any]],
 ) -> list[str]:
-    """Format concise `22:45` notification when new memory cards are bound or positions change stage."""
+    """Format concise notification when new memory cards are bound or positions change stage."""
     if not events:
         return []
-    lines: list[str] = [f"🌙 【台新 22:45 盤後持股記憶歸因快訊】({as_of.isoformat()})"]
+    lines: list[str] = [f"🌙 【台新 盤後持股記憶歸因快訊】({as_of.isoformat()})"]
     for ev in events:
         etype = ev.get("type")
         sno = ev.get("stock_no")
@@ -2757,7 +2792,7 @@ def format_memory_sync_discord_report(
 
 
 def parse_morning_battle_ai_response(raw_text: str) -> dict[str, Any]:
-    """Extract and normalize JSON output from `08:15` `TAISHIN_MORNING_BATTLE_PROMPT`."""
+    """Extract and normalize JSON output from `TAISHIN_MORNING_BATTLE_PROMPT`."""
     text = (raw_text or "").strip()
     if not text:
         return {"morning_battle_headline": "", "positions": []}
@@ -3026,11 +3061,11 @@ def format_morning_brief_discord_report(
     battle_headline: str,
     model_version: str,
 ) -> list[str]:
-    """Format the `08:15` Pre-Market Battle Plan & Settlement Alert report for Discord."""
+    """Format Pre-Market Battle Plan & Settlement Alert report for Discord."""
     lines: list[str] = []
     tw_light = str(market_regime.get("light") or "🟡黃燈")
     macro_tone = str(macro_context.get("risk_tone") or "🟡 國際中性震盪")
-    lines.append(f"☀️ 【台新證券 08:15 盤前開盤作戰晨報】({as_of.isoformat()})")
+    lines.append(f"☀️ 【台新證券 盤前開盤作戰晨報】({as_of.isoformat()})")
     if model_version:
         lines.append(f"🤖 決策模型：{model_version} ｜ 🚦 台股：{tw_light} ｜ 🌍 國際：{macro_tone}")
     else:
@@ -3269,9 +3304,9 @@ def sync_memory(
     reports_dir: Path | None = None,
     picks_bundle_override: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Execute `22:45` evening sync: match today's buys to recent AI picks & lock `05_Position_Thesis_Memory`."""
+    """Execute evening sync: match today's buys to recent AI picks & lock `05_Position_Thesis_Memory`."""
     today = as_of or _today_in_taipei()
-    print(f"[sync-memory] 正在執行 22:45 盤後成交對帳單同步與嚴選記憶歸因 (基準日: {today.isoformat()})...")
+    print(f"[sync-memory] 正在執行盤後成交對帳單同步與嚴選記憶歸因 (基準日: {today.isoformat()})...")
 
     core = _sync_taishin_core_accounting(
         client=client,
@@ -3304,7 +3339,7 @@ def sync_memory(
             1 for m in updated_memory if str(m.get("status", "")).upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
         )
         messages = [
-            f"🌙 【台新 22:45 盤後持股記憶歸因同步完成】({today.isoformat()})\n"
+            f"🌙 【台新 盤後持股記憶歸因同步完成】({today.isoformat()})\n"
             f"• 今日無新綁定或平倉異動 ｜ 目前追蹤中波段記憶卡：{active_cnt} 檔。"
         ]
 
@@ -3343,9 +3378,9 @@ def run_morning_brief(
     macro_context_override: Mapping[str, Any] | None = None,
     picks_bundle_override: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Execute `08:15` Pre-Market Battle Plan: T+2 settlement check + US/Macro overlay + Style B AI review."""
+    """Execute Pre-Market Battle Plan: T+2 settlement check + US/Macro overlay + Style B AI review."""
     today = as_of or _today_in_taipei()
-    print(f"[morning-brief] 正在執行 08:15 盤前交割預警、隔夜國際盤與持股記憶作戰晨報 (基準日: {today.isoformat()})...")
+    print(f"[morning-brief] 正在執行盤前交割預警、隔夜國際盤與持股記憶作戰晨報 (基準日: {today.isoformat()})...")
 
     core = _sync_taishin_core_accounting(
         client=client,
@@ -3403,7 +3438,7 @@ def run_morning_brief(
             ai_called = True
             updated_memory = [*reviewed_active, *closed_memories]
         except Exception as err:  # noqa: BLE001
-            logger.warning("08:15 Vertex Stage2 AI review failed; applying deterministic gatekeeper fallback: %s", err)
+            logger.warning("Pre-market battle Vertex Stage2 AI review failed; applying deterministic gatekeeper fallback: %s", err)
             battle_headline = f"AI 暫無法連線，已自動套用建倉目標價與棘輪防守硬規則（{err}）。"
     elif not active_memories:
         print("[morning-brief] 目前無命中嚴選記憶卡之未平倉波段股，啟動 0-Token 純 Python 快報模式。")
@@ -3594,20 +3629,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--no-ai", action="store_true", help="僅同步帳務與庫存至 Sheet，不跑 AI 診斷")
     p_sync.add_argument("--no-discord", action="store_true", help="僅寫入 Sheet，不發送 Discord 推播")
 
-    # 5. sync-memory (22:45 Evening Attribution Sync)
+    # 5. sync-memory (Evening Attribution Sync)
     p_mem = subparsers.add_parser(
         "sync-memory",
-        help="週一至週五 22:45 同步當日成交與庫存，自動回查近 5 交易日嚴選榜單建立/更新 05_Position_Thesis_Memory",
+        help="同步當日成交與庫存，自動回查近 5 交易日嚴選榜單建立/更新 05_Position_Thesis_Memory",
     )
     p_mem.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
     p_mem.add_argument("--dry-run", action="store_true", help="僅預覽歸因結果，不寫入 Sheet 亦不發送 Discord")
     p_mem.add_argument("--no-discord", action="store_true", help="不發送 Discord 推播")
     p_mem.add_argument("--force-discord", action="store_true", help="即使今日無新綁定/平倉事件亦強制發送確認訊息")
 
-    # 6. morning-brief (08:15 Pre-Market Battle Plan)
+    # 6. morning-brief (Pre-Market Battle Plan)
     p_morn = subparsers.add_parser(
         "morning-brief",
-        help="週一至週五 08:15 整合今日交割款預警 + 隔夜美股國際盤 + VERTEX_STAGE2_MODEL 嚴選記憶持股開盤作戰建議",
+        help="整合今日交割款預警 + 隔夜美股國際盤 + VERTEX_STAGE2_MODEL 嚴選記憶持股開盤作戰建議",
     )
     p_morn.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
     p_morn.add_argument("--dry-run", action="store_true", help="僅在終端機預覽，不寫入 Sheet 亦不發送 Discord")
@@ -3626,7 +3661,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # 8. eval-dca-0050
     p_dca = subparsers.add_parser(
         "eval-dca-0050",
-        help="週一至週五 13:15 0050 每週不定期定額低點評估",
+        help="0050 每週智慧尋底定投評估",
     )
     p_dca.add_argument("--date", default=None, help="指定評估日期 YYYY-MM-DD（預設今日）")
     p_dca.add_argument("--dry-run", action="store_true", help="僅預覽評估結果，不寫入 Sheet 亦不下單")

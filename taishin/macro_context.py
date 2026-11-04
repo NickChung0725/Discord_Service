@@ -5,7 +5,7 @@ SASD v5.2.0:
 - Fetches overnight US indices (`^SOX`, `^IXIC`, `^GSPC`), key AI/TW bellwethers (`TSM`, `NVDA`),
   risk gauge (`^VIX`), and FX (`TWD=X`) from Yahoo Finance v8 Chart API.
 - Fetches and cleans 48h international macro / semiconductor headlines via Google News RSS.
-- Degrades gracefully on network errors so scheduled `08:15` runs never crash.
+- Degrades gracefully on network errors so scheduled morning-brief runs never crash.
 """
 
 from __future__ import annotations
