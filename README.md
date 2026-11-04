@@ -160,10 +160,12 @@ VERTEX_MODEL=gemini-2.5-flash-lite
 VERTEX_STAGE1_MODEL=gemini-3.8-flash
 VERTEX_STAGE2_MODEL=gemini-2.5-pro
 
-# Vertex AI Batch 與 GCS 設定（SASD v5.3.0：21:00 / 20:50 AI 選股離線批次，50% 折扣）
+# Vertex AI Batch 與 BigQuery 設定（SASD v5.3.0：21:00 / 20:50 AI 選股離線批次，50% 折扣）
 VERTEX_BATCH_ENABLED=true
-GCS_BUCKET_NAME=nickchung_bucket
-GCS_BATCH_PREFIX=vertex_batch
+BQ_STAGING_DATASET=vertex_batch_staging
+BQ_PERM_DATASET=discord_service
+BQ_PERM_TABLE=ai_prompt_logs
+BQ_LOG_ENABLED=true
 VERTEX_BATCH_POLL_SECONDS=60
 VERTEX_BATCH_STAGE1_MODEL=gemini-2.5-flash-lite
 VERTEX_BATCH_STAGE2_MODEL=gemini-2.5-pro
@@ -391,7 +393,7 @@ pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r "C:\path\to
 ## ☁️ Vertex AI Batch 離線批次（SASD v5.3.0）
 
 * 每日 21:00 `analyze-alignment`（及 20:50 `analyze-rebound --run-ai`）的 **Stage 1 單股診斷** 與 **Stage 2 跨股總決策** 預設走 Vertex AI Batch API（50% Token 折扣），免除 `sleep(13s)` 與 429 限流；`/stock_ai`、`/ai`、08:15 晨報仍為即時 API。
-* 流程：FinMind 同步與快取檢查 → 只把 Cache Miss 的股票打包成一份 JSONL 上傳 GCS → 建立 Batch Job 並每 60 秒輪詢 → 解析輸出（以 `custom_id` 對齊）→ 戰情室 / Sheets / Discord。全數命中快取時不會建立 Stage 1 Job。
+* 流程：FinMind 同步與快取檢查 → 只把 Cache Miss 的股票打包成一張專屬 BigQuery `input_{seq}` 暫存表（5 天自動到期）→ 建立 Batch Job（輸出至 `predictions_{seq}`） 並每 60 秒輪詢 → 解析輸出（以 `custom_id` 對齊）（結果同時以免費 Batch Load 歸檔至 `discord_service.ai_prompt_logs`；Online Gemini 呼叫亦會歸檔，可用 `BQ_LOG_ENABLED=false` 關閉）→ 戰情室 / Sheets / Discord。全數命中快取時不會建立 Stage 1 Job。
 * 開關優先序：CLI `--batch/--no-batch` > `finmind_scanner.json`（`ai_picker_use_vertex_batch`、`ai_picker_stage2_use_vertex_batch`、`vertex_batch_poll_interval_seconds`）> `.env` `VERTEX_BATCH_ENABLED`。
 * `deploy/finmind-ai-pick.service`、`deploy/finmind-rebound-ai.service` 已設 `TimeoutStartSec=infinity` 與 `PYTHONUNBUFFERED=1`；本地 JSONL 暫存於 `finmind_reports/.state/batch/`，依 `local_retention_days` 自動清理。
 * 憑證：使用 ADC，自動探測 `GOOGLE_APPLICATION_CREDENTIALS` ➔ `certs/sheetbot.json` ➔ `./sheetbot.json`。

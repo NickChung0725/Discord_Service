@@ -952,7 +952,7 @@ class FundamentalAnalyzer:
         )
         if prep["cached"]:
             return prep["report"]
-        meta = await ask_gemini_diagnosis_with_meta(prep["prompt"], tag=f"stock_diag:{stock_id}", master=master)
+        meta = await ask_gemini_diagnosis_with_meta(prep["prompt"], tag=f"stock_diag:{stock_id}", master=master, task_type="STAGE1_GROUNDING", stock_id=stock_id, custom_id=f"STAGE1_{datetime.now().strftime('%Y%m%d')}_{stock_id}")
         return await self.finalize_diagnosis_from_ai(
             stock_id, prep, meta, publish_war_room=publish_war_room
         )
@@ -968,7 +968,7 @@ class FundamentalAnalyzer:
             + "\n\n"
             + PROMPT_TEMPLATES["targeted_qa"]
         )
-        meta = await ask_gemini_with_meta(prompt, tag=f"stock_qa:{stock_id}")
+        meta = await ask_gemini_with_meta(prompt, tag=f"stock_qa:{stock_id}", task_type="SINGLE_QUERY", stock_id=stock_id, custom_id=f"CMD_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stock_id}")
         return f"分析模型：{meta.model_version}\n" + meta.text
 
     async def render_and_publish_war_room_html(self, stock_id: str, ai_text: str) -> str:

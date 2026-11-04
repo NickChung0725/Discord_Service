@@ -11,6 +11,7 @@ import logging
 import os
 import json
 import re
+from datetime import datetime
 from typing import Literal
 
 import discord
@@ -202,6 +203,9 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                 meta = await ask_vertex_ai_with_meta(
                     combined_prompt,
                     tag=f"stock_compare:{','.join(stock_ids)}",
+                    task_type="SINGLE_QUERY",
+                    stock_id=",".join(stock_ids),
+                    custom_id=f"CMD_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(stock_ids)}",
                     model=get_vertex_stage1_model(),
                 )
                 answer = meta.text
@@ -236,6 +240,9 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                 meta = await ask_vertex_ai_with_meta(
                     combined_prompt,
                     tag=f"stock_qa:{stock_id}",
+                    task_type="SINGLE_QUERY",
+                    stock_id=stock_id,
+                    custom_id=f"CMD_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stock_id}",
                     model=get_vertex_stage1_model(),
                 )
                 answer = f"分析模型：{meta.model_version}\n" + meta.text

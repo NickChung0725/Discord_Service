@@ -1,7 +1,7 @@
 # Discord_Service 系統分析與設計規格書 (SASD)
 
 * **專案名稱**：Discord_Service — 台股量化分析、AI 雙層診斷與台新證券智慧作戰系統
-* **文件版本**：v5.3.0 (Single Source of Truth)
+* **版本**：v5.4.0 (Single Source of Truth)
 * **最後更新日期**：2026-11-04
 * **運行環境**：Google Cloud Platform (GCP Compute Engine) + Linux `systemd` + Python 3.11 (`uv`)
 
@@ -81,7 +81,7 @@
 | **資料抓取緩慢與配額限制** | 建立 **Google Sheets 12 分頁智慧快取架構**，區分季報、月營收與日籌碼之 TTL（存活時間），搭配本地 JSON 快取。 | `quant/fundamental_cache.py` |
 | **產業標準不一（拿電子股標準審金融/營建）** | 建立 **Sub-sector Taxonomy 產業專屬評估引擎**，針對半導體、AI 伺服器、航運、金融、生技、營建等定義專屬關鍵指標與地雷條件。 | `quant/taxonomy_service.py`<br>`quant/fundamental_config.py` |
 | **無效標的浪費 AI Token** | 設計 **兩階段量化守門員（Stage Guards）**，先剔除日均量不足、淨值比異常或財務硬傷標的，僅放行高勝率候選股進入 AI 診斷。 | `finmind_stock_scanner.py`<br>`quant/alignment_ai_picker.py` |
-| **批次選股 API 逾時與高成本** | 將診斷流程拆解為 `prepare_diagnosis_context()` 與 `finalize_diagnosis_from_ai()`，導入 **Vertex AI Batch API + GCS JSONL** 離線非同步推論。 | `services/ai_service.py`<br>`quant/fundamental_analyzer.py` |
+| **批次選股 API 逾時與高成本** | 將診斷流程拆解為 `prepare_diagnosis_context()` 與 `finalize_diagnosis_from_ai()`，導入 **Vertex AI Batch API + BigQuery（input_/predictions_ 暫存表）** 離線非同步推論。 | `services/ai_service.py`<br>`quant/fundamental_analyzer.py` |
 | **散戶凹單與停利過早** | 設計 **05_Position_Thesis_Memory 建倉記憶庫**，強制錨定初始 TP/SL，並實作 **風格 B（觸及 TP1 賣一半 + 單向棘輪移動停利）**。 | `taishin_portfolio_service.py`<br>`taishin/taishin_config.py` |
 | **缺乏長線保護與國際視野** | 全面納入 **189MA（長線多空線）** 監控，並於盤前自動抓取費半、TSM ADR、NVDA、VIX、匯率計算 **Macro Regime**。 | `taishin/macro_context.py`<br>`finmind_stock_scanner.py` |
 
@@ -111,7 +111,7 @@ graph TB
 
     subgraph AI_Layer["Google AI 與雲端批次層"]
         GEMINI["Gemini Online API<br/>(Stage 1 Search Grounding / 單股即時診斷)"]
-        GCS["Google Cloud Storage<br/>(Batch JSONL 任務交換區)"]
+        GCS["BigQuery vertex_batch_staging<br/>(input_/predictions_ 5 天到期)"]
         VERTEX["Vertex AI Batch API<br/>(離線批次大規模推論)"]
     end
 
@@ -211,7 +211,7 @@ sequenceDiagram
     Core->>Core: 儲存 {date}_market_regime.json 與候選股池
     Timer->>Core: 20:50 型態A反彈選股 / 21:00 均線順勢選股
     Core->>Cache: Stage Guards 過濾後，讀取/回補 12 分頁基本面快取
-    Core->>AI: 打包多股 Context 為 JSONL 上傳 GCS，呼叫 Vertex AI Batch API
+    Core->>AI: 打包多股 Context 為 JSONL 寫入 BigQuery input 表，呼叫 Vertex AI Batch API
     AI-->>Core: 非同步輪詢完成，依 custom_id 解析雙層財報診斷結果
     Core->>Cache: 回寫診斷結果至 12_AI_Diagnosis_Cache
     Core->>DC: 產生 Plotly 互動圖表上傳 GitHub Pages，推播 AI 嚴選報告
@@ -260,8 +260,8 @@ flowchart TD
    * 若需要更新法說會指引（Stage 1），先透過具備 Google Search Grounding 的輕量模型萃取最新法說展望並快取至 `11_Guidance_Claims`。
    * 組裝完整的基本面、籌碼面與技術面數據，生成標準化的 Stage 2 Prompt 與唯一識別碼 `custom_id`（格式如 `diag_{date}_{stock_id}`）。
 2. **批次提交與輪詢階段 (`run_vertex_batch_requests`)**：
-   * 將所有候選股的請求序列化為 JSONL 格式，自動上傳至指定的 GCS Bucket（`gs://{bucket}/batch_inputs/...`）。
-   * 呼叫 Vertex AI Batch Prediction Job 提交任務，系統以非同步輪詢（Polling）監控任務狀態，完成後自 GCS 下載輸出 JSONL。
+   * 將所有候選股的請求寫入專屬 BigQuery 輸入表（`bq://{project}.vertex_batch_staging.input_{seq}`，5 天自動到期）。
+   * 呼叫 Vertex AI Batch Prediction Job 提交任務，系統以非同步輪詢（Polling）監控任務狀態，完成後讀取 BigQuery `predictions_{seq}` 輸出表，並以免費 Batch Load 歸檔至 `discord_service.ai_prompt_logs`。
 3. **結果回填與快取階段 (`finalize_diagnosis_from_ai`)**：
    * 依據 `custom_id` 將 AI 回傳的 JSON 解析並套用產業專屬分數微調與風控降級規則（例如：若公司宣稱樂觀但數據背離，強制將 Verdict 標記為「吹噓」或「待驗證」）。
    * 寫入 `12_AI_Diagnosis_Cache` 與本地 `YYYY-MM-DD_ai_calls.log`。
@@ -391,7 +391,7 @@ flowchart TD
 ### 5.1 API 與 AI 運算成本效益
 
 1. **Vertex AI Batch API 節省 50% 推論費用**：
-   * 每日 20:50 與 21:00 選股排程改由 GCS + Vertex AI Batch 執行，相較於即時 Online API，直接降低 $50\%$ 的 Token 計費成本，且完全消除盤後大量併發請求造成的 `429 Resource Exhausted` 錯誤。
+   * 每日 20:50 與 21:00 選股排程改由 BigQuery + Vertex AI Batch 執行，相較於即時 Online API，直接降低 $50\%$ 的 Token 計費成本，且完全消除盤後大量併發請求造成的 `429 Resource Exhausted` 錯誤。
 2. **兩階段 Pre-filter 與 12 分頁快取攔截 75% 以上無效消耗**：
    * 全市場約 1,800 檔股票經技術面初篩與 `StageGuards` 基本面硬傷過濾後，每日僅約 $10 \sim 25$ 檔高價值標的進入 AI 深度診斷；加上季報與月營收採用 Google Sheets 分頁快取，FinMind API 每日呼叫次數控制在安全配額內。
 
@@ -417,6 +417,7 @@ flowchart TD
 
 | 版本號 | 發布日期 | 核心架構決策與改版重點 (Key Changes & ADRs) | 影響模組 |
 | :--- | :--- | :--- | :--- |
+| **v5.4.0** | 2026-11-04 | 1. **Vertex AI Batch 改用 BigQuery 交換媒介**：每批獨立 `input_{seq}` / `predictions_{seq}` 暫存表（`vertex_batch_staging`，5 天自動到期），移除 GCS 依賴。<br/>2. **AI 日誌集中化**：Batch 與 Online Gemini 呼叫皆以免費 `load_table_from_json` 寫入 `discord_service.ai_prompt_logs`（失敗只記 Warning，不中斷主流程）。 | `services/ai_service.py`<br>`quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`taishin_portfolio_service.py`<br>`services/stock_ai_command.py` |
 | **v5.3.0** | 2026-11-03 | 1. **導入 Vertex AI Batch API 離線批次架構**：將 20:50 反彈與 21:00 順勢選股改為打包 JSONL 上傳 GCS 非同步推論，並將 `fundamental_analyzer.py` 拆分為 `prepare_diagnosis_context()` 與 `finalize_diagnosis_from_ai()`。<br/>2. **全面整合 189MA 長天期均線**：大盤紅綠燈快取 (`evaluate_market_regime`) 與台新持股表 (`02_Portfolio_Holdings`)、AI 晨報/健診 Prompt 全面補齊 `MA189`。 | `services/ai_service.py`<br>`quant/fundamental_analyzer.py`<br>`quant/alignment_ai_picker.py`<br>`finmind_stock_scanner.py`<br>`taishin_portfolio_service.py` |
 | **v5.2.x** | 2026-10 | 1. **台新開盤作戰晨報與建倉記憶庫上線**：新增 `05_Position_Thesis_Memory`，實作「風格 B（TP1 調節 50% + 單向棘輪移動停利）」。<br/>2. **整合隔夜美股總經 (`macro_context.py`)**：盤前自動抓取費半、TSM ADR、NVDA、VIX、匯率判定 `RISK_ON / NEUTRAL / RISK_OFF`。 | `taishin_portfolio_service.py`<br>`taishin/macro_context.py`<br>`taishin/taishin_config.py` |
 | **v5.1.x** | 2026-09 | 1. **次產業專屬財報規則 (`SubSectorRules`) 與兩階段 Pre-filter (`StageGuards`)**：解決不同產業財報標準差異，並在呼叫 AI 前攔截流動性不足與財務硬傷股。<br/>2. **擴充型態 A 跌深反彈選股 (`finmind-rebound-ai.timer`)**。 | `quant/taxonomy_service.py`<br>`quant/fundamental_config.py`<br>`quant/alignment_ai_picker.py` |

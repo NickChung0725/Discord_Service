@@ -4,6 +4,17 @@
 
 ---
 
+## [v5.4.0] - 2026-11-04
+### ✨ 新增功能 (Added)
+* **Vertex AI Batch 改用 BigQuery 交換媒介**：[`services/ai_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/services/ai_service.py) 的 `run_vertex_batch_requests()` 改為每批建立獨立 `vertex_batch_staging.input_{seq}`（`load_table_from_json`）並由 Vertex 寫入 `predictions_{seq}`；新增 `ensure_staging_dataset()`（`default_table_expiration_ms = 432000000`，5 天自動到期）與單表 `expires` 雙重保險。
+* **AI 日誌集中化**：新增 `extract_prompt_log_record()`、`save_to_permanent_logs()`；Batch（`VERTEX_BATCH`）與 Online（`ONLINE_GEMINI`，背景執行緒、非阻塞）呼叫皆以免費 Batch Load 追加至 `discord_service.ai_prompt_logs`，失敗僅記 Warning。
+* `ask_gemini_with_meta` / `ask_gemini_diagnosis_with_meta` / `ask_vertex_ai_with_meta` 新增選填 `task_type`、`stock_id`、`custom_id`；[`fundamental_analyzer.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_analyzer.py)、[`taishin_portfolio_service.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin_portfolio_service.py)、[`stock_ai_command.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/services/stock_ai_command.py)、[`alignment_ai_picker.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/alignment_ai_picker.py) 已傳入對應 metadata。
+* `.env` 新增 `BQ_STAGING_DATASET`、`BQ_PERM_DATASET`、`BQ_PERM_TABLE`、`BQ_LOG_ENABLED`。
+### 🔧 優化與修正 (Changed)
+* 移除 `GCS_BUCKET_NAME` / `GCS_BATCH_PREFIX` 與 `google.cloud.storage` 依賴；`pyproject.toml` 以 `google-cloud-bigquery>=3.0.0` 取代 `google-cloud-storage`。
+* [`tests/test_vertex_batch.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/tests/test_vertex_batch.py) 改寫為 BigQuery / genai Mock 測試。
+
+---
 ## [v5.3.0] - 2026-11-03
 ### 🔧 優化與修正 (Fixed)
 * **大盤紅綠燈快取補上 189MA**：[`finmind_stock_scanner.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/finmind_stock_scanner.py) 的 `evaluate_market_regime()` 原本只計算並儲存 17/45/117MA，現在 `{date}_market_regime.json` 與 summary 都會包含 `MA189`（資料不足時為 null / 顯示「資料不足」）；舊快取缺少 `MA189` 時會自動重新計算。

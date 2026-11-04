@@ -1196,7 +1196,7 @@ async def run_portfolio_ai_diagnosis(
         recent_trades_summary="\n".join(recent_trades_lines) if recent_trades_lines else "近期無交易紀錄",
     )
 
-    ai_resp = await ask_gemini_diagnosis_with_meta(prompt, tag="taishin_portfolio_diagnosis")
+    ai_resp = await ask_gemini_diagnosis_with_meta(prompt, tag="taishin_portfolio_diagnosis", task_type="THESIS_SYNC", stock_id="PORTFOLIO", custom_id=f"THESIS_{datetime.now().strftime('%Y%m%d')}_PORTFOLIO")
     parsed = parse_portfolio_ai_response(ai_resp.text)
     enriched_rows = apply_ai_diagnosis_to_holdings(holdings_rows, parsed)
     overview = parsed.get("portfolio_overview") or "已完成持股成本安全墊與均線位階診斷。"
@@ -2934,7 +2934,7 @@ async def run_morning_battle_ai_review(
     )
 
     stage2_model = get_vertex_stage2_model()
-    ai_resp = await ask_vertex_ai_with_meta(prompt, model=stage2_model, tag="taishin_morning_brief")
+    ai_resp = await ask_vertex_ai_with_meta(prompt, model=stage2_model, tag="taishin_morning_brief", task_type="MORNING_BRIEF", stock_id="PORTFOLIO", custom_id=f"MORNING_BRIEF_{datetime.now().strftime('%Y%m%d')}")
     parsed = parse_morning_battle_ai_response(ai_resp.text)
 
     by_pid: dict[str, dict[str, Any]] = {}

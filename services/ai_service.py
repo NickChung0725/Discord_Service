@@ -23,6 +23,7 @@ import re
 import threading
 import time
 from typing import Any
+import uuid
 
 import discord
 from discord import app_commands
@@ -52,7 +53,8 @@ class AIResponse:
 
 DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 DEFAULT_VERTEX_MODEL = "gemini-2.5-flash-lite"
-DEFAULT_VERTEX_LOCATION = "us-central1"
+DEFAULT_VERTEX_LOCATION = "global"
+DEFAULT_BQ_LOCATION = "us-central1"
 
 GOOGLE_AI_THINKING_BUDGET = 128
 GOOGLE_AI_HTTP_TIMEOUT_MS = 300_000
@@ -502,6 +504,9 @@ async def ask_gemini_with_meta(
     retry_delays_seconds: tuple[float, ...] = _TRANSIENT_RETRY_DELAYS_SECONDS,
     fallback_retry_delays_seconds: tuple[float, ...] = _TRANSIENT_RETRY_DELAYS_SECONDS,
     retryable_predicate: Any = _is_retryable_gemini_error,
+    task_type: str | None = None,
+    stock_id: str | None = None,
+    custom_id: str | None = None,
 ) -> AIResponse:
     """Ask Google AI Studio and return full response metadata.
 
@@ -543,6 +548,16 @@ async def ask_gemini_with_meta(
                     error=error,
                 )
             )
+            if error is None:
+                _archive_online_call(
+                    prompt=prompt,
+                    meta=meta,
+                    elapsed_ms=elapsed_ms,
+                    tag=tag,
+                    task_type=task_type,
+                    stock_id=stock_id,
+                    custom_id=custom_id,
+                )
             if error is not None:
                 raise error
             return meta
@@ -631,6 +646,9 @@ async def ask_gemini_diagnosis_with_meta(
     *,
     tag: str | None = None,
     master: bool = False,
+    task_type: str | None = None,
+    stock_id: str | None = None,
+    custom_id: str | None = None,
 ) -> AIResponse:
     """Stage 1 單股診斷。
 
@@ -642,7 +660,14 @@ async def ask_gemini_diagnosis_with_meta(
 
     vertex_stage1_model = get_vertex_stage1_model()
     if master:
-        return await ask_vertex_ai_with_meta(prompt, tag=tag, model=vertex_stage1_model)
+        return await ask_vertex_ai_with_meta(
+            prompt,
+            tag=tag,
+            model=vertex_stage1_model,
+            task_type=task_type,
+            stock_id=stock_id,
+            custom_id=custom_id,
+        )
 
     try:
         return await ask_gemini_with_meta(
@@ -653,6 +678,9 @@ async def ask_gemini_diagnosis_with_meta(
             retry_delays_seconds=DIAG_PRIMARY_RETRY_DELAYS_SECONDS,
             fallback_retry_delays_seconds=DIAG_FALLBACK_RETRY_DELAYS_SECONDS,
             retryable_predicate=_is_diag_retryable_error,
+            task_type=task_type,
+            stock_id=stock_id,
+            custom_id=custom_id,
         )
     except Exception as error:  # noqa: BLE001
         logger.warning(
@@ -660,7 +688,14 @@ async def ask_gemini_diagnosis_with_meta(
             vertex_stage1_model,
             error,
         )
-        return await ask_vertex_ai_with_meta(prompt, tag=tag, model=vertex_stage1_model)
+        return await ask_vertex_ai_with_meta(
+            prompt,
+            tag=tag,
+            model=vertex_stage1_model,
+            task_type=task_type,
+            stock_id=stock_id,
+            custom_id=custom_id,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -700,9 +735,27 @@ def get_vertex_stage2_model() -> str:
     ).strip()
 
 
+def get_vertex_location() -> str:
+    """Return Vertex AI endpoint location (e.g. 'global' or 'us-central1')."""
+    return (
+        os.getenv("VERTEX_LOCATION")
+        or os.getenv("GOOGLE_CLOUD_LOCATION")
+        or DEFAULT_VERTEX_LOCATION
+    ).strip()
+
+
+def get_bq_location() -> str:
+    """Return BigQuery location for dataset creation and queries."""
+    return (
+        os.getenv("BQ_LOCATION")
+        or os.getenv("GOOGLE_CLOUD_LOCATION")
+        or DEFAULT_BQ_LOCATION
+    ).strip()
+
+
 def _call_vertex_ai_once(prompt: str, *, model: str | None = None) -> AIResponse:
     project_id = (os.getenv("GOOGLE_CLOUD_PROJECT_ID") or "").strip()
-    location = (os.getenv("GOOGLE_CLOUD_LOCATION") or DEFAULT_VERTEX_LOCATION).strip()
+    location = get_vertex_location()
     vertex_api_key = (os.getenv("VERTEX_API_KEY") or "").strip() or None
 
     if not project_id:
@@ -862,6 +915,9 @@ async def ask_vertex_ai_with_meta(
     *,
     tag: str | None = None,
     model: str | None = None,
+    task_type: str | None = None,
+    stock_id: str | None = None,
+    custom_id: str | None = None,
 ) -> AIResponse:
     """Ask Vertex AI and return response metadata; never falls back to Google AI Studio."""
 
@@ -905,6 +961,15 @@ async def ask_vertex_ai_with_meta(
                         error=None,
                     )
                 )
+                _archive_online_call(
+                    prompt=prompt,
+                    meta=meta,
+                    elapsed_ms=elapsed_ms,
+                    tag=tag,
+                    task_type=task_type,
+                    stock_id=stock_id,
+                    custom_id=custom_id,
+                )
                 return meta
             except MissingVertexConfigError:
                 raise
@@ -945,12 +1010,16 @@ async def ask_vertex_ai_with_meta(
 
 
 # --------------------------------------------------------------------------- #
-# 2b. Vertex AI Batch Prediction (SASD v5.3.0: 21:00 / 20:50 offline batch, 50% discount)
+# 2b. Vertex AI Batch Prediction (SASD v5.4.0: BigQuery staging, 50% discount)
+#     + centralized BigQuery AI prompt log (ai_prompt_logs)
 # --------------------------------------------------------------------------- #
 AiCallResult = AIResponse
 
-DEFAULT_GCS_BUCKET_NAME = "nickchung_bucket"
-DEFAULT_GCS_BATCH_PREFIX = "vertex_batch"
+DEFAULT_BQ_STAGING_DATASET = "vertex_batch_staging"
+DEFAULT_BQ_PERM_DATASET = "discord_service"
+DEFAULT_BQ_PERM_TABLE = "ai_prompt_logs"
+STAGING_TABLE_EXPIRATION_DAYS = 5
+STAGING_TABLE_EXPIRATION_MS = STAGING_TABLE_EXPIRATION_DAYS * 24 * 60 * 60 * 1000  # 432,000,000
 _BATCH_FAILED_STATES = ("JOB_STATE_FAILED", "JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED")
 
 
@@ -975,6 +1044,15 @@ def is_vertex_batch_enabled(config_override: bool | None = None) -> bool:
     return raw not in ("0", "false", "no", "off", "")
 
 
+def get_vertex_batch_location() -> str:
+    """Return Vertex AI Batch endpoint location (defaults to 'global' for full model availability)."""
+    return (
+        os.getenv("VERTEX_BATCH_LOCATION")
+        or os.getenv("VERTEX_LOCATION")
+        or DEFAULT_VERTEX_LOCATION
+    ).strip()
+
+
 def get_vertex_batch_stage1_model() -> str:
     return (
         os.getenv("VERTEX_BATCH_STAGE1_MODEL")
@@ -994,16 +1072,16 @@ def get_vertex_batch_stage2_model() -> str:
     ).strip()
 
 
-def get_gcs_bucket_name() -> str:
-    return (os.getenv("GCS_BUCKET_NAME") or DEFAULT_GCS_BUCKET_NAME).strip()
+def get_bq_staging_dataset() -> str:
+    return (os.getenv("BQ_STAGING_DATASET") or DEFAULT_BQ_STAGING_DATASET).strip()
 
 
-def get_gcs_batch_prefix() -> str:
-    return (os.getenv("GCS_BATCH_PREFIX") or DEFAULT_GCS_BATCH_PREFIX).strip().strip("/")
+def get_bq_perm_dataset() -> str:
+    return (os.getenv("BQ_PERM_DATASET") or DEFAULT_BQ_PERM_DATASET).strip()
 
 
-def _batch_local_dir() -> Path:
-    return _finmind_reports_dir() / ".state" / "batch"
+def get_bq_perm_table() -> str:
+    return (os.getenv("BQ_PERM_TABLE") or DEFAULT_BQ_PERM_TABLE).strip()
 
 
 def _batch_extract_text(response: Any) -> str:
@@ -1016,44 +1094,382 @@ def _batch_extract_text(response: Any) -> str:
     return "".join(str(p.get("text", "")) for p in parts if isinstance(p, dict))
 
 
-def _gcs_upload_file(project_id: str, bucket_name: str, blob_name: str, local_path: Path) -> None:
-    from google.cloud import storage
+def ensure_staging_dataset(bq_client: Any, project_id: str, dataset_id: str, location: str) -> Any:
+    """確保 vertex_batch_staging 資料集存在，並鎖定 5 天自動銷毀屬性。"""
+    from google.cloud import bigquery
 
-    client = storage.Client(project=project_id or None)
-    client.bucket(bucket_name).blob(blob_name).upload_from_filename(str(local_path))
-
-
-def _gcs_download_outputs(project_id: str, output_uri: str) -> list[str]:
-    """Return text lines of every non-input .jsonl blob under the output prefix."""
-    from google.cloud import storage
-
-    if not output_uri.startswith("gs://"):
-        raise RuntimeError(f"Unsupported GCS output uri: {output_uri}")
-    bucket_name, _, prefix = output_uri[len("gs://"):].partition("/")
-    client = storage.Client(project=project_id or None)
-    lines: list[str] = []
-    for blob in client.list_blobs(bucket_name, prefix=prefix):
-        name = str(getattr(blob, "name", ""))
-        if not name.endswith(".jsonl") or "inputs" in name:
-            continue
-        data = blob.download_as_text(encoding="utf-8") if hasattr(blob, "download_as_text") else blob.download_as_bytes().decode("utf-8")
-        lines.extend(line for line in data.splitlines() if line.strip())
-    return lines
-
-
-def _resolve_batch_output_uri(job: Any, fallback: str) -> str:
-    info = getattr(job, "output_info", None) if hasattr(job, "output_info") else None
-    if info:
-        uri = getattr(info, "gcs_output_directory", None)
-        if isinstance(uri, str) and uri:
-            return uri
+    dataset_ref = bigquery.DatasetReference(project_id, dataset_id)
     try:
-        uri = getattr(job.output.gcs_destination, "output_uri_prefix", None)
+        dataset = bq_client.get_dataset(dataset_ref)
+        if dataset.default_table_expiration_ms != STAGING_TABLE_EXPIRATION_MS:
+            dataset.default_table_expiration_ms = STAGING_TABLE_EXPIRATION_MS
+            dataset = bq_client.update_dataset(dataset, ["default_table_expiration_ms"])
+    except Exception:  # noqa: BLE001  (NotFound or transient → try to create)
+        dataset = bigquery.Dataset(dataset_ref)
+        dataset.location = location
+        dataset.default_table_expiration_ms = STAGING_TABLE_EXPIRATION_MS
+        dataset = bq_client.create_dataset(dataset, exists_ok=True)
+    return dataset
+
+
+def extract_prompt_log_record(
+    row: dict,
+    duration_sec: float,
+    created_at: datetime,
+    default_model: str,
+    call_mode: str = "VERTEX_BATCH",
+) -> dict:
+    """精準對齊 discord_service.ai_prompt_logs 13 個欄位結構。"""
+    request_raw = row.get("request", {})
+    if isinstance(request_raw, str):
+        try:
+            request_obj = json.loads(request_raw)
+        except Exception:  # noqa: BLE001
+            request_obj = {}
+    else:
+        request_obj = request_raw or {}
+    if not isinstance(request_obj, dict):
+        request_obj = {}
+
+    if row.get("prompt_text"):
+        prompt_text = str(row["prompt_text"])
+    else:
+        prompt_text_parts: list[str] = []
+        for content in request_obj.get("contents", []) or []:
+            for part in (content or {}).get("parts", []) or []:
+                if isinstance(part, dict) and "text" in part:
+                    prompt_text_parts.append(part["text"])
+        prompt_text = "\n".join(prompt_text_parts)
+
+    response_raw_val = row.get("response", {})
+    if isinstance(response_raw_val, str):
+        try:
+            response_obj = json.loads(response_raw_val)
+        except Exception:  # noqa: BLE001
+            response_obj = {}
+        response_raw_str = response_raw_val
+    else:
+        response_obj = response_raw_val or {}
+        response_raw_str = json.dumps(response_obj, ensure_ascii=False, default=str)
+    if not isinstance(response_obj, dict):
+        response_obj = {}
+
+    candidates = response_obj.get("candidates") or []
+    resp_text_parts: list[str] = []
+    if candidates and isinstance(candidates, list):
+        first_candidate = candidates[0]
+        content_obj = first_candidate.get("content") or {}
+        for p in content_obj.get("parts") or []:
+            if isinstance(p, dict) and "text" in p:
+                resp_text_parts.append(p["text"])
+    response_text = "\n".join(resp_text_parts)
+    if not response_text and row.get("response_text"):
+        response_text = str(row["response_text"])
+
+    usage = response_obj.get("usageMetadata") or {}
+    prompt_tokens = int(usage.get("promptTokenCount") or row.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("candidatesTokenCount") or row.get("completion_tokens") or 0)
+    total_tokens = int(usage.get("totalTokenCount") or (prompt_tokens + completion_tokens))
+    model_name = str(response_obj.get("modelVersion") or row.get("model_name") or default_model)
+
+    return {
+        "custom_id": str(row.get("custom_id") or "UNKNOWN"),
+        "created_at": created_at.isoformat(),
+        "call_mode": call_mode,
+        "task_type": str(row.get("task_type") or "STAGE2_DIAGNOSIS"),
+        "stock_id": str(row.get("stock_id") or "UNKNOWN"),
+        "model_name": model_name,
+        "duration_sec": round(float(duration_sec), 2),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "prompt_text": prompt_text,
+        "response_text": response_text,
+        "response_raw": response_raw_str,
+    }
+
+
+def save_to_permanent_logs(bq_client: Any, project_id: str, records: list[dict]) -> float:
+    """透過免費 Batch Load Job（嚴禁 insert_rows_json）將紀錄追加至永久日誌表；失敗只記 Warning。"""
+    if not records:
+        return 0.0
+    from google.cloud import bigquery
+
+    t_start = time.perf_counter()
+    full_table_id = f"{project_id}.{get_bq_perm_dataset()}.{get_bq_perm_table()}"
+    try:
+        job_config = bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_APPEND)
+        load_job = bq_client.load_table_from_json(records, full_table_id, job_config=job_config)
+        load_job.result()
+    except Exception as exc:  # noqa: BLE001  (non-blocking telemetry)
+        logger.warning("寫入 BigQuery 永久日誌表失敗: %s", exc)
+    return time.perf_counter() - t_start
+
+
+def _bq_logging_enabled() -> bool:
+    raw = (os.getenv("BQ_LOG_ENABLED") or "true").strip().lower()
+    return raw not in ("0", "false", "no", "off", "")
+
+
+def _infer_stock_id_from_tag(tag: str | None) -> str:
+    if tag and ":" in tag:
+        tail = tag.rsplit(":", 1)[-1].strip()
+        if tail:
+            return tail
+    return "UNKNOWN"
+
+
+def _archive_online_call_sync(
+    *,
+    prompt: str,
+    meta: AIResponse,
+    elapsed_sec: float,
+    tag: str | None,
+    task_type: str | None,
+    stock_id: str | None,
+    custom_id: str | None,
+) -> None:
+    try:
+        from google.cloud import bigquery
+
+        _ensure_gcp_credentials_env()
+        project_id = (os.getenv("GOOGLE_CLOUD_PROJECT_ID") or "").strip()
+        if not project_id:
+            return
+        bq_location = get_bq_location()
+        now_utc = datetime.now(timezone.utc)
+        prompt_tokens = int(meta.prompt_tokens or 0)
+        completion_tokens = int(meta.output_tokens or 0)
+        record = {
+            "custom_id": custom_id or f"ONLINE_{now_utc.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}",
+            "created_at": now_utc.isoformat(),
+            "call_mode": "ONLINE_GEMINI",
+            "task_type": task_type or (tag.split(":", 1)[0] if tag else "ONLINE_QUERY"),
+            "stock_id": stock_id or _infer_stock_id_from_tag(tag),
+            "model_name": meta.model_version or meta.requested_model,
+            "duration_sec": round(float(elapsed_sec), 2),
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "prompt_text": prompt,
+            "response_text": meta.text,
+            "response_raw": json.dumps(
+                {
+                    "provider": meta.provider,
+                    "modelVersion": meta.model_version,
+                    "text": meta.text,
+                    "usageMetadata": {
+                        "promptTokenCount": prompt_tokens,
+                        "candidatesTokenCount": completion_tokens,
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        }
+        bq_client = bigquery.Client(project=project_id, location=bq_location)
+        save_to_permanent_logs(bq_client, project_id, [record])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Online AI 呼叫歸檔至 BigQuery 失敗: %s", exc)
+
+
+def _archive_online_call(
+    *,
+    prompt: str,
+    meta: AIResponse,
+    elapsed_ms: int,
+    tag: str | None = None,
+    task_type: str | None = None,
+    stock_id: str | None = None,
+    custom_id: str | None = None,
+) -> None:
+    """Fire-and-forget archive of one ONLINE_GEMINI call; never blocks nor raises."""
+    if not _bq_logging_enabled():
+        return
+    try:
+        threading.Thread(
+            target=_archive_online_call_sync,
+            kwargs={
+                "prompt": prompt,
+                "meta": meta,
+                "elapsed_sec": elapsed_ms / 1000.0,
+                "tag": tag,
+                "task_type": task_type,
+                "stock_id": stock_id,
+                "custom_id": custom_id,
+            },
+            daemon=True,
+        ).start()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("無法啟動 BigQuery 歸檔執行緒: %s", exc)
+
+
+def _run_vertex_batch_sync(
+    requests_map: Mapping[str, str],
+    *,
+    target_model: str,
+    job_prefix: str,
+    poll_interval_seconds: float,
+    temperature: float | None,
+    task_type: str,
+    stock_ids: Mapping[str, str] | None,
+    timeout_seconds: float,
+) -> dict[str, dict]:
+    """Blocking BigQuery-backed Vertex batch run. Returns {custom_id: perm-log record}."""
+    from google.cloud import bigquery
+    from google.genai.types import CreateBatchJobConfig
+
+    _ensure_gcp_credentials_env()
+    project_id = (os.getenv("GOOGLE_CLOUD_PROJECT_ID") or "").strip()
+    if not project_id:
+        raise MissingVertexConfigError("GOOGLE_CLOUD_PROJECT_ID is not configured.")
+    bq_location = get_bq_location()
+    batch_location = get_vertex_batch_location()
+    staging_dataset = get_bq_staging_dataset()
+
+    job_seq_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
+    input_table_id = f"input_{job_seq_id}"
+    output_table_id = f"predictions_{job_seq_id}"
+
+    bq_client = bigquery.Client(project=project_id, location=bq_location)
+    ai_client = genai.Client(vertexai=True, project=project_id, location=batch_location)
+
+    # --- Stage 1: dedicated input table (WRITE_TRUNCATE batch load, free) ---
+    ensure_staging_dataset(bq_client, project_id, staging_dataset, bq_location)
+    input_table_ref = bigquery.TableReference(
+        bigquery.DatasetReference(project_id, staging_dataset), input_table_id
+    )
+    schema = [
+        bigquery.SchemaField("custom_id", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("stock_id", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("task_type", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("request", "STRING", mode="REQUIRED"),
+    ]
+    rows_to_load: list[dict] = []
+    custom_id_meta: dict[str, dict[str, str]] = {}
+    for custom_id, prompt in requests_map.items():
+        cid = str(custom_id)
+        sid = str((stock_ids or {}).get(cid) or cid)
+        req_dict: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+        if temperature is not None:
+            req_dict["generationConfig"] = {"temperature": temperature}
+        custom_id_meta[cid] = {"stock_id": sid, "task_type": task_type}
+        rows_to_load.append(
+            {
+                "custom_id": cid,
+                "stock_id": sid,
+                "task_type": task_type,
+                "request": json.dumps(req_dict, ensure_ascii=False),
+            }
+        )
+
+    load_cfg = bigquery.LoadJobConfig(
+        schema=schema, write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE
+    )
+    bq_client.load_table_from_json(rows_to_load, input_table_ref, job_config=load_cfg).result()
+
+    # Explicit 5-day expiry (double insurance on top of dataset default).
+    tbl = bq_client.get_table(input_table_ref)
+    tbl.expires = datetime.now(timezone.utc) + timedelta(days=STAGING_TABLE_EXPIRATION_DAYS)
+    bq_client.update_table(tbl, ["expires"])
+
+    bq_input_uri = f"bq://{project_id}.{staging_dataset}.{input_table_id}"
+    bq_dest_uri = f"bq://{project_id}.{staging_dataset}.{output_table_id}"
+
+    # --- Stage 2: submit batch job ---
+    batch_job = ai_client.batches.create(
+        model=target_model,
+        src=bq_input_uri,
+        config=CreateBatchJobConfig(dest=bq_dest_uri, display_name=f"{job_prefix}_{job_seq_id}"),
+    )
+    job_name = str(batch_job.name)
+    print(f"[vertex-batch] Job 已建立: {job_name} (模型: {target_model}, 筆數: {len(requests_map)}, seq: {job_seq_id})")
+
+    loc_match = re.search(r"/locations/([^/]+)/", job_name)
+    job_location = loc_match.group(1) if loc_match else batch_location
+    query_client = (
+        ai_client
+        if job_location == batch_location
+        else genai.Client(vertexai=True, project=project_id, location=job_location)
+    )
+
+    # --- Stage 3: poll ---
+    poll_start = time.perf_counter()
+    job: Any = batch_job
+    while True:
+        time.sleep(poll_interval_seconds)
+        job = query_client.batches.get(name=job_name)
+        state = job.state.name if hasattr(job.state, "name") else str(job.state)
+        elapsed = time.perf_counter() - poll_start
+        print(f"[vertex-batch] {job_name} 狀態: {state} (已等待 {elapsed / 60.0:.1f} 分鐘)")
+        if state == "JOB_STATE_SUCCEEDED":
+            break
+        if state in _BATCH_FAILED_STATES:
+            raise RuntimeError(f"Vertex AI Batch 任務失敗 ({state}): {getattr(job, 'error', '未知錯誤')}")
+        if elapsed > timeout_seconds:
+            raise TimeoutError(f"Vertex AI Batch 逾時 ({elapsed:.1f}s > {timeout_seconds}s)")
+
+    total_poll_dur = time.perf_counter() - poll_start
+    start_time = getattr(job, "start_time", None)
+    end_time = getattr(job, "end_time", None)
+    try:
+        cloud_exec_dur = (end_time - start_time).total_seconds() if (start_time and end_time) else total_poll_dur
+    except Exception:  # noqa: BLE001
+        cloud_exec_dur = total_poll_dur
+
+    # --- Stage 4: read dedicated output table ---
+    output_table_uri = None
+    info = getattr(job, "output_info", None)
+    if info:
+        uri = getattr(info, "bigquery_output_table", None)
         if isinstance(uri, str) and uri:
-            return uri
-    except AttributeError:
-        pass
-    return fallback
+            output_table_uri = uri
+    if not output_table_uri:
+        dest = getattr(job, "dest", None)
+        uri = getattr(dest, "bigquery_uri", None) if dest else None
+        if isinstance(uri, str) and uri:
+            output_table_uri = uri
+    clean_table_path = (
+        output_table_uri.replace("bq://", "")
+        if output_table_uri
+        else f"{project_id}.{staging_dataset}.{output_table_id}"
+    )
+    query_sql = f"""
+        SELECT
+            custom_id
+          , stock_id
+          , task_type
+          , request
+          , response
+          , status
+        FROM `{clean_table_path}`
+    """
+    rows = list(bq_client.query(query_sql).result())
+
+    # --- Stage 5: parse + archive to permanent log via free batch load ---
+    now_utc = datetime.now(timezone.utc)
+    perm_records: list[dict] = []
+    out: dict[str, dict] = {}
+    for r in rows:
+        cid = str(getattr(r, "custom_id", None) or "UNKNOWN")
+        meta = custom_id_meta.get(cid, {})
+        row_dict = {
+            "custom_id": cid,
+            "stock_id": getattr(r, "stock_id", None) or meta.get("stock_id", "UNKNOWN"),
+            "task_type": getattr(r, "task_type", None) or meta.get("task_type", task_type),
+            "request": getattr(r, "request", None),
+            "response": getattr(r, "response", None),
+        }
+        rec = extract_prompt_log_record(
+            row=row_dict,
+            duration_sec=cloud_exec_dur,
+            created_at=now_utc,
+            default_model=target_model,
+            call_mode="VERTEX_BATCH",
+        )
+        perm_records.append(rec)
+        out[cid] = rec
+    save_to_permanent_logs(bq_client, project_id, perm_records)
+    return out
 
 
 async def run_vertex_batch_requests(
@@ -1064,98 +1480,48 @@ async def run_vertex_batch_requests(
     poll_interval_seconds: float = 60.0,
     temperature: float | None = None,
     tag: str = "vertex_batch",
+    task_type: str = "STAGE2_DIAGNOSIS",
+    stock_ids: Mapping[str, str] | None = None,
+    timeout_seconds: float = 1800.0,
 ) -> dict[str, AiCallResult]:
-    """Submit prompts as one Vertex AI Batch job, block-poll until done, return results by custom_id."""
+    """Run prompts as one Vertex AI Batch job via BigQuery (input_/predictions_ tables per job).
+
+    ``requests_map`` keys are custom_ids (also used as stock_id unless ``stock_ids`` overrides).
+    Every row is archived to ``discord_service.ai_prompt_logs`` (call_mode=VERTEX_BATCH).
+    """
     if not requests_map:
         return {}
 
-    from google.genai.types import CreateBatchJobConfig
-
-    _ensure_gcp_credentials_env()
-    project_id = (os.getenv("GOOGLE_CLOUD_PROJECT_ID") or "").strip()
-    if not project_id:
-        raise MissingVertexConfigError("GOOGLE_CLOUD_PROJECT_ID is not configured.")
-    location = (os.getenv("GOOGLE_CLOUD_LOCATION") or DEFAULT_VERTEX_LOCATION).strip()
     target_model = (model or get_vertex_batch_stage1_model()).strip()
-    bucket = get_gcs_bucket_name()
-    prefix = get_gcs_batch_prefix()
-
-    batch_id = f"{job_prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    local_dir = _batch_local_dir()
-    local_dir.mkdir(parents=True, exist_ok=True)
-    local_file = local_dir / f"{batch_id}_input.jsonl"
-    with local_file.open("w", encoding="utf-8") as fh:
-        for custom_id, prompt in requests_map.items():
-            request: dict[str, Any] = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-            if temperature is not None:
-                request["generationConfig"] = {"temperature": temperature}
-            fh.write(json.dumps({"custom_id": str(custom_id), "request": request}, ensure_ascii=False) + "\n")
-
-    started = time.perf_counter()
-    input_blob = f"{prefix}/inputs/{batch_id}.jsonl"
-    await asyncio.to_thread(_gcs_upload_file, project_id, bucket, input_blob, local_file)
-    gcs_input_uri = f"gs://{bucket}/{input_blob}"
-    gcs_output_uri = f"gs://{bucket}/{prefix}/outputs/{batch_id}/"
-
-    client = genai.Client(vertexai=True, project=project_id, location=location)
-    batch_job = await asyncio.to_thread(
-        client.batches.create,
-        model=target_model,
-        src=gcs_input_uri,
-        config=CreateBatchJobConfig(dest=gcs_output_uri, display_name=batch_id),
+    records = await asyncio.to_thread(
+        _run_vertex_batch_sync,
+        requests_map,
+        target_model=target_model,
+        job_prefix=job_prefix,
+        poll_interval_seconds=poll_interval_seconds,
+        temperature=temperature,
+        task_type=task_type,
+        stock_ids=stock_ids,
+        timeout_seconds=timeout_seconds,
     )
-    job_name = str(batch_job.name)
-    print(f"[vertex-batch] Job 已建立: {job_name} (模型: {target_model}, 筆數: {len(requests_map)})")
-
-    loc_match = re.search(r"/locations/([^/]+)/", job_name)
-    job_location = loc_match.group(1) if loc_match else location
-    query_client = genai.Client(vertexai=True, project=project_id, location=job_location)
-
-    job: Any = batch_job
-    wait_started = time.monotonic()
-    while True:
-        await asyncio.sleep(poll_interval_seconds)
-        job = await asyncio.to_thread(query_client.batches.get, name=job_name)
-        state = job.state.name if hasattr(job.state, "name") else str(job.state)
-        elapsed = (time.monotonic() - wait_started) / 60.0
-        print(f"[vertex-batch] {job_name} 狀態: {state} (已等待 {elapsed:.1f} 分鐘)")
-        if state == "JOB_STATE_SUCCEEDED":
-            break
-        if state in _BATCH_FAILED_STATES:
-            raise RuntimeError(
-                f"Vertex AI Batch 任務失敗 ({state}): {getattr(job, 'error', '未知錯誤')}"
-            )
-
-    output_uri = _resolve_batch_output_uri(job, gcs_output_uri)
-    lines = await asyncio.to_thread(_gcs_download_outputs, project_id, output_uri)
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
 
     results: dict[str, AiCallResult] = {}
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        custom_id = str(record.get("custom_id", "")).strip()
+    for custom_id, rec in records.items():
         if custom_id not in requests_map:
             continue
-        response = record.get("response") or {}
-        full_text = _batch_extract_text(response)
+        full_text = rec["response_text"]
         if not full_text:
             continue
-        model_version = (
-            response.get("modelVersion") or response.get("model_version") or f"{target_model} (vertex-batch)"
-        )
-        usage = response.get("usageMetadata") or {}
         meta = AIResponse(
             provider="vertex_ai_batch",
             requested_model=target_model,
-            model_version=str(model_version),
+            model_version=str(rec["model_name"] or f"{target_model} (vertex-batch)"),
             text=full_text,
-            prompt_tokens=usage.get("promptTokenCount"),
-            output_tokens=usage.get("candidatesTokenCount"),
+            prompt_tokens=rec["prompt_tokens"],
+            output_tokens=rec["completion_tokens"],
         )
         results[custom_id] = meta
+        elapsed_ms = int(rec["duration_sec"] * 1000)
         call_tag = f"{tag}:{custom_id}"
         _print_ai_telemetry(
             provider=meta.provider,
@@ -1178,7 +1544,7 @@ async def run_vertex_batch_requests(
                 prompt_tokens=meta.prompt_tokens,
                 output_tokens=meta.output_tokens,
                 elapsed_ms=elapsed_ms,
-                attempt_notes=[f"@@AI_BATCH@@ job={job_name} batch_id={batch_id}"],
+                attempt_notes=[f"@@AI_BATCH@@ bigquery task_type={task_type}"],
                 error=None,
             )
         )

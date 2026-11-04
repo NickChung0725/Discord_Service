@@ -1,14 +1,14 @@
-"""SASD v5.3.0 Vertex AI Batch tests (all GCP calls mocked)."""
+"""SASD v5.4.0 Vertex AI Batch (BigQuery) tests (all GCP calls mocked)."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import re
 import tempfile
 import unittest
-from datetime import date
-from pathlib import Path
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,38 +20,27 @@ import alignment_ai_picker
 from alignment_ai_picker import analyze_candidates, resolve_batch_settings
 
 
-def _record(custom_id: str, text: str) -> str:
-    return json.dumps(
-        {
-            "custom_id": custom_id,
-            "response": {
-                "candidates": [{"content": {"parts": [{"text": text[:3]}, {"text": text[3:]}]}}],
-                "modelVersion": "gemini-test-001",
-            },
-        }
-    )
+def _response(text: str) -> dict:
+    return {
+        "candidates": [{"content": {"parts": [{"text": text}]}}],
+        "modelVersion": "gemini-test-001",
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
 
 
-class _FakeBlob:
-    def __init__(self, name: str, data: str = "") -> None:
-        self.name = name
-        self._data = data
-        self.uploaded: str | None = None
-
-    def upload_from_filename(self, path: str) -> None:
-        self.uploaded = path
-
-    def download_as_text(self, encoding: str = "utf-8") -> str:
-        return self._data
-
-
-def _job(state: str, name: str = "projects/123/locations/global/batchPredictionJobs/456") -> SimpleNamespace:
+def _out_row(custom_id: str, text: str, request: str = "") -> SimpleNamespace:
     return SimpleNamespace(
-        name=name,
-        state=SimpleNamespace(name=state),
-        error="boom",
-        output_info=SimpleNamespace(gcs_output_directory="gs://bkt/vertex_batch/outputs/x/"),
+        custom_id=custom_id,
+        stock_id=custom_id,
+        task_type="STAGE2_DIAGNOSIS",
+        request=request or json.dumps({"contents": [{"role": "user", "parts": [{"text": f"prompt {custom_id}"}]}]}),
+        response=json.dumps(_response(text)),
+        status="",
     )
+
+
+def _job(state: str, name: str = "projects/123/locations/us-central1/batchPredictionJobs/456") -> SimpleNamespace:
+    return SimpleNamespace(name=name, state=SimpleNamespace(name=state), error="boom", output_info=None)
 
 
 class VertexBatchEngineTests(unittest.TestCase):
@@ -60,34 +49,33 @@ class VertexBatchEngineTests(unittest.TestCase):
         env = {
             "FINMIND_REPORTS_DIR": self._tmp.name,
             "GOOGLE_CLOUD_PROJECT_ID": "proj",
-            "GCS_BUCKET_NAME": "bkt",
+            "GOOGLE_CLOUD_LOCATION": "us-central1",
+            "BQ_LOG_ENABLED": "false",
         }
         self._env = patch.dict(os.environ, env)
         self._env.start()
-        self.clients: list[dict] = []
+
         self.create = MagicMock(return_value=_job("JOB_STATE_PENDING"))
         self.get = MagicMock()
+        self.clients: list[dict] = []
         outer = self
 
         def make_client(**kwargs):
             outer.clients.append(kwargs)
             return SimpleNamespace(batches=SimpleNamespace(create=outer.create, get=outer.get))
 
-        self.storage_client = MagicMock()
-        self.uploaded_blob = _FakeBlob("up")
-        self.storage_client.bucket.return_value.blob.return_value = self.uploaded_blob
-        self.output_blobs = [
-            _FakeBlob("vertex_batch/outputs/x/inputs/in.jsonl", "ignored"),
-            _FakeBlob(
-                "vertex_batch/outputs/x/predictions.jsonl",
-                "\n".join([_record("2357", "answer B"), _record("2330", "answer A")]),
-            ),
-        ]
-        self.storage_client.list_blobs.return_value = self.output_blobs
+        self.dataset = SimpleNamespace(default_table_expiration_ms=None)
+        self.bq = MagicMock()
+        self.bq.get_dataset.return_value = self.dataset
+        self.bq.update_dataset.side_effect = lambda ds, fields: ds
+        self.bq.get_table.return_value = SimpleNamespace(expires=None)
+        self.output_rows = [_out_row("2357", "answer B"), _out_row("2330", "answer A")]
+        self.bq.query.return_value.result.return_value = self.output_rows
+
         patches = [
             patch.object(ai_service.genai, "Client", side_effect=make_client),
-            patch("google.cloud.storage.Client", return_value=self.storage_client),
-            patch.object(ai_service.asyncio, "sleep", new=AsyncMock()),
+            patch("google.cloud.bigquery.Client", return_value=self.bq),
+            patch.object(ai_service.time, "sleep", new=lambda *_a, **_k: None),
         ]
         for p in patches:
             p.start()
@@ -106,26 +94,53 @@ class VertexBatchEngineTests(unittest.TestCase):
         self.assertEqual(asyncio.run(ai_service.run_vertex_batch_requests({})), {})
         self.create.assert_not_called()
 
-    def test_jsonl_packing_and_custom_id_alignment_with_reversed_output(self) -> None:
+    def test_staging_dataset_expiration_is_five_days(self) -> None:
         self.get.return_value = _job("JOB_STATE_SUCCEEDED")
-        results = self._run(temperature=0.2)
+        self._run()
+        self.assertEqual(self.dataset.default_table_expiration_ms, 432000000)
+        self.bq.update_dataset.assert_called_once()
+
+    def test_input_and_dest_uri_share_job_seq_id(self) -> None:
+        self.get.return_value = _job("JOB_STATE_SUCCEEDED")
+        self._run()
+        kwargs = self.create.call_args.kwargs
+        m_in = re.fullmatch(r"bq://proj\.vertex_batch_staging\.input_(\d{8}_\d{6}_[0-9a-f]{4})", kwargs["src"])
+        self.assertIsNotNone(m_in)
+        self.assertEqual(kwargs["config"].dest, f"bq://proj.vertex_batch_staging.predictions_{m_in.group(1)}")
+
+    def test_input_rows_and_alignment_with_reversed_output(self) -> None:
+        self.get.return_value = _job("JOB_STATE_SUCCEEDED")
+        results = self._run(temperature=0.2, task_type="STAGE2_DIAGNOSIS")
         self.assertEqual(results["2330"].text, "answer A")
         self.assertEqual(results["2357"].text, "answer B")
         self.assertEqual(results["2330"].model_version, "gemini-test-001")
+        self.assertEqual(results["2330"].prompt_tokens, 10)
 
-        files = list((Path(self._tmp.name) / ".state" / "batch").glob("*_input.jsonl"))
-        self.assertEqual(len(files), 1)
-        rows = [json.loads(line) for line in files[0].read_text(encoding="utf-8").splitlines()]
+        first_load = self.bq.load_table_from_json.call_args_list[0]
+        rows = first_load.args[0]
         self.assertEqual([r["custom_id"] for r in rows], ["2330", "2357"])
-        self.assertEqual(rows[0]["request"]["contents"][0]["parts"][0]["text"], "prompt A")
-        self.assertEqual(rows[0]["request"]["generationConfig"], {"temperature": 0.2})
-        self.assertIsNotNone(self.uploaded_blob.uploaded)
+        self.assertEqual(rows[0]["task_type"], "STAGE2_DIAGNOSIS")
+        req = json.loads(rows[0]["request"])
+        self.assertEqual(req["contents"][0]["parts"][0]["text"], "prompt A")
+        self.assertEqual(req["generationConfig"], {"temperature": 0.2})
 
-        log_files = list((Path(self._tmp.name) / "logs").glob("*_ai_calls.log"))
-        self.assertEqual(len(log_files), 1)
-        log = log_files[0].read_text(encoding="utf-8")
-        self.assertIn("tag=vertex_batch:2330", log)
-        self.assertIn("prompt B", log)
+    def test_only_batch_load_is_used_and_permanent_log_appended(self) -> None:
+        self.get.return_value = _job("JOB_STATE_SUCCEEDED")
+        self._run()
+        self.bq.insert_rows_json.assert_not_called()
+        self.assertEqual(self.bq.load_table_from_json.call_count, 2)  # input table + permanent log
+        perm = self.bq.load_table_from_json.call_args_list[1]
+        self.assertEqual(perm.args[1], "proj.discord_service.ai_prompt_logs")
+        records = perm.args[0]
+        self.assertEqual({r["custom_id"] for r in records}, {"2330", "2357"})
+        self.assertTrue(all(r["call_mode"] == "VERTEX_BATCH" for r in records))
+
+    def test_query_uses_leading_commas(self) -> None:
+        self.get.return_value = _job("JOB_STATE_SUCCEEDED")
+        self._run()
+        sql = self.bq.query.call_args.args[0]
+        self.assertIn("  , stock_id", sql)
+        self.assertIn("`proj.vertex_batch_staging.predictions_", sql)
 
     def test_polling_state_transitions(self) -> None:
         self.get.side_effect = [
@@ -137,19 +152,49 @@ class VertexBatchEngineTests(unittest.TestCase):
         self.assertEqual(self.get.call_count, 3)
         self.assertEqual(set(results), {"2330", "2357"})
 
-    def test_dynamic_location_extraction(self) -> None:
-        self.get.return_value = _job("JOB_STATE_SUCCEEDED")
-        self._run()
-        self.assertEqual(self.clients[-1]["location"], "global")
-        self.assertTrue(self.clients[-1]["vertexai"])
-        self.assertNotIn("api_key", self.clients[-1])
-
     def test_failed_state_raises(self) -> None:
         self.get.return_value = _job("JOB_STATE_FAILED")
         with self.assertRaises(RuntimeError) as ctx:
             self._run()
         self.assertIn("JOB_STATE_FAILED", str(ctx.exception))
         self.assertIn("boom", str(ctx.exception))
+
+    def test_permanent_log_failure_is_non_blocking(self) -> None:
+        self.get.return_value = _job("JOB_STATE_SUCCEEDED")
+        calls = {"n": 0}
+
+        def load(*_a, **_k):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise ConnectionError("bq down")
+            return MagicMock()
+
+        self.bq.load_table_from_json.side_effect = load
+        results = self._run()
+        self.assertEqual(set(results), {"2330", "2357"})
+
+    def test_extract_prompt_log_record(self) -> None:
+        request = json.dumps({"contents": [{"role": "user", "parts": [{"text": "hello"}]}]})
+        resp = json.dumps(
+            {
+                "candidates": [{"content": {"parts": [{"text": "abc"}, {"text": "def"}]}}],
+                "modelVersion": "gemini-test-001",
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+            }
+        )
+        rec = ai_service.extract_prompt_log_record(
+            {"custom_id": "c1", "stock_id": "2330", "task_type": "T", "request": request, "response": resp},
+            duration_sec=1.2345,
+            created_at=datetime(2026, 11, 4, tzinfo=timezone.utc),
+            default_model="m",
+        )
+        self.assertEqual(rec["prompt_text"], "hello")
+        self.assertEqual(rec["response_text"], "abc\ndef")
+        self.assertEqual(rec["response_raw"], resp)
+        self.assertEqual(rec["duration_sec"], 1.23)
+        self.assertEqual((rec["prompt_tokens"], rec["completion_tokens"], rec["total_tokens"]), (10, 5, 15))
+        self.assertEqual(rec["model_name"], "gemini-test-001")
+        self.assertEqual(len(rec), 13)
 
     def test_model_getters_priority(self) -> None:
         with patch.dict(
