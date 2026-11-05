@@ -9,6 +9,7 @@ dependencies = [
     "FinMind>=1.6.0",
     "google-genai>=2.3.0",
     "pandas>=2.1.0",
+    "pydantic>=2.0.0",
     "plotly>=5.18.0",
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",

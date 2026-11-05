@@ -521,5 +521,168 @@ class DiscordPostReplyTests(unittest.TestCase):
         self.assertEqual(calls[2]["content"], "#4 2330 台積電")
 
 
+import numpy as np
+from unittest.mock import AsyncMock
+
+from alignment_ai_picker import (
+    NO_PICK_MESSAGE,
+    BatchAuditResponse,
+    StockAuditItem,
+    _enforce_post_audit_guards,
+    apply_audit_to_decision,
+    build_audit_record,
+    run_red_blue_audit,
+    select_audit_survivors,
+)
+from finmind_stock_scanner import (
+    align_news_with_price_action,
+    compute_deterministic_trade_setup,
+)
+from taishin_portfolio_service import evaluate_candidate_exposure
+
+
+def _audit_item(stock_id: str = "2330", *, grade: str = "S_TIER_SNIPER", tactic: str = "BREAKOUT_0915_VWAP_OR_1315_CLOSE") -> StockAuditItem:
+    return StockAuditItem(
+        stock_id=stock_id,
+        stock_name="測試",
+        bear_case_flaws=["上方 POC 套牢", "長上影線"],
+        bull_case_catalysts=["投信買超"],
+        conflict_resolution_reasoning="多頭勝出",
+        execution_strategy_type=tactic,
+        thesis_invalidation_triggers=["投信轉賣超", "跌破紅K一半"],
+        verdict_grade=grade,
+    )
+
+
+def _ohlcv(n: int = 70, *, start_close: float = 100.0, step: float = 0.5) -> pd.DataFrame:
+    dates = pd.bdate_range("2026-07-01", periods=n)
+    close = np.array([start_close + step * i for i in range(n)], dtype=float)
+    return pd.DataFrame(
+        {
+            "date": dates,
+            "open": close - 0.3,
+            "max": close + 1.0,
+            "min": close - 1.0,
+            "close": close,
+            "Trading_Volume": np.full(n, 1_000_000.0),
+        }
+    )
+
+
+class RedBlueAuditPhase1Test(unittest.TestCase):
+    def test_schema_field_order_enforces_reasoning_before_verdict(self) -> None:
+        keys = list(StockAuditItem.model_json_schema()["properties"].keys())
+        self.assertEqual(keys[2], "bear_case_flaws")
+        self.assertEqual(keys[-1], "verdict_grade")
+
+    def test_zero_pick_veto_when_all_candidates_rejected(self) -> None:
+        items = [_audit_item("2330", grade="REJECT_TRAP", tactic="NO_TRADE"), _audit_item("2317", grade="REJECT_TRAP", tactic="NO_TRADE")]
+        payload = BatchAuditResponse(audited_stocks=items).model_dump_json()
+        blocks = [("2330", "block"), ("2317", "block")]
+        with patch(
+            "alignment_ai_picker.ask_vertex_ai_with_meta",
+            new=AsyncMock(return_value=SimpleNamespace(text=payload)),
+        ):
+            audited, missing = asyncio.run(run_red_blue_audit(blocks))
+        self.assertEqual(missing, [])
+        self.assertEqual(select_audit_survivors(_enforce_post_audit_guards(audited, {}, {})), [])
+
+        decision = {"market_comment": NO_PICK_MESSAGE, "top_picks": [], "watchlist": [], "avoid": []}
+        decision = apply_audit_to_decision(decision, {})
+        messages = format_pick_report(
+            date(2026, 11, 5),
+            decision,
+            "",
+            pd.DataFrame({"stock_id": ["2330", "2317"]}),
+            {},
+            [],
+            total_signals=2,
+            skipped=0,
+            model="m",
+        )
+        self.assertIn("今日無符合高勝率標準之標的，建議空手觀望", "\n".join(messages))
+
+    def test_portfolio_correlation_and_sector_guard(self) -> None:
+        rng = np.random.RandomState(7)
+        base = rng.normal(0, 1, 60)
+        base = (base - base.mean()) / base.std()
+        noise = rng.normal(0, 1, 60)
+        noise = noise - np.dot(noise, base) / np.dot(base, base) * base
+        noise = (noise - noise.mean()) / noise.std()
+        hold_ret = 0.85 * base + np.sqrt(1 - 0.85**2) * noise
+        dates = pd.bdate_range("2026-07-01", periods=61)
+
+        def to_prices(ret: np.ndarray) -> pd.DataFrame:
+            close = 100 * np.cumprod(np.concatenate([[1.0], 1 + 0.01 * ret]))
+            return pd.DataFrame({"date": dates, "close": close})
+
+        result = evaluate_candidate_exposure(
+            "3017",
+            "電腦及週邊設備",
+            [{"stock_id": "2383", "sector": "電子零組件", "return_pct": -3.0}],
+            candidate_prices=to_prices(base),
+            holding_prices={"2383": to_prices(hold_ret)},
+        )
+        self.assertEqual(result.exposure_status, "SECTOR_OR_CORR_FULL_SWAP_ONLY")
+        self.assertEqual(result.max_corr_holding_id, "2383")
+        self.assertAlmostEqual(result.max_corr_value, 0.85, places=2)
+        self.assertEqual(result.weakest_holding_to_swap, "2383")
+
+    def test_news_price_reaction_flags_distribution_trap(self) -> None:
+        prices = pd.DataFrame(
+            {
+                "date": pd.bdate_range("2026-10-26", periods=7),
+                "open": [100, 100, 100, 100, 100, 100, 104],
+                "max": [101, 101, 101, 101, 101, 101, 110],
+                "min": [99, 99, 99, 99, 99, 99, 100],
+                "close": [100, 100, 100, 100, 100, 100, 100],
+                "Trading_Volume": [1000, 1000, 1000, 1000, 1000, 1000, 2200],
+            }
+        )
+        news = [{"title": "利多不斷", "pub_date": "2026-11-03", "url": "", "summary": "訂單大爆發"}]
+        aligned = align_news_with_price_action(news, prices)
+        self.assertEqual(aligned[0]["reaction_tag"], "【⚠️ 爆量收黑/長上影線：疑似利多出貨】")
+        self.assertEqual(aligned[0]["vol_ratio_5d"], 2.2)
+        self.assertEqual(aligned[0]["upper_shadow_ratio"], 0.6)
+
+    def test_post_audit_guard_downgrades_poor_rr_ratio(self) -> None:
+        breakout = {"signal_type": "RIGHT_BREAKOUT", "deterministic_rr_ratio": 1.35}
+        pullback = {"signal_type": "STYLE_B_PULLBACK", "deterministic_rr_ratio": 1.35}
+        out = _enforce_post_audit_guards(
+            [_audit_item("2330"), _audit_item("2317", tactic="STYLE_B_PULLBACK_LIMIT")],
+            {"2330": breakout, "2317": pullback},
+            {},
+        )
+        by_id = {i.stock_id: i for i in out}
+        self.assertEqual(by_id["2330"].verdict_grade, "REJECT_TRAP")
+        self.assertEqual(by_id["2317"].verdict_grade, "A_TIER_PULLBACK")
+        self.assertEqual(select_audit_survivors(out), [by_id["2317"]])
+
+    def test_swap_only_exposure_overrides_tactic_and_record_banner(self) -> None:
+        exposure = SimpleNamespace(
+            exposure_status="SECTOR_OR_CORR_FULL_SWAP_ONLY",
+            max_corr_holding_id="2383",
+            weakest_holding_to_swap="2383",
+        )
+        out = _enforce_post_audit_guards([_audit_item("3017", grade="A_TIER_PULLBACK")], {}, {"3017": exposure})
+        self.assertEqual(out[0].execution_strategy_type, "PORTFOLIO_SWAP_ONLY")
+        record = build_audit_record(out[0], None, exposure)
+        self.assertIn("僅限換股", record["Swap_Banner"])
+        self.assertIn("2383", record["Swap_Banner"])
+
+    def test_deterministic_trade_setup_breakout_and_pullback(self) -> None:
+        prices = _ohlcv()
+        breakout = compute_deterministic_trade_setup(prices, "RIGHT_BREAKOUT")
+        assert breakout is not None
+        self.assertLessEqual(breakout["chase_limit_price"], round(breakout["close_t"] * 1.035, 2))
+        self.assertLess(breakout["hard_stop_loss"], breakout["entry_reference_price"])
+        self.assertEqual(breakout["tp1_source"], "ATR_3X_TARGET")
+        pullback = compute_deterministic_trade_setup(prices, "STYLE_B_PULLBACK")
+        assert pullback is not None
+        self.assertEqual(pullback["chase_limit_price"], pullback["ideal_buy_zone_high"])
+        self.assertLess(pullback["hard_stop_loss"], pullback["ideal_buy_zone_low"])
+        self.assertIsNone(compute_deterministic_trade_setup(prices.head(10)))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import json
 import logging
@@ -3537,6 +3538,180 @@ def dump_portfolio_context(
 # --------------------------------------------------------------------------- #
 # Section 5: CLI Entrypoint (`taishin_portfolio_service.py`)
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# SASD v5.4.0 Phase 1：候選股 × 庫存曝險與跨產業相關係數耦合
+# --------------------------------------------------------------------------- #
+EXPOSURE_OPEN = "OPEN"
+EXPOSURE_HIGH_CORR = "HIGH_CORR_WARNING"
+EXPOSURE_SWAP_ONLY = "SECTOR_OR_CORR_FULL_SWAP_ONLY"
+EXPOSURE_SECTOR_LIMIT = 2
+EXPOSURE_SECTOR_WEIGHT_LIMIT_PCT = 35.0
+EXPOSURE_CORR_WARN = 0.70
+EXPOSURE_CORR_BLOCK = 0.80
+EXPOSURE_MIN_OVERLAP_DAYS = 30
+EXPOSURE_CORR_WINDOW = 60
+
+
+@dataclass
+class PortfolioExposureCheckResult:
+    stock_id: str
+    candidate_sector: str
+    same_sector_holdings: list[str]
+    max_corr_holding_id: str | None
+    max_corr_value: float
+    exposure_status: str  # OPEN / HIGH_CORR_WARNING / SECTOR_OR_CORR_FULL_SWAP_ONLY
+    weakest_holding_to_swap: str | None
+
+
+def _close_series(prices: Any) -> pd.Series:
+    """將 Series 或含 date/close 的 DataFrame 統一成以日期為索引之收盤價序列。"""
+    if isinstance(prices, pd.Series):
+        series = prices.copy()
+        series.index = pd.to_datetime(series.index, errors="coerce")
+    else:
+        frame = pd.DataFrame(prices)
+        series = pd.Series(
+            pd.to_numeric(frame["close"], errors="coerce").to_numpy(),
+            index=pd.to_datetime(frame["date"], errors="coerce"),
+        )
+    series = pd.to_numeric(series, errors="coerce")
+    series = series[~series.index.isna()].dropna()
+    return series[~series.index.duplicated(keep="last")].sort_index()
+
+
+def compute_return_correlation(
+    candidate_prices: Any,
+    holding_prices: Any,
+    *,
+    window: int = EXPOSURE_CORR_WINDOW,
+    min_overlap: int = EXPOSURE_MIN_OVERLAP_DAYS,
+) -> float | None:
+    """近 window 個交易日日報酬皮爾森相關係數；重疊交易日 < min_overlap 回傳 None。"""
+    cand = _close_series(candidate_prices).tail(window + 1).pct_change().dropna()
+    hold = _close_series(holding_prices).tail(window + 1).pct_change().dropna()
+    overlap = cand.index.intersection(hold.index)
+    if len(overlap) < min_overlap:
+        return None
+    value = cand.loc[overlap].corr(hold.loc[overlap], method="pearson")
+    return None if pd.isna(value) else float(value)
+
+
+def evaluate_candidate_exposure(
+    stock_id: str,
+    candidate_sector: str,
+    holdings: list[Mapping[str, Any]],
+    *,
+    candidate_prices: Any,
+    holding_prices: Mapping[str, Any],
+    sector_limit: int = EXPOSURE_SECTOR_LIMIT,
+) -> PortfolioExposureCheckResult:
+    """比對候選股與台新庫存：同細分產業檔數 / 市值占比，以及 60 日報酬相關係數。
+
+    holdings 每筆需含 stock_id（或 stock_no）、sector；選填 return_pct、weight_pct。
+    - 同產業 >= sector_limit 檔（或同產業權重 > 35%）或 max_corr >= 0.80 → SECTOR_OR_CORR_FULL_SWAP_ONLY
+    - 0.70 <= max_corr < 0.80 → HIGH_CORR_WARNING；其餘 OPEN
+    """
+    sid = str(stock_id).strip()
+    sector = str(candidate_sector or "").strip()
+    normalized: list[dict[str, Any]] = []
+    for row in holdings:
+        hid = str(row.get("stock_id") or row.get("stock_no") or "").strip()
+        if not hid or hid == sid:
+            continue
+        normalized.append({**row, "stock_id": hid, "sector": str(row.get("sector") or "").strip()})
+
+    same_sector = [h for h in normalized if sector and h["sector"] == sector]
+    same_sector_ids = list(dict.fromkeys(h["stock_id"] for h in same_sector))
+    sector_weight = sum(_to_float(h.get("weight_pct")) for h in same_sector)
+
+    max_id: str | None = None
+    max_corr = 0.0
+    corr_by_id: dict[str, float] = {}
+    for holding in normalized:
+        hid = holding["stock_id"]
+        if hid not in holding_prices:
+            continue
+        corr = compute_return_correlation(candidate_prices, holding_prices[hid])
+        if corr is None:
+            continue
+        corr_by_id[hid] = corr
+        if max_id is None or corr > max_corr:
+            max_id, max_corr = hid, corr
+
+    sector_full = len(same_sector_ids) >= sector_limit or sector_weight > EXPOSURE_SECTOR_WEIGHT_LIMIT_PCT
+    if sector_full or (max_id is not None and max_corr >= EXPOSURE_CORR_BLOCK):
+        status = EXPOSURE_SWAP_ONLY
+    elif max_id is not None and max_corr >= EXPOSURE_CORR_WARN:
+        status = EXPOSURE_HIGH_CORR
+    else:
+        status = EXPOSURE_OPEN
+
+    weakest: str | None = None
+    if status == EXPOSURE_SWAP_ONLY:
+        pool = same_sector if same_sector else [h for h in normalized if h["stock_id"] == max_id]
+        if pool:
+            weakest = min(pool, key=lambda h: _to_float(h.get("return_pct"), 0.0))["stock_id"]
+
+    return PortfolioExposureCheckResult(
+        stock_id=sid,
+        candidate_sector=sector,
+        same_sector_holdings=same_sector_ids,
+        max_corr_holding_id=max_id,
+        max_corr_value=round(max_corr, 4) if max_id is not None else 0.0,
+        exposure_status=status,
+        weakest_holding_to_swap=weakest,
+    )
+
+
+def load_portfolio_exposure_inputs(
+    daily_dir: Path,
+    sector_resolver: Callable[[str], str] | None = None,
+    *,
+    sheet_mgr: Any | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, pd.DataFrame]]:
+    """讀取最新台新庫存快照與其本地日 K（prices.csv），供 evaluate_candidate_exposure 使用。
+
+    任何環節失敗皆回傳空庫存（不阻斷選股流程）。回傳 (holdings, {stock_id: prices_df})。
+    """
+    try:
+        mgr = sheet_mgr or TaishinSheetManager()
+        records = mgr.read_records(HOLDINGS_SHEET_NAME)
+    except Exception as error:  # noqa: BLE001
+        logging.getLogger(__name__).warning("無法讀取台新庫存，略過庫存曝險檢查：%s", error)
+        return [], {}
+    if not records:
+        return [], {}
+    latest_snapshot = max(str(r.get("snapshot_date") or "") for r in records)
+    holdings: list[dict[str, Any]] = []
+    for rec in records:
+        if str(rec.get("snapshot_date") or "") != latest_snapshot:
+            continue
+        hid = str(rec.get("stock_no") or "").strip()
+        if not hid or _to_float(rec.get("qty")) <= 0:
+            continue
+        holdings.append(
+            {
+                "stock_id": hid,
+                "sector": sector_resolver(hid) if sector_resolver else "",
+                "return_pct": _to_float(rec.get("return_pct")),
+                "weight_pct": _to_float(rec.get("weight_pct")),
+            }
+        )
+    prices_by_id: dict[str, pd.DataFrame] = {}
+    price_files = sorted(Path(daily_dir).glob("*_prices.csv"))
+    if holdings and price_files:
+        try:
+            frame = pd.read_csv(price_files[-1], dtype={"stock_id": str})
+            frame["stock_id"] = frame["stock_id"].astype(str).str.strip()
+            for holding in holdings:
+                sub = frame.loc[frame["stock_id"] == holding["stock_id"], ["date", "close"]]
+                if not sub.empty:
+                    prices_by_id[holding["stock_id"]] = sub
+        except Exception as error:  # noqa: BLE001
+            logging.getLogger(__name__).warning("讀取庫存日 K 失敗：%s", error)
+    return holdings, prices_by_id
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="台新證券 Nova API 歷史對帳單回補、持倉建倉記憶追蹤、盤前作戰晨報與 0050 智慧定投服務 (SASD v5.2.0)"

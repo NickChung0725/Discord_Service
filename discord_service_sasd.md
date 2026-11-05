@@ -298,6 +298,24 @@ flowchart TD
        $$SL_{new} = \max\left(SL_{prev}, \text{Cost}_{avg}, MA_{17}, MA_{45}\right)$$
        防守價**只升不降**（$SL_t \ge SL_{t-1}$），確保波段獲利不會回吐變成虧損，並一路追蹤至 $TP_2$ 或跌破移動停利線為止。
 
+### 3.4 Pass 1 紅藍軍審計與庫存曝險耦合流程 (v5.6.0)
+
+```
+[finmind_stock_scanner.py]  compute_deterministic_trade_setup()  → ATR14 / 60 日量 POC / 追價上限 / 硬停損 / TP1 / R:R
+                            align_news_with_price_action()       → 新聞發布日量價反應標籤
+[taishin_portfolio_service.py] evaluate_candidate_exposure()     → OPEN / HIGH_CORR_WARNING / SECTOR_OR_CORR_FULL_SWAP_ONLY
+[quant/alignment_ai_picker.py] run_audit_stage()
+   ├─ Pass 1：run_red_blue_audit()（每 3 檔一批、asyncio.gather）→ StockAuditItem（bear_case_flaws 先、verdict_grade 後）
+   ├─ _enforce_post_audit_guards()：風報比 < 1.8 的 S 級降級／淘汰；庫存滿載強制 PORTFOLIO_SWAP_ONLY
+   └─ select_audit_survivors()：剔除 REJECT_TRAP / NO_TRADE（允許 0 檔，Zero-Pick Veto）
+   → Pass 2：Stage 2 跨股總決策（沿用 Python 點位，TP1 / 停損不得改寫）
+```
+
+* **資料結構**：`DeterministicTradeSetup`（dict，欄位見 `compute_deterministic_trade_setup`）、`PortfolioExposureCheckResult`、`StockAuditItem` / `BatchAuditResponse`（Pydantic）。
+* **曝險規則**：同細分產業（`taxonomy_service`）持股 ≥ 2 檔或權重 > 35%，或 60 日日報酬皮爾森相關係數 ≥ 0.80 → 僅限換股；0.70 ≤ corr < 0.80 → 高度共伴警示。重疊交易日 < 30 則不計相關係數。
+* **輸出**：`top_picks[*].audit`（`Audit_Grade`、`Execution_Tactic`、`Ideal_Buy_Or_Ref`、`Chase_Limit_Price`、`Hard_Stop_Loss`、`TP1_Target_Or_POC`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers`）寫入 `ai_recommendations.json` 並顯示於 Discord；`05_Position_Thesis_Memory` 工作表欄位尚未擴充（後續階段）。
+* **降級策略**：審計流程任一環節失敗皆退回未審計流程，不中斷排程。
+
 ---
 
 ## 第四章：AI 賦能盤點與 Prompt 資訊供給規格 (AI Context Inventory)
@@ -429,6 +447,7 @@ flowchart TD
 
 | 版本號 | 發布日期 | 核心架構決策與改版重點 (Key Changes & ADRs) | 影響模組 |
 | :--- | :--- | :--- | :--- |
+| **v5.6.0** | 2026-11-05 | 1. **Phase 1 AI 紅藍軍審計**：自回歸防偏誤 Schema、有罪推定 Prompt、Zero-Pick Veto。<br/>2. **算術歸 Python**：ATR / 量 POC / 追價上限 / 硬停損 / TP1 / 風報比確定性計算。<br/>3. **庫存曝險耦合**：同產業上限與 60 日報酬相關係數攔截。<br/>4. **新聞量價反應綁定**：辨識利多出貨。 | `quant/alignment_ai_picker.py`<br>`finmind_stock_scanner.py`<br>`taishin_portfolio_service.py`<br>`tests/test_alignment_ai_picker.py` |
 | **v5.5.0** | 2026-11-04 | 1. **大盤與個股融資籌碼風控整合**：串接 TWSE/TPEx 官方免費 OpenAPI 取得大盤融資（`fetch_market_margin_snapshot`），升級 `evaluate_market_regime` 辨識「散戶凹單未洗清」與「融資斷頭宣洩」並動態給出建議總持倉上限 (`recommended_max_exposure_pct`)。<br/>2. **07_Chip_Summary 融資擴充**：串接 FinMind `TaiwanStockMarginPurchaseShortSale` 實作估算融資維持率 (`est_margin_maint_pct`) 與「資法人對作四象限標籤 (`chip_quadrant_tag`)」，賦能 Stage 0 硬性排雷與 Stage 1/2 Prompt。<br/>3. **全專案硬編碼時間字串徹底解耦**：移除所有程式碼、Docstring、Prompt 與報表標題之寫死排程時間，統一由本規格書第 2.4 節與 `systemd` 控制。<br/>4. **0050 DCA 恐慌殺融資加碼**：當大盤融資單日暴減 $\le -40$ 億或 5 日累計暴減 $\le -90$ 億時自動提高定投評分與加碼倍數。 | `finmind_stock_scanner.py`<br>`quant/fundamental_cache.py`<br>`quant/fundamental_config.py`<br>`quant/fundamental_analyzer.py`<br>`quant/alignment_ai_picker.py`<br>`services/ai_service.py`<br>`taishin_portfolio_service.py`<br>`taishin/taishin_config.py` |
 | **v5.4.0** | 2026-11-04 | 1. **Vertex AI Batch 改用 BigQuery 交換媒介**：每批獨立 `input_{seq}` / `predictions_{seq}` 暫存表（`vertex_batch_staging`，5 天自動到期），移除 GCS 依賴。<br/>2. **AI 日誌集中化**：Batch 與 Online Gemini 呼叫皆以免費 `load_table_from_json` 寫入 `discord_service.ai_prompt_logs`（失敗只記 Warning，不中斷主流程）。 | `services/ai_service.py`<br>`quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`taishin_portfolio_service.py`<br>`services/stock_ai_command.py` |
 | **v5.3.0** | 2026-11-03 | 1. **導入 Vertex AI Batch API 離線批次架構**：將 20:50 反彈與 21:00 順勢選股改為打包 JSONL 上傳 GCS 非同步推論，並將 `fundamental_analyzer.py` 拆分為 `prepare_diagnosis_context()` 與 `finalize_diagnosis_from_ai()`。<br/>2. **全面整合 189MA 長天期均線**：大盤紅綠燈快取 (`evaluate_market_regime`) 與台新持股表 (`02_Portfolio_Holdings`)、AI 晨報/健診 Prompt 全面補齊 `MA189`。 | `services/ai_service.py`<br>`quant/fundamental_analyzer.py`<br>`quant/alignment_ai_picker.py`<br>`finmind_stock_scanner.py`<br>`taishin_portfolio_service.py` |

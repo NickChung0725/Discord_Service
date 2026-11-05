@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -721,6 +721,7 @@ dependencies = [
     { name = "gspread" },
     { name = "pandas" },
     { name = "plotly" },
+    { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "schedule" },
@@ -737,6 +738,7 @@ requires-dist = [
     { name = "gspread", specifier = ">=6.0.0" },
     { name = "pandas", specifier = ">=2.1.0" },
     { name = "plotly", specifier = ">=5.18.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "schedule" },

@@ -330,6 +330,254 @@ def add_moving_averages(prices: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+# --------------------------------------------------------------------------- #
+# SASD v5.4.0 Phase 1：確定性結構點位（算術歸 Python）與新聞量價反應對齊
+# --------------------------------------------------------------------------- #
+SIGNAL_RIGHT_BREAKOUT = "RIGHT_BREAKOUT"
+SIGNAL_STYLE_B_PULLBACK = "STYLE_B_PULLBACK"
+RR_WARNING_THRESHOLD = 1.8
+NEWS_TAG_DISTRIBUTION = "【⚠️ 爆量收黑/長上影線：疑似利多出貨】"
+NEWS_TAG_STRONG_BUY = "【🔥 帶量長紅實質表態：市場正面買單】"
+NEWS_TAG_NEUTRAL = "【➖ 量價反應中性】"
+
+
+def _normalize_ohlcv(prices: pd.DataFrame) -> pd.DataFrame:
+    """統一 OHLCV 欄位（支援 FinMind 的 max/min/Trading_Volume 與一般 high/low/volume），依日期升冪。"""
+    frame = prices.copy()
+    rename: dict[str, str] = {}
+    if "high" not in frame.columns and "max" in frame.columns:
+        rename["max"] = "high"
+    if "low" not in frame.columns and "min" in frame.columns:
+        rename["min"] = "low"
+    if "volume" not in frame.columns:
+        if "Trading_Volume" in frame.columns:
+            rename["Trading_Volume"] = "volume"
+        elif "vol_lots" in frame.columns:
+            rename["vol_lots"] = "volume"
+    frame = frame.rename(columns=rename)
+    for column in ("open", "high", "low", "close", "volume"):
+        if column not in frame.columns:
+            frame[column] = float("nan") if column != "open" else frame.get("close")
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    return (
+        frame.dropna(subset=["date", "close", "high", "low"])
+        .sort_values("date")
+        .drop_duplicates(subset=["date"], keep="last")
+        .reset_index(drop=True)
+    )
+
+
+def compute_atr(frame: pd.DataFrame, period: int = 14) -> float | None:
+    """近 period 日真實波動幅度均值（輸入需為已正規化、升冪之 OHLC）。"""
+    if len(frame) < period + 1:
+        return None
+    prev_close = frame["close"].shift(1)
+    true_range = pd.concat(
+        [
+            frame["high"] - frame["low"],
+            (frame["high"] - prev_close).abs(),
+            (frame["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    value = true_range.tail(period).mean()
+    return float(value) if pd.notna(value) else None
+
+
+def compute_volume_poc(frame: pd.DataFrame, window: int = 60, top_n: int = 3) -> float | None:
+    """近 window 日成交量前 top_n 大交易日之典型價格 (H+L+C)/3 成交量加權均價。"""
+    recent = frame.tail(window).dropna(subset=["volume"])
+    recent = recent.loc[recent["volume"] > 0]
+    if recent.empty:
+        return None
+    top = recent.nlargest(top_n, "volume")
+    typical = (top["high"] + top["low"] + top["close"]) / 3.0
+    total_volume = float(top["volume"].sum())
+    if total_volume <= 0:
+        return None
+    return float((typical * top["volume"]).sum() / total_volume)
+
+
+def infer_signal_type(prices: pd.DataFrame) -> str:
+    """收盤仍貼近 17MA（≤ MA17 + 0.4 ATR）視為回測型，否則視為右側突破型。"""
+    frame = _normalize_ohlcv(prices)
+    atr = compute_atr(frame)
+    if atr is None or len(frame) < 17:
+        return SIGNAL_RIGHT_BREAKOUT
+    ma17 = float(frame["close"].tail(17).mean())
+    close_t = float(frame["close"].iloc[-1])
+    return SIGNAL_STYLE_B_PULLBACK if close_t <= ma17 + 0.4 * atr else SIGNAL_RIGHT_BREAKOUT
+
+
+def compute_deterministic_trade_setup(
+    prices: pd.DataFrame,
+    signal_type: str | None = None,
+) -> dict[str, object] | None:
+    """計算確定性交易點位（ATR、60 日量 POC、追價上限、硬停損、TP1、風報比）。
+
+    資料不足（< 15 根 K 線）回傳 None。價格一律由 Python 產生，禁止 AI 自行捏造。
+    """
+    frame = _normalize_ohlcv(prices)
+    atr = compute_atr(frame)
+    if atr is None or atr <= 0 or len(frame) < 15:
+        return None
+    close_t = float(frame["close"].iloc[-1])
+    low_t = float(frame["low"].iloc[-1])
+    ma17 = float(frame["close"].tail(17).mean())
+    resolved = signal_type or infer_signal_type(frame)
+
+    poc = compute_volume_poc(frame)
+    if poc is not None and poc > close_t and (poc - close_t) / close_t > 0.015:
+        tp1_price = round(poc, 2)
+        tp1_source = "VOLUME_POC_RESISTANCE"
+    else:
+        tp1_price = round(close_t + 3.0 * atr, 2)
+        tp1_source = "ATR_3X_TARGET"
+
+    if resolved == SIGNAL_STYLE_B_PULLBACK:
+        buy_low = round(ma17, 2)
+        buy_high = round(min(close_t, ma17 + 0.4 * atr), 2)
+        buy_high = max(buy_high, buy_low)
+        entry_ref = buy_high
+        chase_limit = buy_high
+        hard_stop = round(buy_low - 1.0 * atr, 2)
+    else:
+        resolved = SIGNAL_RIGHT_BREAKOUT
+        entry_ref = round(close_t, 2)
+        buy_low = buy_high = entry_ref
+        chase_limit = round(min(close_t + 0.8 * atr, close_t * 1.035), 2)
+        hard_stop = round(min(low_t, ma17) - 0.2 * atr, 2)
+
+    risk = entry_ref - hard_stop
+    rr_ratio: float | None = None
+    rr_warning = ""
+    if risk <= 0:
+        rr_warning = "POOR_RR_RATIO"
+    else:
+        rr_ratio = round((tp1_price - entry_ref) / risk, 2)
+        if rr_ratio < RR_WARNING_THRESHOLD:
+            rr_warning = "POOR_RR_RATIO"
+
+    return {
+        "signal_type": resolved,
+        "close_t": round(close_t, 2),
+        "ma17_t": round(ma17, 2),
+        "atr_14": round(atr, 2),
+        "volume_poc_60d": round(poc, 2) if poc is not None else None,
+        "entry_reference_price": entry_ref,
+        "ideal_buy_zone_low": buy_low,
+        "ideal_buy_zone_high": buy_high,
+        "chase_limit_price": chase_limit,
+        "hard_stop_loss": hard_stop,
+        "tp1_price": tp1_price,
+        "tp1_source": tp1_source,
+        "deterministic_rr_ratio": rr_ratio,
+        "rr_warning": rr_warning,
+    }
+
+
+def fetch_news_excerpt(url: str, *, timeout: float = 3.0, max_chars: int = 250) -> str:
+    """擷取新聞正文前 max_chars 字；逾時或失敗回傳空字串（呼叫端優雅降級回標題）。"""
+    try:
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310
+            raw = response.read(200_000).decode("utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        return ""
+    raw = re.sub(r"(?is)<(script|style).*?</\1>", " ", raw)
+    text = re.sub(r"(?s)<[^>]+>", " ", raw)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars]
+
+
+def _classify_news_reaction(
+    *, vol_ratio_5d: float, close: float, open_: float, high: float, day_return_pct: float, upper_shadow_ratio: float
+) -> str:
+    if vol_ratio_5d >= 1.5 and (close < open_ or upper_shadow_ratio >= 0.45):
+        return NEWS_TAG_DISTRIBUTION
+    if day_return_pct >= 2.5 and close >= high * 0.985:
+        return NEWS_TAG_STRONG_BUY
+    return NEWS_TAG_NEUTRAL
+
+
+def align_news_with_price_action(
+    news_items: list[Mapping[str, object]],
+    prices: pd.DataFrame,
+    *,
+    excerpt_fetcher: Callable[[str], str] | None = None,
+    max_chars: int = 250,
+) -> list[dict[str, object]]:
+    """將新聞發布日對齊日 K，生成量價反應標籤（發布日無交易則取其後第一個交易日）。
+
+    news_items 欄位：title、pub_date（或 pubDate）、url（或 link）、summary（選填）。
+    vol_ratio_5d 以「反應日前 5 個交易日」均量為分母。
+    """
+    frame = _normalize_ohlcv(prices)
+    aligned: list[dict[str, object]] = []
+    for item in news_items:
+        title = str(item.get("title") or "").strip()
+        raw_pub = item.get("pub_date") or item.get("pubDate") or ""
+        url = str(item.get("url") or item.get("link") or "").strip()
+        summary = str(item.get("summary") or item.get("description") or "").strip()
+        if not summary and url and excerpt_fetcher is not None:
+            try:
+                summary = (excerpt_fetcher(url) or "").strip()
+            except Exception:  # noqa: BLE001
+                summary = ""
+        summary = (summary or title)[:max_chars]
+        entry: dict[str, object] = {
+            "title": title,
+            "url": url,
+            "pub_date": str(raw_pub),
+            "summary": summary,
+            "reaction_tag": NEWS_TAG_NEUTRAL,
+            "reaction_date": "",
+        }
+        pub = pd.to_datetime(raw_pub, errors="coerce", utc=False)
+        if pd.notna(pub) and getattr(pub, "tzinfo", None) is not None:
+            pub = pub.tz_convert("Asia/Taipei").tz_localize(None)
+        if pd.isna(pub) or frame.empty:
+            aligned.append(entry)
+            continue
+        positions = frame.index[frame["date"] >= pub.normalize()]
+        if len(positions) == 0:
+            aligned.append(entry)
+            continue
+        pos = int(positions[0])
+        bar = frame.iloc[pos]
+        prev_close = float(frame["close"].iloc[pos - 1]) if pos > 0 else float(bar["open"])
+        day_return = (float(bar["close"]) - prev_close) / prev_close * 100.0 if prev_close else 0.0
+        span = float(bar["high"]) - float(bar["low"])
+        upper_shadow = (
+            (float(bar["high"]) - max(float(bar["open"]), float(bar["close"]))) / span if span > 0 else 0.0
+        )
+        prior_vol = frame["volume"].iloc[max(0, pos - 5) : pos].dropna()
+        vol_ratio = (
+            float(bar["volume"]) / float(prior_vol.mean())
+            if len(prior_vol) and float(prior_vol.mean()) > 0 and pd.notna(bar["volume"])
+            else 1.0
+        )
+        entry.update(
+            {
+                "reaction_date": bar["date"].date().isoformat(),
+                "day_return_pct": round(day_return, 2),
+                "upper_shadow_ratio": round(upper_shadow, 2),
+                "vol_ratio_5d": round(vol_ratio, 2),
+                "reaction_tag": _classify_news_reaction(
+                    vol_ratio_5d=vol_ratio,
+                    close=float(bar["close"]),
+                    open_=float(bar["open"]),
+                    high=float(bar["high"]),
+                    day_return_pct=day_return,
+                    upper_shadow_ratio=upper_shadow,
+                ),
+            }
+        )
+        aligned.append(entry)
+    return aligned
+
+
 def describe_volume_status(
     vol_lots: float | None,
     vol_ma5_lots: float | None,

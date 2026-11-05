@@ -4,6 +4,21 @@
 
 ---
 
+## [v5.6.0] - 2026-11-05
+### ✨ 新增功能 (Added)
+* **Phase 1：AI 紅藍軍審計架構（Pass 1）與庫存曝險耦合**（規格：`gemini-code-1793865428763.md`）
+  * [`quant/alignment_ai_picker.py`](file:///d:/WorkSpace/Work_Document/Discord_Service/quant/alignment_ai_picker.py)：新增 `StockAuditItem` / `BatchAuditResponse` 自回歸防偏誤 Schema（先 `bear_case_flaws`、最後才 `verdict_grade`）、`AUDITOR_SYSTEM_PROMPT`、`run_red_blue_audit()`（每 3 檔一批、`asyncio.gather` 並行）、`_enforce_post_audit_guards()`（風報比 < 1.8 的 S 級降級／淘汰、庫存滿載強制 `PORTFOLIO_SWAP_ONLY`）與 Zero-Pick Veto（全數淘汰輸出「今日無符合高勝率標準之標的，建議空手觀望」）；`run_pipeline()` 於 Stage 2 前串接 `run_audit_stage()`，Stage 2 的 `target_price_1` / `stop_loss_price` 改沿用 Python 確定性點位。
+  * [`finmind_stock_scanner.py`](file:///d:/WorkSpace/Work_Document/Discord_Service/finmind_stock_scanner.py)：新增 `compute_deterministic_trade_setup()`（ATR14、60 日量 POC、`RIGHT_BREAKOUT` / `STYLE_B_PULLBACK` 雙軌追價上限／硬停損／TP1、`deterministic_rr_ratio`）與 `align_news_with_price_action()`（新聞發布日量價反應標籤、250 字摘要，逾時 3 秒降級回標題）。
+  * [`taishin_portfolio_service.py`](file:///d:/WorkSpace/Work_Document/Discord_Service/taishin_portfolio_service.py)：新增 `PortfolioExposureCheckResult`、`evaluate_candidate_exposure()`（同產業 ≥ 2 檔／權重 > 35%、60 日日報酬皮爾森相關係數 ≥ 0.70 警示／≥ 0.80 僅限換股）與 `load_portfolio_exposure_inputs()`。
+  * [`tests/test_alignment_ai_picker.py`](file:///d:/WorkSpace/Work_Document/Discord_Service/tests/test_alignment_ai_picker.py)：新增 5 項規格驗收測試與 2 項輔助測試。
+  * 新增選填設定 `finmind_scanner.json` → `ai_picker_red_blue_audit`（預設 `true`，設為 `false` 可停用審計）；新增相依套件 `pydantic`。
+
+### 🔧 優化與修正 (Changed)
+* 審計流程任一環節失敗（庫存讀取、新聞抓取、AI 呼叫）一律優雅降級，不中斷 21:00 選股主流程。
+* `top_picks` 與 `ai_recommendations.json` 新增 `audit` 欄位（`Audit_Grade`、`Execution_Tactic`、`Chase_Limit_Price`、`Hard_Stop_Loss`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers` 等）；Discord 卡片顯示審計行與 `🔄 僅限換股` 標示。
+
+---
+
 ## [v5.5.1] - 2026-11-05
 ### 🔧 優化與修正 (Changed & Removed)
 * **全面移除台新交割銀行餘額查詢 (`bank_balance`) 與交割餘額預警 (`shortfall_alert`)**：
