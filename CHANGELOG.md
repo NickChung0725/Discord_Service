@@ -6,6 +6,16 @@
 
 ## [v5.6.0] - 2026-11-05
 ### ✨ 新增功能 (Added)
+* **Phase 2：無盲點基本面特徵工程與事件驅動快取**（規格：`gemini-code-1793867722705.md`）
+  * [`quant/fundamental_config.py`](/quant/fundamental_config.py)：新增 `FundamentalEngineConfig` 資料類別與 `DEFAULT_FUNDAMENTAL_ENGINE_CONFIG`，集中管理股數反推安全門檻（`MIN_SAFE_EPS_FOR_SHARE_INFERENCE = 0.25`）、本業前瞻稅後係數（`0.80`）、一般月份均線容忍度（`0.95`）、季內達成率門檻（`0.36` / `0.72`）、三率變動門檻（`±1.5` 百分點）與橫斷面估值折溢價比值（`0.85` / `1.35`）。
+  * [`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)：
+    * 實作三層防呆真實流通股數還原 `_infer_safe_weighted_shares()`（Tier 1 最新季 `|EPS| >= 0.25`、Tier 2 回溯過去 8 季、Tier 3 市值／收盤價保底），消除彈性面額股 10 倍誤差與微利轉機股除以零／四捨五入膨脹誤差。
+    * 實作含農曆春節豁免之右側營收動能引擎 `_analyze_revenue_momentum()`（1～2 月自動啟動 `LUNAR_NEW_YEAR_EXEMPT_MODE` 檢驗 1～2 月累計營收 YoY 是否大於去年 Q4 YoY；3～12 月檢驗加權 3M YoY 與近 3 月均線 `* 0.95` 保護並識別高基期滑落）與本季營收達成率（QTD Run-Rate）。
+    * 實作本業年化前瞻估值 `_compute_forward_valuation()`（以近兩季平均營益率 OPM 推算 `Implied Core Forward EPS` 與 `Implied Forward PE`，對齊同業中位數 PE 計算 `Sector PE Ratio`）。
+    * 實作三率擴張與收縮語意工程 `_evaluate_margin_trends()`（自動標記 `MARGIN_TRIPLE_EXPANSION`、`OPERATING_LEVERAGE_BREAKOUT`、`FAKE_REVENUE_DILUTION` 殺價搶單警訊、`MARGIN_NEUTRAL`）與 `build_ai_fundamental_prompt_block()` 高密度語意特徵區塊。
+  * [`quant/fundamental_cache.py`](/quant/fundamental_cache.py)：新增 `should_bypass_revenue_cache()`、`should_bypass_quarterly_cache()`、`should_bypass_cache_for_calendar_event()` 與 `record_live_check_timestamp()`，於每月 5 日起營收開獎窗口自動對落後快取觸發 Event-Driven Bypass，並具備 6 小時冷卻期保護 FinMind API Quota。
+  * [`quant/taxonomy_service.py`](/quant/taxonomy_service.py)：新增 `compute_sector_median_pe()`（過濾 `PE <= 0` 或 `PE > 120` 離群值，同細分產業有效樣本 $\ge 4$ 檔取中位數，不足自動回退大分類中位數或預設基準 `20.0`）。
+  * [`tests/test_fundamental_analyzer.py`](/tests/test_fundamental_analyzer.py) & [`tests/test_fundamental_cache.py`](/tests/test_fundamental_cache.py)：新增並通過全部 Phase 2 規格驗收測試。
 * **Phase 1：AI 紅藍軍審計架構（Pass 1）與庫存曝險耦合**（規格：`gemini-code-1793865428763.md`）
   * [`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)：新增 `StockAuditItem` / `BatchAuditResponse` 自回歸防偏誤 Schema（先 `bear_case_flaws`、最後才 `verdict_grade`）、`AUDITOR_SYSTEM_PROMPT`、`run_red_blue_audit()`（每 3 檔一批、`asyncio.gather` 並行）、`_enforce_post_audit_guards()`（風報比 < 1.8 的 S 級降級／淘汰、庫存滿載強制 `PORTFOLIO_SWAP_ONLY`）與 Zero-Pick Veto（全數淘汰輸出「今日無符合高勝率標準之標的，建議空手觀望」）；`run_pipeline()` 於 Stage 2 前串接 `run_audit_stage()`，Stage 2 的 `target_price_1` / `stop_loss_price` 改沿用 Python 確定性點位。
   * [`finmind_stock_scanner.py`](/finmind_stock_scanner.py)：新增 `compute_deterministic_trade_setup()`（ATR14、60 日量 POC、`RIGHT_BREAKOUT` / `STYLE_B_PULLBACK` 雙軌追價上限／硬停損／TP1、`deterministic_rr_ratio`）與 `align_news_with_price_action()`（新聞發布日量價反應標籤、250 字摘要，逾時 3 秒降級回標題）。

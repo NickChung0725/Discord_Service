@@ -5,8 +5,35 @@ SASD v3.1.0 (100% Verified against FinMind Real-Machine Schema for 2357/2330)
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import TypedDict
+
+
+@dataclass(frozen=True)
+class FundamentalEngineConfig:
+    # 股數反推防呆門檻：避免 |EPS| 過小造成除以零或四捨五入分母膨脹誤差
+    MIN_SAFE_EPS_FOR_SHARE_INFERENCE: float = 0.25
+    MAX_HISTORICAL_QUARTERS_LOOKBACK: int = 8
+
+    # 本業前瞻 EPS 推算之等效有效稅率係數 (1 - 20% 營所稅)
+    EFFECTIVE_AFTER_TAX_FACTOR: float = 0.80
+
+    # 營收動能與季節性參數
+    NORMAL_MONTH_MA3_TOLERANCE: float = 0.95      # 一般月份允許最新月營收 >= 近3月均線 * 0.95
+    QTD_STRONG_RUN_RATE_1M: float = 0.36          # 季內第1個月達成上季總營收 >= 36% 視為超前 (基準33.3%)
+    QTD_STRONG_RUN_RATE_2M: float = 0.72          # 季內前2個月達成上季總營收 >= 72% 視為超前 (基準66.7%)
+
+    # 三率變動顯著性門檻 (單位：百分點 percentage points，1.5 代表 150 bps)
+    MARGIN_EXPANSION_BPS_THRESHOLD: float = 1.5
+    MARGIN_CONTRACTION_BPS_THRESHOLD: float = -1.5
+
+    # 橫斷面相對估值折溢價門檻
+    SECTOR_PE_UNDERVALUED_RATIO: float = 0.85     # Forward PE < 同業中位數 * 0.85 視為低估
+    SECTOR_PE_OVERHEATED_RATIO: float = 1.35      # Forward PE > 同業中位數 * 1.35 視為溢價偏高
+
+
+DEFAULT_FUNDAMENTAL_ENGINE_CONFIG = FundamentalEngineConfig()
 
 
 class AnchorSpec(TypedDict):

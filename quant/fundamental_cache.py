@@ -124,6 +124,200 @@ def _expected_fin_raw_date(today: date) -> date:
     return date(year, 12, 31)
 
 
+# --------------------------------------------------------------------------- #
+# SASD v5.4.0 Phase 2：財報日曆事件驅動快取失效 (Calendar-Driven Cache Bypass)
+# --------------------------------------------------------------------------- #
+LIVE_CHECK_COOLDOWN_HOURS: float = 6.0
+_LIVE_CHECK_TIMESTAMPS: dict[str, datetime] = {}
+
+
+def _coerce_datetime(ts: datetime | str | float | int | None) -> datetime | None:
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo is not None else ts.replace(tzinfo=TAIPEI_TIMEZONE)
+    if isinstance(ts, (float, int)):
+        return datetime.fromtimestamp(float(ts), tz=TAIPEI_TIMEZONE)
+    if isinstance(ts, str) and ts.strip():
+        try:
+            dt = datetime.fromisoformat(ts.strip())
+            return dt if dt.tzinfo is not None else dt.replace(tzinfo=TAIPEI_TIMEZONE)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_year_month_tuple(
+    val: tuple[int, int] | list[int] | str | None,
+) -> tuple[int, int] | None:
+    if val is None:
+        return None
+    if isinstance(val, (tuple, list)) and len(val) == 2:
+        try:
+            return int(val[0]), int(val[1])
+        except (TypeError, ValueError):
+            return None
+    if isinstance(val, str):
+        m = re.match(r"^\s*(\d{4})[-/](\d{1,2})\s*$", val)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def _parse_year_qtr_tuple(
+    val: tuple[int, int] | list[int] | str | None,
+) -> tuple[int, int] | None:
+    if val is None:
+        return None
+    if isinstance(val, (tuple, list)) and len(val) == 2:
+        try:
+            return int(val[0]), int(val[1])
+        except (TypeError, ValueError):
+            return None
+    if isinstance(val, str):
+        m = re.match(r"^\s*(\d{4})Q([1-4])\s*$", val, flags=re.IGNORECASE)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def record_live_check_timestamp(
+    stock_id: str,
+    timestamp: datetime | str | float | None = None,
+) -> datetime:
+    """記錄個股向 FinMind 即時查詢但確認尚未公佈最新月營收／財報的時間戳（6 小時內不再重複打擊 API）。"""
+    sid = str(stock_id).strip()
+    dt = _coerce_datetime(timestamp) or _now_in_taipei()
+    if sid:
+        _LIVE_CHECK_TIMESTAMPS[sid] = dt
+    return dt
+
+
+def get_live_check_timestamp(stock_id: str) -> datetime | None:
+    return _LIVE_CHECK_TIMESTAMPS.get(str(stock_id).strip())
+
+
+def clear_live_check_timestamps() -> None:
+    _LIVE_CHECK_TIMESTAMPS.clear()
+
+
+def _is_within_live_check_cooldown(
+    *,
+    stock_id: str | None = None,
+    last_live_check_timestamp: datetime | str | float | None = None,
+    now: datetime | None = None,
+    cooldown_hours: float = LIVE_CHECK_COOLDOWN_HOURS,
+) -> bool:
+    check_dt = _coerce_datetime(last_live_check_timestamp)
+    if check_dt is None and stock_id:
+        check_dt = _LIVE_CHECK_TIMESTAMPS.get(str(stock_id).strip())
+    if check_dt is None:
+        return False
+    ref_now = _coerce_datetime(now) or _now_in_taipei()
+    return (ref_now - check_dt) < timedelta(hours=cooldown_hours)
+
+
+def should_bypass_revenue_cache(
+    cached_latest_rev_year_month: tuple[int, int] | str | None,
+    today: date,
+    *,
+    stock_id: str | None = None,
+    last_live_check_timestamp: datetime | str | float | None = None,
+    now: datetime | None = None,
+    cooldown_hours: float = LIVE_CHECK_COOLDOWN_HOURS,
+) -> bool:
+    """判斷是否處於每月營收開獎窗口且快取尚未更新至上個月營收。
+
+    cached_latest_rev_year_month: 例如 (2026, 9) 或 "2026-09" 代表快取內最新只有 9 月營收。
+    若處於 6 小時冷卻期內（已向 FinMind 確認廠商尚未公佈），回傳 False 避免重複消耗 API Quota。
+    """
+    if _is_within_live_check_cooldown(
+        stock_id=stock_id,
+        last_live_check_timestamp=last_live_check_timestamp,
+        now=now,
+        cooldown_hours=cooldown_hours,
+    ):
+        return False
+
+    parsed_ym = _parse_year_month_tuple(cached_latest_rev_year_month)
+    if parsed_ym is None:
+        return True
+
+    # 計算理論上「上一個月」的 (year, month)
+    if today.month == 1:
+        expected_prev_ym = (today.year - 1, 12)
+    else:
+        expected_prev_ym = (today.year, today.month - 1)
+
+    # 每月 5 日起至 15 日（及之後）為台股月營收密集公告與反應期：
+    # 若今天已經 >= 5 號，但快取內最新營收還停留在「上上個月」(小於 expected_prev_ym)，強制 Bypass Cache！
+    if today.day >= 5 and parsed_ym < expected_prev_ym:
+        return True
+
+    return False
+
+
+def should_bypass_quarterly_cache(
+    cached_latest_fin_qtr: tuple[int, int] | str | None,
+    today: date,
+    *,
+    stock_id: str | None = None,
+    last_live_check_timestamp: datetime | str | float | None = None,
+    now: datetime | None = None,
+    cooldown_hours: float = LIVE_CHECK_COOLDOWN_HOURS,
+) -> bool:
+    """判斷是否處於季報截止窗口後且快取季度落後應公佈進度。"""
+    if _is_within_live_check_cooldown(
+        stock_id=stock_id,
+        last_live_check_timestamp=last_live_check_timestamp,
+        now=now,
+        cooldown_hours=cooldown_hours,
+    ):
+        return False
+
+    parsed_qtr = _parse_year_qtr_tuple(cached_latest_fin_qtr)
+    if parsed_qtr is None:
+        return True
+
+    _, expected_qtr_str = get_expected_watermarks(today)
+    expected_qtr = _parse_year_qtr_tuple(expected_qtr_str)
+    if expected_qtr is None:
+        return False
+    return parsed_qtr < expected_qtr
+
+
+def should_bypass_cache_for_calendar_event(
+    cached_latest_rev_year_month: tuple[int, int] | str | None,
+    today: date,
+    *,
+    cached_latest_fin_qtr: tuple[int, int] | str | None = None,
+    stock_id: str | None = None,
+    last_live_check_timestamp: datetime | str | float | None = None,
+    now: datetime | None = None,
+    cooldown_hours: float = LIVE_CHECK_COOLDOWN_HOURS,
+) -> bool:
+    """綜合檢查是否因月營收公佈期（每月 5 日起）或季報窗口而需強制 Bypass 快取。"""
+    if should_bypass_revenue_cache(
+        cached_latest_rev_year_month,
+        today,
+        stock_id=stock_id,
+        last_live_check_timestamp=last_live_check_timestamp,
+        now=now,
+        cooldown_hours=cooldown_hours,
+    ):
+        return True
+    if cached_latest_fin_qtr is not None and should_bypass_quarterly_cache(
+        cached_latest_fin_qtr,
+        today,
+        stock_id=stock_id,
+        last_live_check_timestamp=last_live_check_timestamp,
+        now=now,
+        cooldown_hours=cooldown_hours,
+    ):
+        return True
+    return False
+
+
 def _normalize_div_year(raw_year: Any, raw_date: Any) -> str:
     """將 FinMind 股利表的民國年（如 '114年'、'113'）統一轉為西元年字串（如 '2025'）。"""
     text = str(raw_year or "").strip()
@@ -265,6 +459,7 @@ class FundamentalCacheManager:
         self._headers_cache: dict[str, list[str]] = {}
         self._cache_ttl: float = 90.0
         self.batch_mode: bool = False
+        self.last_live_check_timestamps: dict[str, datetime] = {}
 
     def _gspread_call(self, func, *args, **kwargs):
         """包裝所有 gspread API 呼叫，遇到 429 / 5xx 自動指數退避重試。"""
@@ -412,13 +607,17 @@ class FundamentalCacheManager:
 
         cooldown_active = False
         last_probe_at = watch_row.get("last_probe_at")
-        if not force_refresh and last_probe_at:
-            try:
-                last_probe_dt = datetime.fromisoformat(last_probe_at)
-            except ValueError:
-                last_probe_dt = None
-            if last_probe_dt is not None and now - last_probe_dt < timedelta(hours=self.cooldown_hours):
+        mem_live_check = getattr(self, "last_live_check_timestamps", {}).get(normalized_id) or get_live_check_timestamp(normalized_id)
+        if not force_refresh:
+            if mem_live_check is not None and (now - mem_live_check) < timedelta(hours=self.cooldown_hours):
                 cooldown_active = True
+            elif last_probe_at:
+                try:
+                    last_probe_dt = datetime.fromisoformat(last_probe_at)
+                except ValueError:
+                    last_probe_dt = None
+                if last_probe_dt is not None and now - last_probe_dt < timedelta(hours=self.cooldown_hours):
+                    cooldown_active = True
 
         warnings: list[str] = []
 
@@ -426,6 +625,11 @@ class FundamentalCacheManager:
         df_rev_sheet = self._read_stock_rows(rev_sheet, normalized_id)
         max_rev_raw = _parse_iso_date(
             str(df_rev_sheet["raw_date"].max()) if not df_rev_sheet.empty else None
+        )
+        cached_rev_ym_str = (
+            _rev_ym_from_raw_date(str(df_rev_sheet["raw_date"].max()))
+            if not df_rev_sheet.empty and max_rev_raw is not None
+            else str(watch_row.get("last_rev_ym", "") or "").strip() or None
         )
 
         fin_is_sheet = self._get_worksheet("02_Income_Statement")
@@ -440,6 +644,11 @@ class FundamentalCacheManager:
 
         max_fin_raw = _parse_iso_date(
             str(df_wide_sheet["raw_date"].max()) if not df_wide_sheet.empty else None
+        )
+        cached_fin_qtr_str = (
+            _qtr_from_raw_date(str(df_wide_sheet["raw_date"].max()))
+            if not df_wide_sheet.empty and max_fin_raw is not None
+            else str(watch_row.get("last_fin_qtr", "") or "").strip() or None
         )
 
         div_sheet = self._get_worksheet("06_Dividend_Policy")
@@ -460,8 +669,32 @@ class FundamentalCacheManager:
             str(df_chip_sheet["raw_date"].max()) if not df_chip_sheet.empty else None
         )
 
-        need_rev = force_refresh or (max_rev_raw is None) or (max_rev_raw < expected_rev_date)
-        need_fin = force_refresh or (max_fin_raw is None) or (max_fin_raw < expected_fin_date)
+        need_rev = (
+            force_refresh
+            or (max_rev_raw is None)
+            or (max_rev_raw < expected_rev_date)
+            or should_bypass_revenue_cache(
+                cached_rev_ym_str,
+                today,
+                stock_id=normalized_id,
+                last_live_check_timestamp=mem_live_check or last_probe_at,
+                now=now,
+                cooldown_hours=float(self.cooldown_hours),
+            )
+        )
+        need_fin = (
+            force_refresh
+            or (max_fin_raw is None)
+            or (max_fin_raw < expected_fin_date)
+            or should_bypass_quarterly_cache(
+                cached_fin_qtr_str,
+                today,
+                stock_id=normalized_id,
+                last_live_check_timestamp=mem_live_check or last_probe_at,
+                now=now,
+                cooldown_hours=float(self.cooldown_hours),
+            )
+        )
         need_div = (
             force_refresh
             or (max_div_raw is None)
@@ -515,6 +748,9 @@ class FundamentalCacheManager:
                 self._upsert_delta(rev_sheet, df_rev_delta, key_col="pk_key")
             else:
                 warnings.append("no_new_monthly_revenue")
+                record_live_check_timestamp(normalized_id, now)
+                if hasattr(self, "last_live_check_timestamps"):
+                    self.last_live_check_timestamps[normalized_id] = now
 
         # Finance track.
         df_is_full, df_bs_full, df_cf_full, df_wide_full = (

@@ -1023,9 +1023,12 @@ def build_audit_block(
     setup: Mapping[str, object] | None,
     exposure: object,
     news: list[Mapping[str, object]],
+    fundamental_block: str = "",
 ) -> str:
-    """組裝單檔候選股的審計資料卡（Python 點位 + 庫存曝險 + 新聞量價反應）。"""
+    """組裝單檔候選股的審計資料卡（Python 點位 + 庫存曝險 + 新聞量價反應 + Phase 2 基本面語意特徵）。"""
     lines = [f"### 【審計標的】{row.get('stock_id')} {row.get('stock_name', '')}"]
+    if fundamental_block:
+        lines.append(fundamental_block)
     if setup:
         lines.append(
             f"- 訊號型態：{setup['signal_type']}｜收盤 {setup['close_t']}｜ATR14 {setup['atr_14']}"
@@ -1225,7 +1228,19 @@ async def run_audit_stage(
                 )
             except Exception as error:  # noqa: BLE001
                 print(f"[warn] {sid} 新聞量價對齊失敗（略過）：{error}")
-        blocks.append((sid, build_audit_block(row, setup, exposure, news)))
+        fund_block = ""
+        if analyzer is not None and hasattr(analyzer, "build_ai_fundamental_prompt_block"):
+            try:
+                fund_block = await asyncio.to_thread(
+                    analyzer.build_ai_fundamental_prompt_block,
+                    sid,
+                    close=_parse_optional_num(row.get("close")),
+                    stock_name=str(row.get("stock_name", "") or ""),
+                    sub_industry=_effective_sector_key(row),
+                )
+            except Exception as error:  # noqa: BLE001
+                print(f"[warn] {sid} 基本面語意特徵計算失敗（略過）：{error}")
+        blocks.append((sid, build_audit_block(row, setup, exposure, news, fund_block)))
 
     items, missing = await run_red_blue_audit(blocks, model=model)
     guarded = _enforce_post_audit_guards(items, setups, exposures)

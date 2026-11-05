@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
 import tests  # noqa: F401
 from fundamental_config import get_expected_watermarks
-from fundamental_cache import _anchor_pick
+from fundamental_cache import (
+    _anchor_pick,
+    clear_live_check_timestamps,
+    record_live_check_timestamp,
+    should_bypass_revenue_cache,
+)
 
 
 class FundamentalConfigTests(unittest.TestCase):
@@ -61,6 +66,30 @@ class FundamentalConfigTests(unittest.TestCase):
         self.assertEqual(float(normalized.loc[0, "total_liabilities"]), 700_000.0)
         self.assertEqual(float(normalized.loc[0, "parent_equity"]), 200_000.0)
         self.assertEqual(float(normalized.loc[0, "total_equity"]), 300_000.0)
+
+    def test_calendar_driven_cache_bypass_during_revenue_window(self) -> None:
+        clear_live_check_timestamps()
+        today = date(2026, 11, 6)
+        tz = timezone(timedelta(hours=8))
+        now_t0 = datetime(2026, 11, 6, 9, 0, 0, tzinfo=tz)
+
+        # 1) 11 月 6 日（>= 5 號），快取內最新月營收仍停留在 (2026, 9) < 預期上月 (2026, 10) -> 強制 Bypass
+        self.assertTrue(should_bypass_revenue_cache((2026, 9), today))
+        self.assertTrue(should_bypass_revenue_cache((2026, 9), today, stock_id="2330", now=now_t0))
+
+        # 2) 重拉確認廠商尚未公佈 10 月營收，記錄 live check 時間戳；6 小時冷卻期內再次呼叫回傳 False，不重複打擊 FinMind API
+        record_live_check_timestamp("2330", now_t0)
+        within_cooldown = now_t0 + timedelta(hours=3)
+        self.assertFalse(
+            should_bypass_revenue_cache((2026, 9), today, stock_id="2330", now=within_cooldown)
+        )
+
+        # 3) 超過 6 小時冷卻期後，若仍停留在 (2026, 9)，允許再次 Bypass 重拉
+        after_cooldown = now_t0 + timedelta(hours=6, minutes=1)
+        self.assertTrue(
+            should_bypass_revenue_cache((2026, 9), today, stock_id="2330", now=after_cooldown)
+        )
+        clear_live_check_timestamps()
 
 
 if __name__ == "__main__":

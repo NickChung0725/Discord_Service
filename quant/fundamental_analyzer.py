@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import difflib
 import html
@@ -46,7 +46,11 @@ from finmind_stock_scanner import (
 )
 from github_uploader import upload_to_github
 from fundamental_cache import FundamentalCacheManager
-from fundamental_config import PROMPT_TEMPLATES
+from fundamental_config import (
+    DEFAULT_FUNDAMENTAL_ENGINE_CONFIG,
+    FundamentalEngineConfig,
+    PROMPT_TEMPLATES,
+)
 
 
 TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
@@ -270,6 +274,818 @@ def _to_float(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return None if pd.isna(number) else number
+
+
+# --------------------------------------------------------------------------- #
+# SASD v5.4.0 Phase 2：無盲點基本面特徵工程（股數還原、春節豁免營收、前瞻EPS、三率語意）
+# --------------------------------------------------------------------------- #
+class _AutoDictResult(dict):
+    """同時支援 dict 取值、屬性存取 (.status/.mode/.tag) 與字串包含/相等比對之結果容器。"""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __contains__(self, item: object) -> bool:
+        if super().__contains__(item):
+            return True
+        if isinstance(item, str):
+            for key in ("status", "mode", "tag", "semantic_tag", "label", "warning_tag", "qtd_tag", "summary_line"):
+                val = self.get(key)
+                if val is not None and (item == val or item in str(val)):
+                    return True
+        return item in self.values()
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return other in (
+                self.get("status"),
+                self.get("tag"),
+                self.get("mode"),
+                self.get("semantic_tag"),
+            )
+        return super().__eq__(other)
+
+
+def _normalize_statements_newest_first(
+    quarterly_statements: list[dict[str, Any]] | pd.DataFrame | None,
+) -> list[dict[str, Any]]:
+    if quarterly_statements is None:
+        return []
+    if isinstance(quarterly_statements, pd.DataFrame):
+        if quarterly_statements.empty:
+            return []
+        df = quarterly_statements.copy()
+        for sort_col in ("raw_date", "date", "year_qtr"):
+            if sort_col in df.columns:
+                df = df.sort_values(sort_col, ascending=False)
+                break
+        return df.to_dict("records")
+    records = [dict(r) for r in quarterly_statements if isinstance(r, Mapping)]
+    if len(records) >= 2:
+        first_dt = str(records[0].get("date") or records[0].get("year_qtr") or records[0].get("raw_date") or "").strip()
+        last_dt = str(records[-1].get("date") or records[-1].get("year_qtr") or records[-1].get("raw_date") or "").strip()
+        if first_dt and last_dt and first_dt < last_dt:
+            records = list(reversed(records))
+    return records
+
+
+def _extract_quarter_eps_and_ni(q_data: Mapping[str, Any]) -> tuple[float, float]:
+    raw_eps = (
+        q_data.get("EPS")
+        if "EPS" in q_data
+        else q_data.get("eps", q_data.get("BasicEarningsPerShare", 0.0))
+    )
+    raw_ni = (
+        q_data.get("IncomeAfterTaxes")
+        if "IncomeAfterTaxes" in q_data
+        else q_data.get(
+            "net_income_parent",
+            q_data.get("net_income_total", q_data.get("NetIncome", 0.0)),
+        )
+    )
+    eps_val = _to_float(raw_eps) or 0.0
+    ni_val = _to_float(raw_ni) or 0.0
+    return eps_val, ni_val
+
+
+def _infer_safe_weighted_shares(
+    quarterly_statements: list[dict[str, Any]] | pd.DataFrame,
+    fallback_market_cap: float | None = None,
+    latest_close_price: float | None = None,
+    *,
+    config: FundamentalEngineConfig = DEFAULT_FUNDAMENTAL_ENGINE_CONFIG,
+) -> tuple[float, str]:
+    """三層防呆真實流通股數還原（3-Tier Safe Share Count Inference）。
+
+    回傳 (推算之真實流通在外股數, 推算來源標籤)
+    quarterly_statements 需按季度由新到舊排序，包含 'IncomeAfterTaxes' (元) 與 'EPS' (元)
+    """
+    statements = _normalize_statements_newest_first(quarterly_statements)
+    min_eps = config.MIN_SAFE_EPS_FOR_SHARE_INFERENCE
+    max_lookback = config.MAX_HISTORICAL_QUARTERS_LOOKBACK
+
+    # Tier 1: 檢查最新一季 |EPS| 是否 >= 0.25 元 (確保四捨五入誤差 < 2%)
+    if statements:
+        latest = statements[0]
+        latest_eps, latest_net_income = _extract_quarter_eps_and_ni(latest)
+        if abs(latest_eps) >= min_eps and abs(latest_net_income) > 0:
+            shares = abs(latest_net_income / latest_eps)
+            return shares, "TIER1_LATEST_QUARTER_EXACT"
+
+    # Tier 2: 若最新季為微利或損益兩平 (|EPS| < 0.25)，向過去最多 8 季回溯最近一個 |EPS| >= 0.25 的季度
+    for q_data in statements[1:max_lookback]:
+        q_eps, q_net_income = _extract_quarter_eps_and_ni(q_data)
+        if abs(q_eps) >= min_eps and abs(q_net_income) > 0:
+            shares = abs(q_net_income / q_eps)
+            q_label = (
+                q_data.get("date")
+                or q_data.get("year_qtr")
+                or q_data.get("raw_date")
+                or "HIST"
+            )
+            return shares, f"TIER2_LOOKBACK_{q_label}"
+
+    # Tier 3: 若過去 8 季皆處於微利或研發期，使用 市值 / 最新收盤價 作為安全保底
+    if fallback_market_cap and latest_close_price and latest_close_price > 0:
+        shares = float(fallback_market_cap) / float(latest_close_price)
+        return shares, "TIER3_MARKET_CAP_FALLBACK"
+
+    raise ValueError("無法安全推算真實流通股數：財報無 |EPS| >= 0.25 之季度且無市值保底資料")
+
+
+def _extract_rev_ym(rec: Mapping[str, Any]) -> tuple[int | None, int | None]:
+    for ym_key in ("rev_ym", "year_month", "ym"):
+        val = str(rec.get(ym_key, "") or "").strip()
+        m = re.match(r"^(\d{4})[-/](\d{1,2})$", val)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    y_val = _to_float(rec.get("revenue_year", rec.get("year")))
+    m_val = _to_float(rec.get("revenue_month", rec.get("month")))
+    if y_val is not None and m_val is not None:
+        return int(y_val), int(m_val)
+    if m_val is not None:
+        return None, int(m_val)
+    for dt_key in ("date", "raw_date"):
+        val = str(rec.get(dt_key, "") or "").strip()
+        m = re.match(r"^(\d{4})[-/](\d{1,2})", val)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return None, None
+
+
+def _normalize_monthly_revenues_newest_first(
+    monthly_revenues: list[dict[str, Any]] | pd.DataFrame | Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if monthly_revenues is None:
+        return []
+    if isinstance(monthly_revenues, pd.DataFrame):
+        if monthly_revenues.empty:
+            return []
+        records = monthly_revenues.to_dict("records")
+    elif isinstance(monthly_revenues, Mapping):
+        records = [dict(monthly_revenues)]
+    else:
+        records = [dict(r) for r in monthly_revenues if isinstance(r, Mapping)]
+
+    if len(records) >= 2:
+        y0, m0 = _extract_rev_ym(records[0])
+        y_last, m_last = _extract_rev_ym(records[-1])
+        if y0 is not None and m0 is not None and y_last is not None and m_last is not None:
+            records = sorted(
+                records,
+                key=lambda r: (_extract_rev_ym(r)[0] or 0, _extract_rev_ym(r)[1] or 0),
+                reverse=True,
+            )
+    return records
+
+
+def _analyze_revenue_momentum(
+    monthly_revenues: list[dict[str, Any]] | pd.DataFrame | Mapping[str, Any],
+    last_q4_yoy_pct: float | None = None,
+    prev_quarter_revenue: float | None = None,
+    *,
+    jan_feb_combined_yoy_pct: float | None = None,
+    as_of: date | None = None,
+    config: FundamentalEngineConfig = DEFAULT_FUNDAMENTAL_ENGINE_CONFIG,
+) -> _AutoDictResult:
+    """含農曆春節豁免之右側營收動能引擎与本季達成率 (QTD Run-Rate)。"""
+    records = _normalize_monthly_revenues_newest_first(monthly_revenues)
+    if not records:
+        return _AutoDictResult(
+            mode="NORMAL_MONTH_MODE",
+            status="MOMENTUM_WEAK",
+            momentum_status="MOMENTUM_WEAK",
+            latest_rev_month=0,
+            latest_rev_ym="",
+            weighted_3m_yoy_pct=None,
+            jan_feb_combined_yoy_pct=None,
+            vs_ma3_pct=None,
+            ma3_revenue=None,
+            qtd_months=0,
+            qtd_run_rate=None,
+            qtd_run_rate_pct=None,
+            qtd_tag="",
+            warning_tag="",
+            implied_annual_revenue=0.0,
+            summary_line="無月營收資料",
+            qtd_line="無本季達成進度資料",
+        )
+
+    latest = records[0]
+    latest_year, latest_month = _extract_rev_ym(latest)
+    if latest_month is None:
+        if as_of is not None:
+            latest_month = 12 if as_of.month == 1 else as_of.month - 1
+            latest_year = as_of.year - 1 if as_of.month == 1 else as_of.year
+        else:
+            latest_month = 12
+    latest_ym_str = (
+        str(latest.get("rev_ym") or "").strip()
+        or (f"{latest_year:04d}-{latest_month:02d}" if latest_year else f"{latest_month}月")
+    )
+
+    if last_q4_yoy_pct is None:
+        for k in ("last_q4_yoy_pct", "last_q4_yoy", "q4_yoy_pct", "q4_yoy", "prev_quarter_yoy_pct"):
+            if k in latest and _to_float(latest.get(k)) is not None:
+                last_q4_yoy_pct = _to_float(latest.get(k))
+                break
+
+    if jan_feb_combined_yoy_pct is None:
+        for k in (
+            "jan_feb_combined_yoy_pct",
+            "jan_feb_combined_yoy",
+            "cumulative_yoy_pct",
+            "combined_yoy_pct",
+            "ytd_yoy_pct",
+        ):
+            if k in latest and _to_float(latest.get(k)) is not None:
+                jan_feb_combined_yoy_pct = _to_float(latest.get(k))
+                break
+
+    revs: list[float] = [
+        v for v in (_to_float(r.get("revenue")) for r in records) if v is not None and v > 0
+    ]
+    latest_rev = revs[0] if revs else 0.0
+    revs_3m = revs[:3]
+    ma3_revenue = (sum(revs_3m) / len(revs_3m)) if revs_3m else None
+    vs_ma3_pct = (
+        ((latest_rev / ma3_revenue) - 1.0) * 100.0
+        if (ma3_revenue is not None and ma3_revenue > 0 and latest_rev > 0)
+        else None
+    )
+
+    yoys_3m: list[float] = []
+    for r in records[:3]:
+        y_val = _to_float(r.get("yoy_pct") if "yoy_pct" in r else r.get("yoy"))
+        if y_val is not None:
+            yoys_3m.append(y_val)
+
+    if len(yoys_3m) >= 3:
+        weighted_3m_yoy = 0.50 * yoys_3m[0] + 0.30 * yoys_3m[1] + 0.20 * yoys_3m[2]
+    elif len(yoys_3m) == 2:
+        weighted_3m_yoy = (0.50 * yoys_3m[0] + 0.30 * yoys_3m[1]) / 0.80
+    elif len(yoys_3m) == 1:
+        weighted_3m_yoy = yoys_3m[0]
+    else:
+        weighted_3m_yoy = None
+
+    latest_yoy = yoys_3m[0] if yoys_3m else None
+    warning_tag = ""
+
+    # 1. 春節月份判定 (1~2月營收)
+    if latest_month in (1, 2):
+        mode = "LUNAR_NEW_YEAR_EXEMPT_MODE"
+        if latest_month == 2:
+            if jan_feb_combined_yoy_pct is None:
+                # 嘗試從列表內的 1月 與 2月 營收推算 1~2 月累計年增率
+                feb_rec = records[0]
+                jan_rec = next(
+                    (r for r in records[1:3] if _extract_rev_ym(r)[1] == 1),
+                    records[1] if len(records) >= 2 else None,
+                )
+                feb_rev = _to_float(feb_rec.get("revenue"))
+                jan_rev = _to_float(jan_rec.get("revenue")) if jan_rec else None
+                feb_yoy = _to_float(feb_rec.get("yoy_pct") if "yoy_pct" in feb_rec else feb_rec.get("yoy"))
+                jan_yoy = (
+                    _to_float(jan_rec.get("yoy_pct") if "yoy_pct" in jan_rec else jan_rec.get("yoy"))
+                    if jan_rec
+                    else None
+                )
+                # 若有去年 1~2 月原始營收
+                ly_feb_rec = (
+                    next(
+                        (
+                            r
+                            for r in records
+                            if _extract_rev_ym(r) == ((latest_year - 1), 2)
+                        ),
+                        None,
+                    )
+                    if latest_year
+                    else None
+                )
+                ly_jan_rec = (
+                    next(
+                        (
+                            r
+                            for r in records
+                            if _extract_rev_ym(r) == ((latest_year - 1), 1)
+                        ),
+                        None,
+                    )
+                    if latest_year
+                    else None
+                )
+                if (
+                    feb_rev
+                    and jan_rev
+                    and ly_feb_rec
+                    and ly_jan_rec
+                    and _to_float(ly_feb_rec.get("revenue"))
+                    and _to_float(ly_jan_rec.get("revenue"))
+                ):
+                    ly_sum = float(_to_float(ly_feb_rec["revenue"]) or 0.0) + float(
+                        _to_float(ly_jan_rec["revenue"]) or 0.0
+                    )
+                    if ly_sum > 0:
+                        jan_feb_combined_yoy_pct = ((feb_rev + jan_rev) / ly_sum - 1.0) * 100.0
+                elif (
+                    feb_rev
+                    and jan_rev
+                    and feb_yoy is not None
+                    and jan_yoy is not None
+                    and (1.0 + feb_yoy / 100.0) > 0
+                    and (1.0 + jan_yoy / 100.0) > 0
+                ):
+                    ly_feb = feb_rev / (1.0 + feb_yoy / 100.0)
+                    ly_jan = jan_rev / (1.0 + jan_yoy / 100.0)
+                    if (ly_feb + ly_jan) > 0:
+                        jan_feb_combined_yoy_pct = ((feb_rev + jan_rev) / (ly_feb + ly_jan) - 1.0) * 100.0
+                elif feb_yoy is not None and jan_yoy is not None:
+                    jan_feb_combined_yoy_pct = (feb_yoy + jan_yoy) / 2.0
+                else:
+                    jan_feb_combined_yoy_pct = latest_yoy
+
+            if jan_feb_combined_yoy_pct is not None and jan_feb_combined_yoy_pct > 0 and (
+                last_q4_yoy_pct is None or jan_feb_combined_yoy_pct > last_q4_yoy_pct
+            ):
+                status = "RIGHT_SIDE_EXPANDING"
+            else:
+                status = "MOMENTUM_WEAK"
+            q4_cmp_text = (
+                f"（高於去年 Q4 YoY {last_q4_yoy_pct:+.1f}%）" if last_q4_yoy_pct is not None else ""
+            )
+            comb_str = f"{jan_feb_combined_yoy_pct:+.1f}%" if jan_feb_combined_yoy_pct is not None else "N/A"
+            summary_line = (
+                f"[{status}] 春節豁免模式 (LUNAR_NEW_YEAR_EXEMPT_MODE)："
+                f"1~2 月累計營收 YoY {comb_str}{q4_cmp_text}"
+            )
+        else:
+            # latest_month == 1
+            ly_jan_feb_avg = _to_float(latest.get("last_year_jan_feb_avg_revenue"))
+            cond_yoy = (
+                latest_yoy is not None
+                and latest_yoy > 0
+                and (last_q4_yoy_pct is None or latest_yoy > last_q4_yoy_pct)
+            )
+            cond_avg = (
+                ly_jan_feb_avg is not None
+                and ly_jan_feb_avg > 0
+                and latest_rev >= ly_jan_feb_avg * 1.15
+            )
+            status = "RIGHT_SIDE_EXPANDING" if (cond_yoy or cond_avg) else "MOMENTUM_WEAK"
+            y_str = f"{latest_yoy:+.1f}%" if latest_yoy is not None else "N/A"
+            summary_line = (
+                f"[{status}] 春節豁免模式 (LUNAR_NEW_YEAR_EXEMPT_MODE)：1 月營收 YoY {y_str}"
+            )
+    else:
+        # 2. 一般月份判定 (3~12月)
+        mode = "NORMAL_MONTH_MODE"
+        is_6m_second_high = False
+        if len(revs) >= 6 and latest_rev > 0:
+            sorted_6m = sorted(revs[:6], reverse=True)
+            is_6m_second_high = latest_rev >= sorted_6m[1]
+
+        if (
+            weighted_3m_yoy is not None
+            and weighted_3m_yoy > 20.0
+            and ma3_revenue is not None
+            and ma3_revenue > 0
+            and latest_rev < ma3_revenue * 0.90
+        ):
+            status = "HIGH_BASE_DECELERATING"
+            warning_tag = "【⚠️ 營收高基期滑落警訊：YoY 雖高但 MoM 已失速見頂】"
+        elif (
+            weighted_3m_yoy is not None
+            and weighted_3m_yoy > 0
+            and ma3_revenue is not None
+            and ma3_revenue > 0
+            and (latest_rev >= ma3_revenue * config.NORMAL_MONTH_MA3_TOLERANCE or is_6m_second_high)
+        ):
+            status = "RIGHT_SIDE_EXPANDING"
+        else:
+            status = "MOMENTUM_WEAK"
+
+        w_str = f"{weighted_3m_yoy:+.1f}%" if weighted_3m_yoy is not None else "N/A"
+        if vs_ma3_pct is not None:
+            dir_word = "高於" if vs_ma3_pct >= 0 else "低於"
+            ma_part = f"，{latest_month} 月營收{dir_word}近 3 月均線 {vs_ma3_pct:+.1f}%"
+        else:
+            ma_part = ""
+        summary_line = f"[{status}] 近 3 月加權 YoY {w_str}{ma_part}"
+        if warning_tag:
+            summary_line += f" {warning_tag}"
+
+    # 3. 本季達成率 (QTD Run-Rate) 與本業年化營收推算
+    q_num = (latest_month - 1) // 3 + 1
+    q_start_month = (q_num - 1) * 3 + 1
+    months_in_q = latest_month - q_start_month + 1
+    prev_q_num = 4 if q_num == 1 else q_num - 1
+
+    qtd_revs = revs[:months_in_q]
+    qtd_revenue_sum = sum(qtd_revs) if qtd_revs else 0.0
+
+    if prev_quarter_revenue is None and len(revs) >= months_in_q + 3:
+        prev_quarter_revenue = sum(revs[months_in_q : months_in_q + 3])
+
+    qtd_run_rate: float | None = None
+    qtd_run_rate_pct: float | None = None
+    qtd_tag = ""
+    if prev_quarter_revenue and prev_quarter_revenue > 0 and qtd_revenue_sum > 0:
+        qtd_run_rate = qtd_revenue_sum / float(prev_quarter_revenue)
+        qtd_run_rate_pct = round(qtd_run_rate * 100.0, 1)
+        if months_in_q == 1 and qtd_run_rate >= config.QTD_STRONG_RUN_RATE_1M:
+            qtd_tag = "【🔥 本季營收進度大幅超前 (1M Run-Rate > 36%)】"
+            qtd_line = (
+                f"🔥 Q{q_num} 第 1 個月營收已達 Q{prev_q_num} 總營收之 {qtd_run_rate_pct:.1f}% "
+                "(超越 33.3% 基準，本季確定強勢季增)"
+            )
+        elif months_in_q == 2 and qtd_run_rate >= config.QTD_STRONG_RUN_RATE_2M:
+            qtd_tag = "【🔥 本季確定強勢季增 (2M Run-Rate > 72%)】"
+            qtd_line = (
+                f"🔥 Q{q_num} 前 2 個月營收已達 Q{prev_q_num} 總營收之 {qtd_run_rate_pct:.1f}% "
+                "(超越 66.7% 基準，本季確定強勢季增)"
+            )
+        else:
+            qtd_line = f"Q{q_num} 前 {months_in_q} 個月累計營收達 Q{prev_q_num} 總營收之 {qtd_run_rate_pct:.1f}%"
+    else:
+        qtd_line = "本季累計達成率資料不足"
+
+    # 年化營收推算：近 2 個月平均月營收（若遇 1~2 月春節則採近 3 個月平均）* 12
+    avg_window = 3 if latest_month in (1, 2) else 2
+    sample_revs = revs[:avg_window]
+    avg_monthly_rev = (sum(sample_revs) / len(sample_revs)) if sample_revs else 0.0
+    implied_annual_revenue = avg_monthly_rev * 12.0
+
+    return _AutoDictResult(
+        mode=mode,
+        status=status,
+        momentum_status=status,
+        latest_rev_month=latest_month,
+        latest_rev_ym=latest_ym_str,
+        weighted_3m_yoy_pct=round(weighted_3m_yoy, 2) if weighted_3m_yoy is not None else None,
+        jan_feb_combined_yoy_pct=(
+            round(jan_feb_combined_yoy_pct, 2) if jan_feb_combined_yoy_pct is not None else None
+        ),
+        vs_ma3_pct=round(vs_ma3_pct, 2) if vs_ma3_pct is not None else None,
+        ma3_revenue=round(ma3_revenue, 2) if ma3_revenue is not None else None,
+        qtd_months=months_in_q,
+        qtd_run_rate=round(qtd_run_rate, 4) if qtd_run_rate is not None else None,
+        qtd_run_rate_pct=qtd_run_rate_pct,
+        qtd_tag=qtd_tag,
+        warning_tag=warning_tag,
+        implied_annual_revenue=implied_annual_revenue,
+        summary_line=summary_line,
+        qtd_line=qtd_line,
+    )
+
+
+def _extract_quarter_opm_ratio(q_data: Mapping[str, Any]) -> float | None:
+    for pct_key in ("op_margin_pct", "opm_pct", "operating_margin_pct"):
+        if pct_key in q_data and _to_float(q_data.get(pct_key)) is not None:
+            return float(_to_float(q_data.get(pct_key)) or 0.0) / 100.0
+    for key in ("opm", "operating_margin", "OperatingMargin"):
+        if key in q_data and _to_float(q_data.get(key)) is not None:
+            val = float(_to_float(q_data.get(key)) or 0.0)
+            return val / 100.0 if abs(val) > 1.0 else val
+    op_inc = _to_float(
+        q_data.get("OperatingIncome", q_data.get("operating_income", q_data.get("OperatingProfit")))
+    )
+    rev = _to_float(q_data.get("Revenue", q_data.get("revenue", q_data.get("OperatingRevenue"))))
+    if op_inc is not None and rev is not None and rev > 0:
+        return op_inc / rev
+    return None
+
+
+def _compute_forward_valuation(
+    implied_annual_revenue: float,
+    quarterly_statements: list[dict[str, Any]] | pd.DataFrame | None = None,
+    safe_weighted_shares: float = 0.0,
+    latest_close_price: float | None = None,
+    *,
+    opm_avg_2q: float | None = None,
+    sector_benchmark_pe: float = 20.0,
+    trailing_pe: float | None = None,
+    config: FundamentalEngineConfig = DEFAULT_FUNDAMENTAL_ENGINE_CONFIG,
+) -> _AutoDictResult:
+    """本業前瞻 EPS (Implied Core Forward EPS) 與橫斷面同產業相對估值計算。"""
+    if opm_avg_2q is None:
+        statements = _normalize_statements_newest_first(quarterly_statements)
+        opms = [
+            v
+            for v in (_extract_quarter_opm_ratio(q) for q in statements[:2])
+            if v is not None
+        ]
+        opm_ratio = (sum(opms) / len(opms)) if opms else 0.0
+    else:
+        opm_ratio = opm_avg_2q / 100.0 if abs(opm_avg_2q) > 1.0 else opm_avg_2q
+
+    implied_core_forward_eps = 0.0
+    if safe_weighted_shares > 0 and implied_annual_revenue > 0:
+        implied_core_forward_eps = (
+            float(implied_annual_revenue)
+            * float(opm_ratio)
+            * config.EFFECTIVE_AFTER_TAX_FACTOR
+            / float(safe_weighted_shares)
+        )
+
+    implied_forward_pe: float | None = None
+    sector_pe_ratio: float | None = None
+    if implied_core_forward_eps > 0 and latest_close_price is not None and latest_close_price > 0:
+        implied_forward_pe = float(latest_close_price) / implied_core_forward_eps
+        if sector_benchmark_pe > 0:
+            sector_pe_ratio = implied_forward_pe / float(sector_benchmark_pe)
+
+    valuation_tag = ""
+    if implied_forward_pe is not None and sector_benchmark_pe > 0:
+        if (
+            trailing_pe is not None
+            and trailing_pe > 30.0
+            and implied_forward_pe < sector_benchmark_pe * config.SECTOR_PE_UNDERVALUED_RATIO
+        ):
+            valuation_tag = "【💎 轉機成長收斂股：歷史 PE 雖高，但營收爆發帶動前瞻 PE 低於同業中位數】"
+        elif implied_forward_pe < sector_benchmark_pe * config.SECTOR_PE_UNDERVALUED_RATIO:
+            valuation_tag = "【💎 轉機成長收斂股：前瞻估值顯著低於同業】"
+        elif implied_forward_pe > sector_benchmark_pe * config.SECTOR_PE_OVERHEATED_RATIO:
+            valuation_tag = "【⚠️ 估值溢價偏高：前瞻 PE 高於同產業中位數 35% 以上，需極強籌碼支撐】"
+        else:
+            valuation_tag = "【➖ 前瞻估值位階合理】"
+
+    t_pe_str = f"{trailing_pe:.1f}x" if trailing_pe is not None else "N/A"
+    f_pe_str = f"{implied_forward_pe:.1f}x" if implied_forward_pe is not None else "N/A"
+    s_pe_str = f"{sector_benchmark_pe:.1f}x"
+    r_str = f"{sector_pe_ratio:.2f}x" if sector_pe_ratio is not None else "N/A"
+    summary_line = (
+        f"歷史 Trailing PE {t_pe_str} ➡️ 本業年化前瞻 Implied Forward PE 僅 {f_pe_str} "
+        f"(同業中位數 PE 為 {s_pe_str}，相對比值 {r_str}){valuation_tag}"
+    )
+
+    return _AutoDictResult(
+        opm_avg_2q_pct=round(opm_ratio * 100.0, 2),
+        implied_core_forward_eps=round(implied_core_forward_eps, 4),
+        implied_forward_pe=round(implied_forward_pe, 2) if implied_forward_pe is not None else None,
+        sector_benchmark_pe=round(sector_benchmark_pe, 2),
+        sector_pe_ratio=round(sector_pe_ratio, 2) if sector_pe_ratio is not None else None,
+        trailing_pe=round(trailing_pe, 2) if trailing_pe is not None else None,
+        tag=valuation_tag,
+        valuation_tag=valuation_tag,
+        summary_line=summary_line,
+    )
+
+
+def _extract_gpm_opm_pct(q_data: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    gpm = _to_float(
+        q_data.get("gross_margin_pct", q_data.get("gpm_pct", q_data.get("gpm", q_data.get("GrossMargin"))))
+    )
+    if gpm is None:
+        gp = _to_float(q_data.get("gross_profit", q_data.get("GrossProfit")))
+        rev = _to_float(q_data.get("revenue", q_data.get("Revenue")))
+        if gp is not None and rev is not None and rev > 0:
+            gpm = (gp / rev) * 100.0
+
+    opm = _to_float(
+        q_data.get("op_margin_pct", q_data.get("opm_pct", q_data.get("opm", q_data.get("OperatingMargin"))))
+    )
+    if opm is None:
+        op = _to_float(q_data.get("operating_income", q_data.get("OperatingIncome")))
+        rev = _to_float(q_data.get("revenue", q_data.get("Revenue")))
+        if op is not None and rev is not None and rev > 0:
+            opm = (op / rev) * 100.0
+    return gpm, opm
+
+
+def _evaluate_margin_trends(
+    quarterly_statements: list[dict[str, Any]] | pd.DataFrame | Mapping[str, Any] | None = None,
+    revenue_yoy_pct: float | None = None,
+    *,
+    gpm_latest: float | None = None,
+    gpm_prev_q: float | None = None,
+    gpm_last_year_q: float | None = None,
+    opm_latest: float | None = None,
+    opm_prev_q: float | None = None,
+    opm_last_year_q: float | None = None,
+    gpm_qoq_diff: float | None = None,
+    gpm_yoy_diff: float | None = None,
+    opm_qoq_diff: float | None = None,
+    opm_yoy_diff: float | None = None,
+    config: FundamentalEngineConfig = DEFAULT_FUNDAMENTAL_ENGINE_CONFIG,
+) -> _AutoDictResult:
+    """三率擴張與收縮語意工程 (_evaluate_margin_trends)。
+
+    歸納為 4 種確定性語意標籤之一：
+    - MARGIN_TRIPLE_EXPANSION
+    - OPERATING_LEVERAGE_BREAKOUT
+    - FAKE_REVENUE_DILUTION
+    - MARGIN_NEUTRAL
+    """
+    if isinstance(quarterly_statements, Mapping):
+        d = quarterly_statements
+        if revenue_yoy_pct is None:
+            revenue_yoy_pct = _to_float(
+                d.get("revenue_yoy_pct", d.get("yoy_pct", d.get("rev_yoy_pct", d.get("revenue_yoy"))))
+            )
+        if gpm_qoq_diff is None:
+            gpm_qoq_diff = _to_float(d.get("gpm_qoq_diff", d.get("gross_margin_qoq")))
+        if opm_qoq_diff is None:
+            opm_qoq_diff = _to_float(d.get("opm_qoq_diff", d.get("op_margin_qoq")))
+        if gpm_yoy_diff is None:
+            gpm_yoy_diff = _to_float(d.get("gpm_yoy_diff", d.get("gross_margin_yoy")))
+        if opm_yoy_diff is None:
+            opm_yoy_diff = _to_float(d.get("opm_yoy_diff", d.get("op_margin_yoy")))
+        if gpm_latest is None:
+            gpm_latest, opm_latest_extracted = _extract_gpm_opm_pct(d)
+            if opm_latest is None:
+                opm_latest = opm_latest_extracted
+    elif quarterly_statements is not None:
+        statements = _normalize_statements_newest_first(quarterly_statements)
+        if statements:
+            latest_q = statements[0]
+            g_cur, o_cur = _extract_gpm_opm_pct(latest_q)
+            if gpm_latest is None:
+                gpm_latest = g_cur
+            if opm_latest is None:
+                opm_latest = o_cur
+            if revenue_yoy_pct is None:
+                revenue_yoy_pct = _to_float(
+                    latest_q.get("qtr_rev_yoy_pct", latest_q.get("revenue_yoy_pct", latest_q.get("yoy_pct")))
+                )
+            if gpm_qoq_diff is None:
+                gpm_qoq_diff = _to_float(latest_q.get("gpm_qoq_diff"))
+            if opm_qoq_diff is None:
+                opm_qoq_diff = _to_float(latest_q.get("opm_qoq_diff"))
+        if len(statements) >= 2:
+            g_prev, o_prev = _extract_gpm_opm_pct(statements[1])
+            if gpm_prev_q is None:
+                gpm_prev_q = g_prev
+            if opm_prev_q is None:
+                opm_prev_q = o_prev
+        if len(statements) >= 5:
+            g_ly, o_ly = _extract_gpm_opm_pct(statements[4])
+            if gpm_last_year_q is None:
+                gpm_last_year_q = g_ly
+            if opm_last_year_q is None:
+                opm_last_year_q = o_ly
+
+    if gpm_qoq_diff is None and gpm_latest is not None and gpm_prev_q is not None:
+        gpm_qoq_diff = gpm_latest - gpm_prev_q
+    if opm_qoq_diff is None and opm_latest is not None and opm_prev_q is not None:
+        opm_qoq_diff = opm_latest - opm_prev_q
+    if gpm_yoy_diff is None and gpm_latest is not None and gpm_last_year_q is not None:
+        gpm_yoy_diff = gpm_latest - gpm_last_year_q
+    if opm_yoy_diff is None and opm_latest is not None and opm_last_year_q is not None:
+        opm_yoy_diff = opm_latest - opm_last_year_q
+
+    g_qoq = gpm_qoq_diff if gpm_qoq_diff is not None else 0.0
+    o_qoq = opm_qoq_diff if opm_qoq_diff is not None else 0.0
+    g_yoy = gpm_yoy_diff
+    o_yoy = opm_yoy_diff
+    rev_yoy = revenue_yoy_pct if revenue_yoy_pct is not None else 0.0
+
+    # 判定規則 (SASD v5.4.0 Section 3.3)
+    if (
+        rev_yoy > 15.0
+        and g_qoq <= config.MARGIN_CONTRACTION_BPS_THRESHOLD
+        and o_qoq <= config.MARGIN_CONTRACTION_BPS_THRESHOLD
+    ):
+        tag = "FAKE_REVENUE_DILUTION"
+        label = "【🚨 殺價搶單警訊：營收雖成長但毛利率與營益率顯著惡化，慎防財報見光死】"
+    elif (g_qoq >= 0.5 and o_qoq >= 1.0) or (
+        g_yoy is not None
+        and o_yoy is not None
+        and g_yoy >= config.MARGIN_EXPANSION_BPS_THRESHOLD
+        and o_yoy >= config.MARGIN_EXPANSION_BPS_THRESHOLD
+    ):
+        tag = "MARGIN_TRIPLE_EXPANSION"
+        label = "【🔥 本業獲利能力擴張：毛利率與營益率同步提升，具定價權與規模經濟】"
+    elif o_qoq >= 2.0 and g_qoq > config.MARGIN_CONTRACTION_BPS_THRESHOLD:
+        tag = "OPERATING_LEVERAGE_BREAKOUT"
+        label = f"【🚀 營運槓桿顯現：營收放大帶動營益率跳升 (+{o_qoq:.1f}%)】"
+    else:
+        tag = "MARGIN_NEUTRAL"
+        label = "【➖ 三率持穩：獲利結構變動於正常區間】"
+
+    g_str = f"{gpm_latest:.1f}%" if gpm_latest is not None else "N/A"
+    o_str = f"{opm_latest:.1f}%" if opm_latest is not None else "N/A"
+    gq_str = f"QoQ {g_qoq:+.1f}%" if gpm_qoq_diff is not None else ""
+    gy_str = f", YoY {g_yoy:+.1f}%" if g_yoy is not None else ""
+    oq_str = f"QoQ {o_qoq:+.1f}%" if opm_qoq_diff is not None else ""
+    summary_line = (
+        f"[{tag}] 毛利率 {g_str} ({gq_str}{gy_str})、營益率 {o_str} ({oq_str}) {label}"
+    )
+
+    return _AutoDictResult(
+        tag=tag,
+        status=tag,
+        semantic_tag=tag,
+        label=label,
+        gpm_latest=round(gpm_latest, 2) if gpm_latest is not None else None,
+        opm_latest=round(opm_latest, 2) if opm_latest is not None else None,
+        gpm_qoq_diff=round(g_qoq, 2) if gpm_qoq_diff is not None else None,
+        gpm_yoy_diff=round(g_yoy, 2) if g_yoy is not None else None,
+        opm_qoq_diff=round(o_qoq, 2) if opm_qoq_diff is not None else None,
+        opm_yoy_diff=round(o_yoy, 2) if o_yoy is not None else None,
+        summary_line=summary_line,
+    )
+
+
+@dataclass
+class FundamentalFeatureSummary:
+    stock_id: str
+    stock_name: str
+    sub_industry: str
+    safe_weighted_shares: float | None
+    share_inference_tier: str
+    revenue_momentum: _AutoDictResult
+    margin_trends: _AutoDictResult
+    forward_valuation: _AutoDictResult
+    prompt_block: str
+
+    def to_prompt_block(self) -> str:
+        return self.prompt_block
+
+    def __str__(self) -> str:
+        return self.prompt_block
+
+
+def build_ai_fundamental_prompt_block(
+    stock_id: str,
+    stock_name: str = "",
+    sub_industry: str = "未分類",
+    *,
+    quarterly_statements: list[dict[str, Any]] | pd.DataFrame | None = None,
+    monthly_revenues: list[dict[str, Any]] | pd.DataFrame | None = None,
+    latest_close_price: float | None = None,
+    fallback_market_cap: float | None = None,
+    sector_benchmark_pe: float = 20.0,
+    trailing_pe: float | None = None,
+    last_q4_yoy_pct: float | None = None,
+    prev_quarter_revenue: float | None = None,
+    config: FundamentalEngineConfig = DEFAULT_FUNDAMENTAL_ENGINE_CONFIG,
+) -> str:
+    """組裝供 alignment_ai_picker.py 直接注入 Prompt 之高密度語意特徵區塊 (Section 3.5)。"""
+    statements = _normalize_statements_newest_first(quarterly_statements)
+    try:
+        shares, share_tier = _infer_safe_weighted_shares(
+            statements,
+            fallback_market_cap=fallback_market_cap,
+            latest_close_price=latest_close_price,
+            config=config,
+        )
+        shares_yi = shares / 1e8
+        share_line = f"{share_tier} (真實流通股數：{shares_yi:.2f} 億股，已排除面額誤差)"
+    except ValueError:
+        shares = 0.0
+        share_tier = "UNAVAILABLE"
+        share_line = "UNAVAILABLE (財報無 |EPS| >= 0.25 之季度且無市值保底資料)"
+
+    rev_res = _analyze_revenue_momentum(
+        monthly_revenues or [],
+        last_q4_yoy_pct=last_q4_yoy_pct,
+        prev_quarter_revenue=prev_quarter_revenue,
+        config=config,
+    )
+    rev_yoy_for_margin = (
+        rev_res.get("weighted_3m_yoy_pct")
+        if rev_res.get("weighted_3m_yoy_pct") is not None
+        else rev_res.get("jan_feb_combined_yoy_pct")
+    )
+    margin_res = _evaluate_margin_trends(
+        statements,
+        revenue_yoy_pct=rev_yoy_for_margin,
+        config=config,
+    )
+
+    if trailing_pe is None and latest_close_price and latest_close_price > 0 and statements:
+        ttm_eps = _to_float(statements[0].get("ttm_eps"))
+        if ttm_eps is None and len(statements) >= 4:
+            eps_4q = [_extract_quarter_eps_and_ni(q)[0] for q in statements[:4]]
+            ttm_eps = sum(eps_4q)
+        if ttm_eps and ttm_eps > 0:
+            trailing_pe = float(latest_close_price) / ttm_eps
+
+    val_res = _compute_forward_valuation(
+        implied_annual_revenue=float(rev_res.get("implied_annual_revenue") or 0.0),
+        quarterly_statements=statements,
+        safe_weighted_shares=shares,
+        latest_close_price=latest_close_price,
+        sector_benchmark_pe=sector_benchmark_pe,
+        trailing_pe=trailing_pe,
+        config=config,
+    )
+
+    header_name = f"{stock_id} {stock_name}".strip()
+    lines = [
+        f"【基本面與前瞻估值審計摘要 - {header_name} (細分產業：{sub_industry or '未分類'})】",
+        f"- 股數還原基準：{share_line}",
+        f"- 營收動能診斷：{rev_res['summary_line']}",
+        f"- 本季達成進度：{rev_res['qtd_line']}",
+        f"- 三率獲利品質：{margin_res['summary_line']}",
+        f"- 前瞻估值對齊：{val_res['summary_line']}",
+    ]
+    return "\n".join(lines)
 
 
 @dataclass
@@ -1586,7 +2402,76 @@ class FundamentalAnalyzer:
             ),
         ]
         lines.extend(self.build_snapshot_trend_lines(wide_df, rev_df, bs_latest, close))
+        try:
+            is_df = _history("02_Income_Statement")
+            sem_block = self.build_ai_fundamental_prompt_block(
+                stock_id,
+                close=close,
+                wide_df=wide_df,
+                is_df=is_df,
+                rev_df=rev_df,
+            )
+            if sem_block:
+                lines.append("  - " + "\n    ".join(sem_block.splitlines()))
+        except Exception:  # noqa: BLE001
+            logger.debug("Phase 2 semantic block skipped for %s", stock_id, exc_info=True)
         return "\n".join(lines)
+
+    def build_ai_fundamental_prompt_block(
+        self,
+        stock_id: str,
+        *,
+        close: float | None = None,
+        stock_name: str = "",
+        sub_industry: str = "",
+        sector_benchmark_pe: float = 20.0,
+        wide_df: pd.DataFrame | None = None,
+        is_df: pd.DataFrame | None = None,
+        rev_df: pd.DataFrame | None = None,
+    ) -> str:
+        """從快取表讀取財報與月營收，產出 SASD v5.4.0 Phase 2 高密度語意特徵區塊。"""
+        if wide_df is None:
+            wide_df = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
+        if is_df is None:
+            is_df = self.cache._read_stock_rows(self.cache._get_worksheet("02_Income_Statement"), stock_id)  # noqa: SLF001
+        if rev_df is None:
+            rev_df = self.cache._read_stock_rows(self.cache._get_worksheet("01_Monthly_Revenue"), stock_id)  # noqa: SLF001
+
+        combined_q: list[dict[str, Any]] = []
+        if is_df is not None and not is_df.empty:
+            is_map = {str(r.get("year_qtr", "")): dict(r) for r in is_df.to_dict("records")}
+        else:
+            is_map = {}
+
+        if wide_df is not None and not wide_df.empty:
+            for r in wide_df.to_dict("records"):
+                qtr = str(r.get("year_qtr", ""))
+                merged_row = {**is_map.get(qtr, {}), **dict(r)}
+                combined_q.append(merged_row)
+        elif is_map:
+            combined_q = list(is_map.values())
+
+        if not sub_industry:
+            try:
+                from taxonomy_service import TaxonomyService
+
+                rec = TaxonomyService().get_cached(stock_id)
+                if rec:
+                    sub_industry = str(rec.get("sub_industry") or "").strip()
+                    if not stock_name:
+                        stock_name = str(rec.get("stock_name") or "").strip()
+            except Exception:  # noqa: BLE001
+                pass
+
+        return build_ai_fundamental_prompt_block(
+            stock_id=stock_id,
+            stock_name=stock_name,
+            sub_industry=sub_industry or "未分類",
+            quarterly_statements=combined_q,
+            monthly_revenues=rev_df,
+            latest_close_price=close,
+            sector_benchmark_pe=sector_benchmark_pe,
+        )
 
     def _escape_html(self, text: str) -> str:
         return (

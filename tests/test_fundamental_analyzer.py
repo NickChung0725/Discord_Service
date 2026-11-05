@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 import json
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 import tests  # noqa: F401
-from fundamental_analyzer import FundamentalAnalyzer
+from fundamental_analyzer import (
+    FundamentalAnalyzer,
+    _analyze_revenue_momentum,
+    _compute_forward_valuation,
+    _evaluate_margin_trends,
+    _infer_safe_weighted_shares,
+    build_ai_fundamental_prompt_block,
+)
+from taxonomy_service import compute_sector_median_pe
 
 
 class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
@@ -170,6 +179,115 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("MA3", ma_ctx)
             self.assertIn("17MA近期走勢", ma_ctx)
             self.assertIn("940.00", ma_ctx)
+
+    def test_flexible_par_value_stock_share_inference(self) -> None:
+        # 面額 1 元（而非 10 元）的高價股：實收資本額 3 億元，但最新季稅後淨利 6 億元、EPS 2.00 元
+        quarterly_statements = [
+            {
+                "date": "2026Q3",
+                "CapitalStock": 300_000_000.0,
+                "IncomeAfterTaxes": 600_000_000.0,
+                "EPS": 2.00,
+            }
+        ]
+        shares, tier = _infer_safe_weighted_shares(quarterly_statements)
+        # 真實流通股數應為 3 億股 (300,000,000)，而非用股本除 10 算出的 3,000 萬股
+        self.assertAlmostEqual(shares, 300_000_000.0)
+        self.assertEqual(tier, "TIER1_LATEST_QUARTER_EXACT")
+
+    def test_micro_profit_turnaround_stock_avoids_zero_div_and_rounding_explosion(self) -> None:
+        # 1) 最新季 Q3 微利 EPS = 0.01 元（若直接除會算出 149,000,000 股，膨脹 49%），前季 Q2 EPS = -0.50 元
+        statements_rounding = [
+            {"date": "2026Q3", "IncomeAfterTaxes": 1_490_000.0, "EPS": 0.01},
+            {"date": "2026Q2", "IncomeAfterTaxes": -50_000_000.0, "EPS": -0.50},
+        ]
+        shares_1, tier_1 = _infer_safe_weighted_shares(statements_rounding)
+        self.assertAlmostEqual(shares_1, 100_000_000.0)
+        self.assertEqual(tier_1, "TIER2_LOOKBACK_2026Q2")
+
+        # 2) 最新季 Q3 損益兩平 EPS = 0.00 元，確保不發生 ZeroDivisionError 並回溯至 Q2
+        statements_zero_eps = [
+            {"date": "2026Q3", "IncomeAfterTaxes": 1_490_000.0, "EPS": 0.00},
+            {"date": "2026Q2", "IncomeAfterTaxes": -50_000_000.0, "EPS": -0.50},
+        ]
+        shares_2, tier_2 = _infer_safe_weighted_shares(statements_zero_eps)
+        self.assertAlmostEqual(shares_2, 100_000_000.0)
+        self.assertEqual(tier_2, "TIER2_LOOKBACK_2026Q2")
+
+    def test_lunar_new_year_revenue_exemption_prevents_false_rejection(self) -> None:
+        # 模擬時間 3 月 10 日（已公佈 2 月營收），2 月因農曆春節長假工作天數減少，單月較 1 月下滑 22%（且低於近 3 月均線），
+        # 但 1~2 月累計營收 YoY 高達 +42%（高於去年 Q4 的 +25%）。
+        monthly_revenues = [
+            {"rev_ym": "2026-02", "revenue": 780_000_000.0, "mom_pct": -22.0, "yoy_pct": 30.0},
+            {"rev_ym": "2026-01", "revenue": 1_000_000_000.0, "mom_pct": 5.0, "yoy_pct": 53.1},
+            {"rev_ym": "2025-12", "revenue": 950_000_000.0, "mom_pct": 2.0, "yoy_pct": 26.0},
+        ]
+        result = _analyze_revenue_momentum(
+            monthly_revenues,
+            last_q4_yoy_pct=25.0,
+            jan_feb_combined_yoy_pct=42.0,
+            as_of=date(2026, 3, 10),
+        )
+        self.assertEqual(result["mode"], "LUNAR_NEW_YEAR_EXEMPT_MODE")
+        self.assertEqual(result["status"], "RIGHT_SIDE_EXPANDING")
+        self.assertAlmostEqual(float(result["jan_feb_combined_yoy_pct"]), 42.0)
+
+    def test_fake_revenue_dilution_flags_margin_contraction(self) -> None:
+        # 營收 YoY 成長 +28%，但最新季毛利率 QoQ 下滑 -2.1%、營益率 QoQ 下滑 -2.4%
+        quarterly_statements = [
+            {"year_qtr": "2026Q3", "gross_margin_pct": 18.4, "op_margin_pct": 7.2},
+            {"year_qtr": "2026Q2", "gross_margin_pct": 20.5, "op_margin_pct": 9.6},
+        ]
+        res = _evaluate_margin_trends(quarterly_statements, revenue_yoy_pct=28.0)
+        self.assertEqual(res["tag"], "FAKE_REVENUE_DILUTION")
+        self.assertIn("殺價搶單警訊", res["label"])
+        self.assertAlmostEqual(float(res["gpm_qoq_diff"]), -2.1)
+        self.assertAlmostEqual(float(res["opm_qoq_diff"]), -2.4)
+
+    def test_forward_valuation_and_sector_median_pe(self) -> None:
+        # 測試同業中位數 PE 過濾離群值 (<=0, >120) 與樣本數 >= 4 中位數計算
+        sector_pe = compute_sector_median_pe(
+            "AI伺服器",
+            {"2382": 20.0, "3231": 16.0, "6669": 22.0, "2356": 19.0, "9991": -5.0, "9992": 180.0},
+        )
+        self.assertAlmostEqual(sector_pe, 19.5)
+
+        val = _compute_forward_valuation(
+            implied_annual_revenue=18_000_000_000.0,
+            quarterly_statements=[
+                {"year_qtr": "2026Q3", "op_margin_pct": 15.0},
+                {"year_qtr": "2026Q2", "op_margin_pct": 14.6},
+            ],
+            safe_weighted_shares=300_000_000.0,
+            latest_close_price=100.8,
+            sector_benchmark_pe=sector_pe,
+            trailing_pe=32.5,
+        )
+        # Implied Core Forward EPS = 18e9 * 0.148 * 0.80 / 3e8 = 7.104 -> Forward PE = 100.8 / 7.104 = 14.19
+        self.assertAlmostEqual(float(val["implied_forward_pe"]), 14.19, places=1)
+        self.assertIn("轉機成長收斂股", val["valuation_tag"])
+
+        block = build_ai_fundamental_prompt_block(
+            "2382",
+            "廣達",
+            "伺服器與電腦週邊",
+            quarterly_statements=[
+                {"year_qtr": "2026Q3", "IncomeAfterTaxes": 600_000_000.0, "EPS": 2.0, "gross_margin_pct": 24.5, "op_margin_pct": 14.8},
+                {"year_qtr": "2026Q2", "IncomeAfterTaxes": 540_000_000.0, "EPS": 1.8, "gross_margin_pct": 23.3, "op_margin_pct": 13.0},
+            ],
+            monthly_revenues=[
+                {"rev_ym": "2026-10", "revenue": 1_500_000_000.0, "yoy_pct": 38.0},
+                {"rev_ym": "2026-09", "revenue": 1_400_000_000.0, "yoy_pct": 32.0},
+                {"rev_ym": "2026-08", "revenue": 1_300_000_000.0, "yoy_pct": 28.0},
+            ],
+            latest_close_price=98.0,
+            sector_benchmark_pe=19.5,
+            trailing_pe=31.0,
+            prev_quarter_revenue=3_900_000_000.0,
+        )
+        self.assertIn("TIER1_LATEST_QUARTER_EXACT", block)
+        self.assertIn("RIGHT_SIDE_EXPANDING", block)
+        self.assertIn("MARGIN_TRIPLE_EXPANSION", block)
 
 
 if __name__ == "__main__":

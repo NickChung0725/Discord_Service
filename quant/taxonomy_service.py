@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import statistics
 import time
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
@@ -541,6 +542,158 @@ def format_taxonomy_badge(rec: Mapping[str, Any] | None) -> str:
     return f"🏷️ 細分產業：{nature_tag}{sub_ind}{prod_part} ｜ 🔗 相似同業：{peers_str}"
 
 
+DEFAULT_SECTOR_BENCHMARK_PE: float = 20.0
+MIN_VALID_SECTOR_PE_SAMPLES: int = 4
+MAX_VALID_PE_THRESHOLD: float = 120.0
+
+
+def _filter_valid_pes(values: list[ Any] | tuple[Any, ...]) -> list[float]:
+    valid: list[float] = []
+    for v in values:
+        try:
+            if v is None or pd.isna(v):
+                continue
+            num = float(v)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 < num <= MAX_VALID_PE_THRESHOLD:
+            valid.append(num)
+    return valid
+
+
+def _infer_broad_sector_group(sector_name: str) -> str:
+    text = str(sector_name or "").strip()
+    if any(k in text for k in ("半導體", "IC", "晶圓", "封測", "IP")):
+        return "半導體"
+    if any(k in text for k in ("軟體", "網通", "資安", "資訊", "通信")):
+        return "軟體、網通與資安"
+    if any(k in text for k in ("電子", "電腦", "伺服器", "光電", "PCB", "載板", "被動元件", "散熱", "機殼", "連接器", "電源")):
+        return "電子硬體與零組件"
+    if any(k in text for k in ("生技", "醫療", "綠能", "環保")):
+        return "生技醫療與綠能"
+    if any(k in text for k in ("金融", "航運", "貿易", "觀光", "內需")):
+        return "金融、航運與內需服務"
+    return "傳產製造與原物料"
+
+
+def compute_sector_median_pe(
+    sector_name: str,
+    stock_pe_map: Mapping[str, Any] | list[float] | tuple[float, ...],
+    *,
+    taxonomy_records: Mapping[str, Mapping[str, Any]] | None = None,
+    fallback_sector: str | None = None,
+    default_pe: float = DEFAULT_SECTOR_BENCHMARK_PE,
+) -> float:
+    """計算同細分產業中位數本益比（Sector Benchmark PE）。
+
+    規則（SASD v5.4.0 Phase 2）：
+    1. 過濾掉同細分產業內 ``PE <= 0``（虧損）或 ``PE > 120``（極端離群值）的樣本。
+    2. 若同細分產業有效樣本數 >= 4 檔，取其中位數（Median）作為 ``sector_benchmark_pe``。
+    3. 若細分產業樣本數 < 4 檔，自動向上回退（Fallback）至大分類（如「半導體業」或「電子工業」）中位數，或預設基準 ``20.0``。
+    """
+    target_sector = str(sector_name or "").strip()
+
+    if isinstance(stock_pe_map, (list, tuple)):
+        valid = _filter_valid_pes(stock_pe_map)
+        if len(valid) >= MIN_VALID_SECTOR_PE_SAMPLES:
+            return round(float(statistics.median(valid)), 2)
+        return float(default_pe)
+
+    if not isinstance(stock_pe_map, Mapping) or not stock_pe_map:
+        return float(default_pe)
+
+    # Case A: stock_pe_map 是 {sector_name: [pe1, pe2, ...]} 結構
+    first_val = next(iter(stock_pe_map.values()))
+    if isinstance(first_val, (list, tuple)):
+        direct_pes = _filter_valid_pes(list(stock_pe_map.get(target_sector, [])))
+        if len(direct_pes) >= MIN_VALID_SECTOR_PE_SAMPLES:
+            return round(float(statistics.median(direct_pes)), 2)
+        broad_Candidates = [
+            fallback_sector,
+            _infer_broad_sector_group(target_sector),
+            "半導體業" if "半導體" in _infer_broad_sector_group(target_sector) else "電子工業",
+        ]
+        for b_key in broad_Candidates:
+            if b_key and b_key in stock_pe_map:
+                broad_pes = _filter_valid_pes(list(stock_pe_map[b_key]))
+                if len(broad_pes) >= MIN_VALID_SECTOR_PE_SAMPLES:
+                    return round(float(statistics.median(broad_pes)), 2)
+        return float(default_pe)
+
+    # Case B: stock_pe_map 是 {stock_id: pe} 或 {stock_id: {"pe": pe, "sub_industry": ..., ...}}
+    tax_map: Mapping[str, Mapping[str, Any]] = taxonomy_records or {}
+    if not tax_map:
+        default_cache_path = Path("finmind_reports/.state/stock_taxonomy.json")
+        if default_cache_path.is_file():
+            try:
+                loaded = json.loads(default_cache_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    tax_map = loaded
+            except Exception:  # noqa: BLE001
+                tax_map = {}
+
+    sub_sector_pes: list[float] = []
+    broad_sector_pes: list[float] = []
+    all_valid_pes: list[float] = []
+    has_any_sector_metadata = False
+
+    inferred_broad = fallback_sector or _infer_broad_sector_group(target_sector)
+
+    for sid, entry in stock_pe_map.items():
+        sid_str = str(sid).strip()
+        if isinstance(entry, Mapping):
+            raw_pe = entry.get("pe", entry.get("trailing_pe", entry.get("forward_pe")))
+            sub_ind = str(entry.get("sub_industry") or entry.get("sector") or "").strip()
+            sec_grp = str(entry.get("sector_group") or entry.get("official_industry") or "").strip()
+            if sub_ind or sec_grp:
+                has_any_sector_metadata = True
+        else:
+            raw_pe = entry
+            rec = tax_map.get(sid_str) if isinstance(tax_map, Mapping) else None
+            if isinstance(rec, Mapping):
+                has_any_sector_metadata = True
+                sub_ind = str(rec.get("sub_industry") or "").strip()
+                sec_grp = str(rec.get("sector_group") or rec.get("official_industry") or "").strip()
+            else:
+                sub_ind = ""
+                sec_grp = ""
+
+        valid_list = _filter_valid_pes([raw_pe])
+        if not valid_list:
+            continue
+        pe_val = valid_list[0]
+        all_valid_pes.append(pe_val)
+
+        if target_sector and sub_ind == target_sector:
+            sub_sector_pes.append(pe_val)
+            if sec_grp and not fallback_sector:
+                inferred_broad = sec_grp
+
+        if sec_grp and (
+            sec_grp == inferred_broad
+            or sec_grp == target_sector
+            or (inferred_broad in sec_grp)
+            or (sec_grp in inferred_broad)
+            or ("半導體" in inferred_broad and "半導體" in sec_grp)
+            or ("電子" in inferred_broad and "電子" in sec_grp)
+        ):
+            broad_sector_pes.append(pe_val)
+
+    # 若呼叫端直接傳入「同細分產業個股之 {stock_id: pe} 映射」（無額外分類 metadata）
+    if not has_any_sector_metadata:
+        if len(all_valid_pes) >= MIN_VALID_SECTOR_PE_SAMPLES:
+            return round(float(statistics.median(all_valid_pes)), 2)
+        return float(default_pe)
+
+    if len(sub_sector_pes) >= MIN_VALID_SECTOR_PE_SAMPLES:
+        return round(float(statistics.median(sub_sector_pes)), 2)
+
+    if len(broad_sector_pes) >= MIN_VALID_SECTOR_PE_SAMPLES:
+        return round(float(statistics.median(broad_sector_pes)), 2)
+
+    return float(default_pe)
+
+
 class TaxonomyService:
     """管理本地 stock_taxonomy.json 與 Google Sheets [08_Stock_Taxonomy] 雙向快取與 AI 生成。"""
 
@@ -589,6 +742,24 @@ class TaxonomyService:
     def get_cached(self, stock_id: str) -> dict[str, Any] | None:
         self.load()
         return self._records.get(str(stock_id).strip())
+
+    def compute_sector_median_pe(
+        self,
+        sector_name: str,
+        stock_pe_map: Mapping[str, Any] | list[float] | tuple[float, ...],
+        *,
+        fallback_sector: str | None = None,
+        default_pe: float = DEFAULT_SECTOR_BENCHMARK_PE,
+    ) -> float:
+        """透過本地已載入之 08_Stock_Taxonomy 分類知識庫計算同產業 PE 中位數。"""
+        self.load()
+        return compute_sector_median_pe(
+            sector_name,
+            stock_pe_map,
+            taxonomy_records=self._records,
+            fallback_sector=fallback_sector,
+            default_pe=default_pe,
+        )
 
     def get_or_create_sync(
         self,
