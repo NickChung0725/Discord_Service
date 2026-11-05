@@ -36,7 +36,7 @@
 
 ## 🗄️ Google Sheets 智慧快取資料庫架構 (共 12 張工作表)
 
-系統採用 Google Sheets 作為雲端結構化資料庫（定義於 [`quant/fundamental_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/quant/fundamental_config.py) 的 `SHEET_SCHEMAS`），自動建立並維護以下 12 張分頁：
+系統採用 Google Sheets 作為雲端結構化資料庫（定義於 [`quant/fundamental_config.py`](/quant/fundamental_config.py) 的 `SHEET_SCHEMAS`），自動建立並維護以下 12 張分頁：
 
 | 分頁名稱 | 定位與儲存內容 | 更新時機與快取策略 |
 | :--- | :--- | :--- |
@@ -57,7 +57,7 @@
 
 ## 🏦 台新證券個人帳務與 AI 建倉記憶專屬 Google Sheets 架構 (獨立 5 張工作表)
 
-個人對帳單、庫存與建倉記憶完全隔離於獨立 Google Sheet（`TAISHIN_GSHEET_SPREADSHEET_ID`，定義於 [`taishin/taishin_config.py`](file:///h:/我的雲端硬碟/Work_Document/Discord_Service/taishin/taishin_config.py) 的 `TAISHIN_SHEET_SCHEMAS`），絕不污染公用 12 張財報快取表，且嚴禁上傳至 GitHub Pages 或暴露於公開 Discord 斜線指令：
+個人對帳單、庫存與建倉記憶完全隔離於獨立 Google Sheet（`TAISHIN_GSHEET_SPREADSHEET_ID`，定義於 [`taishin/taishin_config.py`](/taishin/taishin_config.py) 的 `TAISHIN_SHEET_SCHEMAS`），絕不污染公用 12 張財報快取表，且嚴禁上傳至 GitHub Pages 或暴露於公開 Discord 斜線指令：
 
 | 分頁名稱 | 定位與去重主鍵 (Unique Key) | 更新時機與策略 |
 | :--- | :--- | :--- |
