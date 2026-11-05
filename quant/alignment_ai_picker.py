@@ -487,7 +487,7 @@ async def _analyze_candidates_batch(
                 job_prefix=f"stage1_diag_{day}",
                 poll_interval_seconds=poll_interval,
                 tag="stage1_batch",
-                task_type="STAGE2_DIAGNOSIS",
+                task_type="STAGE1_DIAGNOSIS",
             )
         except Exception as error:  # noqa: BLE001
             for stock_id in pending_preps:
@@ -849,7 +849,7 @@ async def run_portfolio_selection(
             job_prefix="stage2_portfolio",
             poll_interval_seconds=poll_interval,
             tag="portfolio_select_batch",
-            task_type="PORTFOLIO_DECISION",
+            task_type="STAGE2_PORTFOLIO",
             stock_ids={"PORTFOLIO_STAGE2": "PORTFOLIO"},
         )
         meta = batch_res.get("PORTFOLIO_STAGE2")

@@ -73,8 +73,6 @@ TAISHIN_SHEET_SCHEMAS: dict[str, list[str]] = {
         "net_amount",
         "realized_pnl",
         "realized_return_pct",
-        "bank_balance",
-        "shortfall_alert",
         "raw_json",
         "synced_at",
     ],

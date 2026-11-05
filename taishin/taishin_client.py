@@ -359,9 +359,6 @@ def extract_record_list(raw_Or_normalized: Any) -> list[dict[str, Any]]:
                 "stock_id",
                 "order_no",
                 "qty",
-                "bank_balance",
-                "balance",
-                "avail_balance",
             )
         ):
             return [norm]
@@ -406,7 +403,7 @@ def filter_records_by_date_range(
 
 
 def _is_no_data_sdk_error(err: BaseException) -> bool:
-    """Return True if the SDK exception represents an empty query result or rollover state (5001/6045/9906)."""
+    """Return True if the SDK exception represents an empty query result or rollover state (5001/6045/9906/OA0022)."""
     text = str(err)
     lower = text.lower()
     return any(
@@ -415,8 +412,11 @@ def _is_no_data_sdk_error(err: BaseException) -> bool:
             "5001",
             "6045",
             "9906",
+            "OA0022",
+            "oa0022",
             "查無資料",
             "無資料",
+            "查詢作業錯誤",
             "已結帳完成",
             "結帳轉檔中",
             "no data",
@@ -726,52 +726,6 @@ class TaishinClient:
             raise
         return extract_record_list(raw)
 
-    def fetch_bank_balance(self) -> float | None:
-        acc = self.ensure_logged_in()
-        balance_keys = (
-            "available_balance",
-            "bank_balance",
-            "avail_balance",
-            "balance",
-            "cash_balance",
-            "ledger_balance",
-            "remain_balance",
-            "amount",
-        )
-        for method_name in ("bank_balance", "skbank_balance", "account_balance", "margin_balance"):
-            fn = resolve_sdk_method(self.sdk, method_name)
-            if fn is None:
-                continue
-            try:
-                try:
-                    raw = fn(acc)
-                except TypeError:
-                    raw = fn()
-            except Exception as err:  # noqa: BLE001
-                if _is_no_data_sdk_error(err):
-                    continue
-                raise
-            norm = normalize_sdk_obj(raw)
-            if isinstance(norm, (int, float)):
-                return float(norm)
-            if isinstance(norm, dict):
-                for key in balance_keys:
-                    if norm.get(key) not in (None, ""):
-                        try:
-                            return float(str(norm[key]).replace(",", ""))
-                        except ValueError:
-                            continue
-            if isinstance(norm, list) and norm:
-                first = norm[0]
-                if isinstance(first, dict):
-                    for key in balance_keys:
-                        if first.get(key) not in (None, ""):
-                            try:
-                                return float(str(first[key]).replace(",", ""))
-                            except ValueError:
-                                continue
-        return None
-
     def fetch_inventories(self) -> list[dict[str, Any]]:
         acc = self.ensure_logged_in()
         fn = resolve_sdk_method(self.sdk, "inventories", "inventory", "positions")
@@ -944,7 +898,6 @@ def inspect_sdk_capabilities(*, live: bool = False, client: TaishinClient | None
             ),
             ("today_settlement", active_client.fetch_today_settlement),
             ("history_settlement", lambda: active_client.fetch_history_settlement(week_ago, today)),
-            ("bank_balance", active_client.fetch_bank_balance),
         ]
         for name, probe_fn in probes:
             try:

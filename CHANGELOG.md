@@ -4,6 +4,17 @@
 
 ---
 
+## [v5.5.1] - 2026-11-05
+### 🔧 優化與修正 (Changed & Removed)
+* **全面移除台新交割銀行餘額查詢 (`bank_balance`) 與交割餘額預警 (`shortfall_alert`)**：
+  * 因台新 SDK 銀行餘額 API (`bank_balance`) 於非盤中或未開通狀態會回傳 `OA0022: 查詢作業錯誤` 導致 `22:45` 與 `08:15` 排程中斷，且使用者不需系統代查銀行餘額與交割餘額缺口，故全面移除相關邏輯：
+  * [`taishin/taishin_client.py`](file:///d:/WorkSpace/Work_Document/Discord_Service/taishin/taishin_client.py)：移除 `fetch_bank_balance()` 方法與 `inspect-sdk --live` 之 `bank_balance` 探測項目；同時將 `OA0022` / `查詢作業錯誤` 納入 `_is_no_data_sdk_error()` 容錯清單。
+  * [`taishin/taishin_config.py`](file:///d:/WorkSpace/Work_Document/Discord_Service/taishin/taishin_config.py)：從 `03_Settlement_And_PnL` 工作表 Schema 移除 `bank_balance` 與 `shortfall_alert` 欄位。
+  * [`taishin_portfolio_service.py`](file:///d:/WorkSpace/Work_Document/Discord_Service/taishin_portfolio_service.py)：移除 `_sync_taishin_core_accounting()`、`sync_daily()`、`run_morning_brief()`、`dump_portfolio_context()` 及 `normalize_settlement_or_pnl_record()` 中所有 `bank_balance` 與交割餘額檢查邏輯。
+  * 同步更新 [`tests/test_taishin_nova.py`](file:///d:/WorkSpace/Work_Document/Discord_Service/tests/test_taishin_nova.py)、[`.agent/skills/portfolio-advisor/SKILL.md`](file:///d:/WorkSpace/Work_Document/Discord_Service/.agent/skills/portfolio-advisor/SKILL.md)、[`deploy/taishin-morning-brief.service`](file:///d:/WorkSpace/Work_Document/Discord_Service/deploy/taishin-morning-brief.service)、[`README.md`](file:///d:/WorkSpace/Work_Document/Discord_Service/README.md) 與 [`discord_service_sasd.md`](file:///d:/WorkSpace/Work_Document/Discord_Service/discord_service_sasd.md)。
+
+---
+
 ## [v5.5.0] - 2026-11-04
 ### ✨ 新增功能 (Added)
 * **大盤層級融資籌碼風控整合**：

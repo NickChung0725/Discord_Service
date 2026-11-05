@@ -464,20 +464,25 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(merged[0]["ai_target_price"], 215.0)
         self.assertEqual(merged[0]["ai_stop_loss"], 193.5)
 
-    def test_settlement_shortfall_alert_detection(self) -> None:
-        shortfall_row = normalize_settlement_or_pnl_record(
-            {"record_date": "2026-11-01", "stock_no": "2330", "qty": 1000, "net_amount": -1050000},
-            record_type="TODAY_SETTLEMENT",
-            bank_balance=500000.0,
+    def test_normalize_settlement_or_pnl_record_without_bank_balance(self) -> None:
+        pnl_row = normalize_settlement_or_pnl_record(
+            {
+                "record_date": "2026-11-01",
+                "stock_no": "2330",
+                "stock_name": "台積電",
+                "qty": 1000,
+                "buy_price": 1000.0,
+                "sell_price": 1050.0,
+                "net_amount": 1045512,
+                "realized_pnl": 44087,
+                "realized_return_pct": 4.41,
+            },
+            record_type="REALIZED_PNL",
         )
-        self.assertEqual(shortfall_row["shortfall_alert"], "⚠️餘額不足")
-
-        ok_row = normalize_settlement_or_pnl_record(
-            {"record_date": "2026-11-01", "stock_no": "2330", "qty": 1000, "net_amount": -1050000},
-            record_type="TODAY_SETTLEMENT",
-            bank_balance=1500000.0,
-        )
-        self.assertEqual(ok_row["shortfall_alert"], "✅正常")
+        self.assertEqual(pnl_row["stock_no"], "2330")
+        self.assertEqual(pnl_row["realized_pnl"], 44087)
+        self.assertNotIn("bank_balance", pnl_row)
+        self.assertNotIn("shortfall_alert", pnl_row)
 
     # ----------------------------------------------------------------------- #
     # 7. 0050 Smart Weekly Dip-Buying DCA Engine & Order Safety Gate
@@ -852,7 +857,6 @@ class TestTaishinNova(unittest.TestCase):
         fake_sdk.today_settlement.return_value = [
             {"record_date": "2026-11-02", "stock_no": "0050", "qty": 100, "net_amount": -19000}
         ]
-        fake_sdk.bank_balance.return_value = 50000.0
         # Path A: Only 0050 in inventory -> 0 tracked memory cards -> 0 AI calls!
         fake_sdk.inventories.return_value = [
             {"stock_no": "0050", "stock_name": "元大台灣50", "qty": 500, "avg_cost_price": 185.0, "current_price": 192.0}
@@ -972,15 +976,13 @@ class TestTaishinNova(unittest.TestCase):
             else (
                 [{"position_id": "2026-10-31_2330", "stock_no": "2330", "stock_name": "台積電", "status": "OPEN", "entry_source": "AI_DAILY_TOP_PICK", "source_scan_date": "2026-10-30", "source_rank": "1", "opened_date": "2026-10-31", "initial_qty": 1000, "peak_qty": 1000, "current_qty": 1000, "avg_cost_price": 1000.0, "initial_tp1": 1120.0, "initial_tp2": 1220.0, "initial_sl": 960.0, "trailing_stop": 1006.0, "entry_thesis": "Q3創高", "invalidation_rule": "破45MA"}]
                 if tab == MEMORY_SHEET_NAME
-                else (
-                    [{"bank_balance": 250000}] if tab == SETTLEMENT_SHEET_NAME else []
-                )
+                else []
             )
         )
         with patch("taishin_portfolio_service.load_public_watchlist_cache", return_value={}):
             ctx = dump_portfolio_context(sheet_mgr=mock_mgr, refresh_live=False, include_macro=False, as_of=date(2026, 11, 2))
         self.assertEqual(ctx["account_summary"]["tracked_positions_count"], 1)
-        self.assertEqual(ctx["account_summary"]["bank_balance"], 250000.0)
+        self.assertNotIn("bank_balance", ctx["account_summary"])
         self.assertEqual(ctx["tracked_positions"][0]["initial_tp1"], 1120.0)
         self.assertEqual(ctx["tracked_positions"][0]["live_metrics"]["trim_plan"]["trim_qty"], 500)
 

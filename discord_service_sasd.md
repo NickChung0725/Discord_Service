@@ -170,11 +170,11 @@ graph TB
 12. `12_AI_Diagnosis_Cache`：AI 最終診斷評分、Verdict、亮點、風險與目標價快取（避免同日重複消耗 Token）。
 
 #### B. 台新個人投資作戰中心 (`Taishin_Portfolio`，共 5 分頁)
-1. `01_Account_Summary`：帳戶總覽、可用交割餘額、總市值、總未實現損益、大盤燈號。
+1. `01_Account_Statement`：全歷史買賣交易對帳單與成交總表。
 2. `02_Portfolio_Holdings`：即時庫存明細，包含成本均價、市價、損益率，以及技術面四均線 **`ma17`、`ma45`、`ma117`、`ma189`**。
-3. `03_Trade_Ledger`：歷史買賣成交明細與已實現損益紀錄。
-4. `04_Settlement_T2`：$T+1$ 與 $T+2$ 應收付交割款試算與資金水位預警。
-5. `05_Position_Thesis_Memory`：**AI 建倉記憶核心表**，鎖定 `initial_tp1`、`initial_tp2`、`initial_sl`、`trailing_stop`、`tp1_hit_flag` 與 `entry_thesis`。
+3. `03_Settlement_And_PnL`：歷史交割與已實現損益紀錄（不含銀行餘額與交割餘額預警）。
+4. `04_DCA_0050_Tracker`：0050 每週不定期定額智慧尋底追蹤表。
+5. `05_Position_Thesis_Memory`：**AI 建倉記憶核心表**，鎖定 `initial_tp1`、`initial_tp2`、`initial_sl`、`trailing_stop` 與 `entry_thesis`。
 
 ---
 
@@ -185,7 +185,7 @@ graph TB
 | 排程時間 (CST) | Systemd Timer / Service | 執行入口與核心職責 | 標準化 Discord 報表標題（無時間前綴） |
 | :--- | :--- | :--- | :--- |
 | **08:00** | `discordbot.service` | 台北早安氣象推播 (`weather_service.py`) | `🌤️ **台北今日天氣**` |
-| **08:15** | `taishin-morning-brief.timer` | 盤前交割預警、隔夜美股與波段持股開盤作戰指令 (`taishin_portfolio_service.py morning-brief`) | `☀️ 【台新證券 盤前開盤作戰晨報】` |
+| **08:15** | `taishin-morning-brief.timer` | 盤前隔夜美股與波段持股開盤作戰指令 (`taishin_portfolio_service.py morning-brief`) | `☀️ 【台新證券 盤前開盤作戰晨報】` |
 | **13:15** | `taishin-dca-0050.timer` | 0050 每週智慧尋底定投評估 (`taishin_portfolio_service.py eval-dca-0050`) | `📈 【0050 每週智慧尋底定投評估】` |
 | **19:00** | `finmind-scan.timer` | 全市場日K、均線、大盤紅綠燈與融資水位掃描 (`finmind_stock_scanner.py`) | `📊 【台股盤後量化掃描快報】` |
 | **20:50** | `finmind-rebound-ai.timer` | 型態 A 急跌回踩長均線反彈選股 (`alignment_ai_picker.py` rebound mode) | `🎯 【型態 A 反彈 AI 嚴選決策報告】` |

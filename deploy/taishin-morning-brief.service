@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily 08:15 Taishin Securities pre-market settlement check, global macro overlay & AI battle brief
+Description=Daily 08:15 Taishin Securities pre-market global macro overlay & AI battle brief
 Wants=network-online.target
 After=network-online.target
 

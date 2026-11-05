@@ -541,7 +541,6 @@ def normalize_settlement_or_pnl_record(
     raw: Mapping[str, Any],
     *,
     record_type: str,
-    bank_balance: float | None = None,
     synced_at: str | None = None,
 ) -> dict[str, Any]:
     """Normalize a settlement or realized PnL record into `03_Settlement_And_PnL` schema."""
@@ -583,13 +582,6 @@ def normalize_settlement_or_pnl_record(
         2,
     )
 
-    bal_val = bank_balance if bank_balance is not None else (
-        _to_float(raw["bank_balance"]) if raw.get("bank_balance") not in (None, "") else None
-    )
-    shortfall_alert = "✅正常"
-    if net_amount < 0 and bal_val is not None and (bal_val + net_amount) < 0:
-        shortfall_alert = "⚠️餘額不足"
-
     return {
         "record_date": record_date,
         "record_type": record_type,
@@ -601,8 +593,6 @@ def normalize_settlement_or_pnl_record(
         "net_amount": net_amount,
         "realized_pnl": realized_pnl,
         "realized_return_pct": realized_return_pct,
-        "bank_balance": int(round(bal_val)) if bal_val is not None else "",
-        "shortfall_alert": shortfall_alert,
         "raw_json": json.dumps(normalize_sdk_obj(raw), ensure_ascii=False, default=str),
         "synced_at": now_iso,
     }
@@ -1207,8 +1197,6 @@ def format_daily_sync_discord_report(
     *,
     as_of: date,
     holdings_rows: list[dict[str, Any]],
-    today_settlements: list[dict[str, Any]],
-    bank_balance: float | None,
     added_statements: int,
     added_settlements: int,
     portfolio_overview: str,
@@ -1224,13 +1212,6 @@ def format_daily_sync_discord_report(
     else:
         lines.append(f"🚦 大盤環境：{light}")
 
-    bal_str = f"{int(round(bank_balance)):,} 元" if bank_balance is not None else "未提供"
-    today_net = sum(_to_int(s.get("net_amount", 0)) for s in today_settlements)
-    has_shortfall = any(s.get("shortfall_alert") == "⚠️餘額不足" for s in today_settlements)
-    alert_badge = "⚠️ 交割款餘額不足預警！" if has_shortfall else "✅ 交割資金正常"
-    # lines.append(
-    #     f"💰 分戶帳餘額：{bal_str} ｜ 今日應收付交割款：{today_net:+,} 元（{alert_badge}）"
-    # )
     lines.append(
         f"📥 帳務增量同步：對帳單新增 {added_statements} 筆 ｜ 交割/已實現損益新增 {added_settlements} 筆"
     )
@@ -1361,15 +1342,14 @@ def sync_daily(
     client.ensure_logged_in()
     account_no = client.get_account_no_str()
 
-    # 1. Sync recent 7 days of statements, fills, settlements, bank balance & realized PnL
-    print(f"[sync-daily] 抓取近 {lookback_days} 天對帳單、成交明細與交割紀錄...")
+    # 1. Sync recent 7 days of statements, fills, settlements & realized PnL
+    print(f"[sync-daily] 抓取近 {lookback_days} 天對帳單、成交明細與已實現損益紀錄...")
     raw_stmt = client.fetch_account_statement(start_dt, today)
     raw_fills = client.fetch_filled_history(start_dt, today)
     raw_fill_details = client.fetch_filled_history_detail(start_dt, today)
     raw_pnl = client.fetch_realized_profit_and_losses(start_dt, today)
     raw_hist_settle = client.fetch_history_settlement(start_dt, today)
     raw_today_settle = client.fetch_today_settlement()
-    bank_balance = client.fetch_bank_balance()
 
     stmt_rows = [
         normalize_statement_record(r, source_api="STATEMENT", default_account_no=account_no, synced_at=now_iso)
@@ -1385,19 +1365,19 @@ def sync_daily(
 
     today_settle_rows = [
         normalize_settlement_or_pnl_record(
-            r, record_type="TODAY_SETTLEMENT", bank_balance=bank_balance, synced_at=now_iso
+            r, record_type="TODAY_SETTLEMENT", synced_at=now_iso
         )
         for r in raw_today_settle
     ]
     hist_settle_rows = [
         normalize_settlement_or_pnl_record(
-            r, record_type="HISTORY_SETTLEMENT", bank_balance=bank_balance, synced_at=now_iso
+            r, record_type="HISTORY_SETTLEMENT", synced_at=now_iso
         )
         for r in raw_hist_settle
     ]
     pnl_rows = [
         normalize_settlement_or_pnl_record(
-            r, record_type="REALIZED_PNL", bank_balance=bank_balance, synced_at=now_iso
+            r, record_type="REALIZED_PNL", synced_at=now_iso
         )
         for r in raw_pnl
     ]
@@ -1473,8 +1453,6 @@ def sync_daily(
     messages = format_daily_sync_discord_report(
         as_of=today,
         holdings_rows=holdings_rows,
-        today_settlements=today_settle_rows,
-        bank_balance=bank_balance,
         added_statements=added_statements,
         added_settlements=added_settlements,
         portfolio_overview=portfolio_overview,
@@ -1495,7 +1473,6 @@ def sync_daily(
         "added_settlements": added_settlements,
         "holdings_count": len(holdings_rows),
         "holdings": holdings_rows,
-        "bank_balance": bank_balance,
         "messages": messages,
         "sent_discord": sent_discord,
     }
@@ -3054,14 +3031,12 @@ def format_morning_brief_discord_report(
     holdings_rows: list[dict[str, Any]],
     memory_rows: list[dict[str, Any]],
     decisions_by_sno: Mapping[str, Mapping[str, Any]],
-    today_settlements: list[dict[str, Any]],
-    bank_balance: float | None,
     market_regime: Mapping[str, Any],
     macro_context: Mapping[str, Any],
     battle_headline: str,
     model_version: str,
 ) -> list[str]:
-    """Format Pre-Market Battle Plan & Settlement Alert report for Discord."""
+    """Format Pre-Market Battle Plan report for Discord."""
     lines: list[str] = []
     tw_light = str(market_regime.get("light") or "🟡黃燈")
     macro_tone = str(macro_context.get("risk_tone") or "🟡 國際中性震盪")
@@ -3071,14 +3046,7 @@ def format_morning_brief_discord_report(
     else:
         lines.append(f"🚦 台股環境：{tw_light} ｜ 🌍 國際環境：{macro_tone}（無波段追蹤股，0 Token 快報模式）")
 
-    # 1. Pre-market T+2 settlement & bank balance check (before 09:00 bank cutoff!)
-    bal_str = f"{int(round(bank_balance)):,} 元" if bank_balance is not None else "未提供"
-    today_net = sum(_to_int(s.get("net_amount", 0)) for s in today_settlements)
-    has_shortfall = any(s.get("shortfall_alert") == "⚠️餘額不足" for s in today_settlements)
-    alert_badge = "🚨 **交割款餘額不足！請於 09:00 前補足款項！**" if has_shortfall else "✅ 交割資金正常"
-    # lines.append(f"💰 分戶帳餘額：{bal_str} ｜ 今日應收付交割款：{today_net:+,} 元（{alert_badge}）")
-
-    # 2. Global macro compact snapshot
+    # 1. Global macro compact snapshot
     compact_macro = str(macro_context.get("compact_line") or "").strip()
     if compact_macro:
         lines.append(f"🌎 隔夜美股與匯率：{compact_macro}")
@@ -3171,7 +3139,7 @@ def _sync_taishin_core_accounting(
     dry_run: bool,
     reports_dir: Path | None,
 ) -> dict[str, Any]:
-    """Shared helper to fetch statements, fills, settlements, balance, inventories & technicals."""
+    """Shared helper to fetch statements, fills, settlements, inventories & technicals."""
     start_dt = today - timedelta(days=lookback_days)
     now_iso = _now_iso_in_taipei()
 
@@ -3184,7 +3152,6 @@ def _sync_taishin_core_accounting(
     raw_pnl = client.fetch_realized_profit_and_losses(start_dt, today)
     raw_hist_settle = client.fetch_history_settlement(start_dt, today)
     raw_today_settle = client.fetch_today_settlement()
-    bank_balance = client.fetch_bank_balance()
     raw_inventories = client.fetch_inventories()
 
     stmt_rows = [
@@ -3199,19 +3166,19 @@ def _sync_taishin_core_accounting(
 
     today_settle_rows = [
         normalize_settlement_or_pnl_record(
-            r, record_type="TODAY_SETTLEMENT", bank_balance=bank_balance, synced_at=now_iso
+            r, record_type="TODAY_SETTLEMENT", synced_at=now_iso
         )
         for r in raw_today_settle
     ]
     hist_settle_rows = [
         normalize_settlement_or_pnl_record(
-            r, record_type="HISTORY_SETTLEMENT", bank_balance=bank_balance, synced_at=now_iso
+            r, record_type="HISTORY_SETTLEMENT", synced_at=now_iso
         )
         for r in raw_hist_settle
     ]
     pnl_rows = [
         normalize_settlement_or_pnl_record(
-            r, record_type="REALIZED_PNL", bank_balance=bank_balance, synced_at=now_iso
+            r, record_type="REALIZED_PNL", synced_at=now_iso
         )
         for r in raw_pnl
     ]
@@ -3277,8 +3244,6 @@ def _sync_taishin_core_accounting(
 
     return {
         "now_iso": now_iso,
-        "bank_balance": bank_balance,
-        "today_settle_rows": today_settle_rows,
         "added_statements": added_statements,
         "added_settlements": added_settlements,
         "combined_statements": combined_statements,
@@ -3378,9 +3343,9 @@ def run_morning_brief(
     macro_context_override: Mapping[str, Any] | None = None,
     picks_bundle_override: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Execute Pre-Market Battle Plan: T+2 settlement check + US/Macro overlay + Style B AI review."""
+    """Execute Pre-Market Battle Plan: US/Macro overlay + Style B AI review."""
     today = as_of or _today_in_taipei()
-    print(f"[morning-brief] 正在執行盤前交割預警、隔夜國際盤與持股記憶作戰晨報 (基準日: {today.isoformat()})...")
+    print(f"[morning-brief] 正在執行盤前隔夜國際盤與持股記憶作戰晨報 (基準日: {today.isoformat()})...")
 
     core = _sync_taishin_core_accounting(
         client=client,
@@ -3454,8 +3419,6 @@ def run_morning_brief(
         holdings_rows=final_holdings,
         memory_rows=updated_memory,
         decisions_by_sno=decisions_by_sno,
-        today_settlements=core["today_settle_rows"],
-        bank_balance=core["bank_balance"],
         market_regime=core["market_regime"],
         macro_context=macro_context,
         battle_headline=battle_headline,
@@ -3475,7 +3438,6 @@ def run_morning_brief(
         "memory_rows": updated_memory,
         "holdings": final_holdings,
         "macro_context": macro_context,
-        "bank_balance": core["bank_balance"],
         "messages": messages,
         "sent_discord": sent_discord,
     }
@@ -3496,17 +3458,14 @@ def dump_portfolio_context(
 
     holdings_rows = mgr.read_records(HOLDINGS_SHEET_NAME)
     memory_rows = mgr.read_records(MEMORY_SHEET_NAME)
-    settlement_rows = mgr.read_records(SETTLEMENT_SHEET_NAME)
     statement_rows = mgr.read_records(STATEMENT_SHEET_NAME)
 
     tech_map, market_regime = load_local_technical_context(reports_dir=reports_dir, as_of=today)
-    bank_balance: float | None = None
 
     if refresh_live:
         active_client = client or TaishinClient()
         active_client.ensure_logged_in()
         raw_inv = active_client.fetch_inventories()
-        bank_balance = active_client.fetch_bank_balance()
         sids = {
             clean_leading_zero_code(_pick_first(inv, "stock_no", "symbol", "stock_id", "code", default=""))
             for inv in raw_inv
@@ -3520,11 +3479,6 @@ def dump_portfolio_context(
             snapshot_date=today,
         )
         holdings_rows = sync_holdings_with_memory_cards(holdings_rows, memory_rows)
-    else:
-        for s in reversed(settlement_rows):
-            if s.get("bank_balance") not in ("", None):
-                bank_balance = _to_float(s.get("bank_balance"), 0.0)
-                break
 
     holding_sids = {clean_leading_zero_code(r.get("stock_no", "")) for r in holdings_rows} - {""}
     public_cache = load_public_watchlist_cache(holding_sids)
@@ -3564,7 +3518,6 @@ def dump_portfolio_context(
         "as_of": today.isoformat(),
         "refresh_live": refresh_live,
         "account_summary": {
-            "bank_balance": bank_balance,
             "total_cost": total_cost,
             "total_market_value": total_mv,
             "total_unrealized_pnl": total_mv - total_cost,
@@ -3622,7 +3575,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # 4. sync-daily (legacy compatible)
     p_sync = subparsers.add_parser(
         "sync-daily",
-        help="[相容舊版] 同步近期對帳單 + 最新庫存 + 交割款預警 + 單次持股健診",
+        help="[相容舊版] 同步近期對帳單 + 最新庫存 + 單次持股健診",
     )
     p_sync.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
     p_sync.add_argument("--dry-run", action="store_true", help="僅在終端機預覽，不寫入 Sheet 亦不發送 Discord")
@@ -3642,7 +3595,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # 6. morning-brief (Pre-Market Battle Plan)
     p_morn = subparsers.add_parser(
         "morning-brief",
-        help="整合今日交割款預警 + 隔夜美股國際盤 + VERTEX_STAGE2_MODEL 嚴選記憶持股開盤作戰建議",
+        help="整合隔夜美股國際盤 + VERTEX_STAGE2_MODEL 嚴選記憶持股開盤作戰建議",
     )
     p_morn.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
     p_morn.add_argument("--dry-run", action="store_true", help="僅在終端機預覽，不寫入 Sheet 亦不發送 Discord")
@@ -3655,7 +3608,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="唯讀匯出完整持股均價、05_Position_Thesis_Memory 記憶卡、均線財報與國際盤 JSON（供 Antigravity Skill 使用）",
     )
     p_dump.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
-    p_dump.add_argument("--refresh-live", action="store_true", help="即時登入台新 API 拉取盤中最新庫存與分戶帳餘額")
+    p_dump.add_argument("--refresh-live", action="store_true", help="即時登入台新 API 拉取盤中最新庫存")
     p_dump.add_argument("--no-macro", action="store_true", help="略過抓取外部 Yahoo 國際指數與新聞")
 
     # 8. eval-dca-0050
