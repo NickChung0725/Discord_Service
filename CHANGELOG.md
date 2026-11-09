@@ -4,6 +4,18 @@
 
 ---
 
+## [v5.6.1] - 2026-11-09
+### 🔧 優化與修正 (Fixed & Changed)
+* **修復 08:15 晨報呼叫 Vertex AI 404 NOT_FOUND 錯誤（AI 端點與 BigQuery Location 職責分離）**：
+  * **問題成因**：`services/ai_service.py` 中的 `get_vertex_location()` 先前包含了 `or os.getenv("GOOGLE_CLOUD_LOCATION")` 作為 fallback，導致當 `.env` 設定 `GOOGLE_CLOUD_LOCATION=us-central1`（原供 BigQuery 使用）且未明訂 `VERTEX_LOCATION` 時，AI 模型呼叫被導向 `us-central1` 地區端點；而在 `us-central1` 找不到 `gemini-4-argon` / `gemini-3.8-flash` 等新世代模型，導致 08:15 晨報在調用 `VERTEX_STAGE2_MODEL` 時拋出 `ClientError: 404 NOT_FOUND Publisher model ... was not found`。
+  * **端點責任分離**：
+    * [`services/ai_service.py`](/services/ai_service.py)：修改 `get_vertex_location()`，使其僅讀取 `VERTEX_LOCATION` 或預設 `DEFAULT_VERTEX_LOCATION = "global"`，不再回退污染至 `GOOGLE_CLOUD_LOCATION`。BigQuery 資料集與儲存（`get_bq_location()`）則維持讀取 `BQ_LOCATION` 或 `GOOGLE_CLOUD_LOCATION`（預設 `"us-central1"`）。
+    * [`.env`](/.env) & [`.env.example`](/.env.example)：明確新增 `VERTEX_LOCATION=global` 與 `BQ_LOCATION=us-central1`，並保留 `GOOGLE_CLOUD_LOCATION=us-central1` 以相容其他 GCP 儲存指令。
+    * [`tests/test_ai_weather.py`](/tests/test_ai_weather.py)：更新測試環境，驗證 `VERTEX_LOCATION` 設定生效，並新增測試確保在僅有 `GOOGLE_CLOUD_LOCATION=us-central1` 時，AI 模型端點仍能正確安全預設為 `"global"`。
+    * 同步更新 [`README.md`](/README.md) 與 [`discord_service_sasd.md`](/discord_service_sasd.md)。
+
+---
+
 ## [v5.6.0] - 2026-11-05
 ### ✨ 新增功能 (Added)
 * **Phase 2：無盲點基本面特徵工程與事件驅動快取**（規格：`gemini-code-1793867722705.md`）

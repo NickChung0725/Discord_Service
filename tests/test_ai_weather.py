@@ -155,7 +155,7 @@ class VertexAiTests(unittest.TestCase):
                 "os.environ",
                 {
                     "GOOGLE_CLOUD_PROJECT_ID": "my-gcp-project",
-                    "GOOGLE_CLOUD_LOCATION": "us-central1",
+                    "VERTEX_LOCATION": "asia-east1",
                     "VERTEX_API_KEY": "vertex-key-123",
                     "VERTEX_MODEL": "gemini-2.5-pro",
                 },
@@ -169,13 +169,25 @@ class VertexAiTests(unittest.TestCase):
         create_client.assert_called_once_with(
             vertexai=True,
             project="my-gcp-project",
-            location="us-central1",
+            location="asia-east1",
             api_key="vertex-key-123",
         )
         client.models.generate_content.assert_called_once_with(
             model="gemini-2.5-pro",
             contents="pick stocks",
         )
+
+    def test_vertex_location_defaults_to_global_while_bq_uses_google_cloud_location(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "GOOGLE_CLOUD_PROJECT_ID": "my-gcp-project",
+                "GOOGLE_CLOUD_LOCATION": "us-central1",
+            },
+            clear=True,
+        ):
+            self.assertEqual(ai_service.get_vertex_location(), "global")
+            self.assertEqual(ai_service.get_bq_location(), "us-central1")
 
     def test_vertex_retries_transient_error_then_succeeds_without_fallback(self) -> None:
         attempts = 0

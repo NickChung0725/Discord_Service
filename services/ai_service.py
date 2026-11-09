@@ -1,7 +1,7 @@
 """Dual-provider Gemini AI service:
 - Google AI Studio (free tier via GEMINI_API_KEY / GEMINI_MODEL): used for general /ai, /stock_ai,
   and per-stock fundamental diagnosis.
-- Google Cloud Vertex AI (paid tier via GOOGLE_CLOUD_PROJECT_ID / GOOGLE_CLOUD_LOCATION / VERTEX_API_KEY
+- Google Cloud Vertex AI (paid tier via GOOGLE_CLOUD_PROJECT_ID / VERTEX_LOCATION / VERTEX_API_KEY
   / VERTEX_MODEL): used for the Stage 2 cross-stock portfolio selection decision.
 
 SASD v3.5.1:
@@ -736,10 +736,9 @@ def get_vertex_stage2_model() -> str:
 
 
 def get_vertex_location() -> str:
-    """Return Vertex AI endpoint location (e.g. 'global' or 'us-central1')."""
+    """Return Vertex AI endpoint location (defaults to 'global' for full model availability)."""
     return (
         os.getenv("VERTEX_LOCATION")
-        or os.getenv("GOOGLE_CLOUD_LOCATION")
         or DEFAULT_VERTEX_LOCATION
     ).strip()
 

@@ -151,10 +151,14 @@ STAGE1_MODEL=gemini-3.8-flash
 
 # 2-2. GCP Vertex AI（付費版）
 # - Stage 1（/stock_ai 專題問答、多股比較、以及 21:00 單股診斷在免費層失敗時的升級備援）：VERTEX_STAGE1_MODEL
-# - Stage 2（20:50 / 21:00 跨股彙總決策選股）：VERTEX_STAGE2_MODEL
+# - Stage 2（20:50 / 21:00 跨股彙總決策選股，以及 08:15 盤前開盤作戰晨報）：VERTEX_STAGE2_MODEL
 # - VERTEX_MODEL：相容舊版設定，當 stage 專用變數未設定時才會 fallback
+# - VERTEX_LOCATION：AI 模型端點一律使用 global（避免特定模型如 gemini-4-argon / gemini-3.8-flash 於區域端點報 404 NOT_FOUND）
+# - BQ_LOCATION / GOOGLE_CLOUD_LOCATION：BigQuery 永久表與 Batch 暫存表放置區域（預設 us-central1）
 GOOGLE_CLOUD_PROJECT_ID=你的_GCP_Project_ID
 GOOGLE_CLOUD_LOCATION=us-central1
+VERTEX_LOCATION=global
+BQ_LOCATION=us-central1
 VERTEX_API_KEY=你的_Vertex_API_Key
 VERTEX_MODEL=gemini-2.5-flash-lite
 VERTEX_STAGE1_MODEL=gemini-3.8-flash

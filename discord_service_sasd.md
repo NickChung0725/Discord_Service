@@ -272,6 +272,7 @@ flowchart TD
    * 若需要更新法說會指引（Stage 1），先透過具備 Google Search Grounding 的輕量模型萃取最新法說展望並快取至 `11_Guidance_Claims`。
    * 組裝完整的基本面、籌碼面與技術面數據，生成標準化的 Stage 2 Prompt 與唯一識別碼 `custom_id`（格式如 `diag_{date}_{stock_id}`）。
 2. **批次提交與輪詢階段 (`run_vertex_batch_requests`)**：
+   * **端點分流設計**：AI 模型推論端點（Vertex AI API / Batch）一律固定使用 `VERTEX_LOCATION="global"`（避免 `gemini-4-argon`、`gemini-3.8-flash` 等新世代模型在區域端點發生 `404 NOT_FOUND`）；BigQuery 暫存與永久表則存放在 `BQ_LOCATION="us-central1"`。
    * 將所有候選股的請求寫入專屬 BigQuery 輸入表（`bq://{project}.vertex_batch_staging.input_{seq}`，5 天自動到期）。
    * 呼叫 Vertex AI Batch Prediction Job 提交任務，系統以非同步輪詢（Polling）監控任務狀態，完成後讀取 BigQuery `predictions_{seq}` 輸出表，並以免費 Batch Load 歸檔至 `discord_service.ai_prompt_logs`。
 3. **結果回填與快取階段 (`finalize_diagnosis_from_ai`)**：
