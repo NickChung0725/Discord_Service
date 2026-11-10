@@ -13,6 +13,7 @@ import tempfile
 import time
 from collections.abc import Mapping
 from contextlib import closing, contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -476,6 +477,382 @@ def compute_deterministic_trade_setup(
         "rr_warning": rr_warning,
     }
 
+
+# --------------------------------------------------------------------------- #
+# SASD v5.4.0 Phase 3：台股微結構過濾（流動性中位數、處置風險、除權息補償、籌碼效率）
+# --------------------------------------------------------------------------- #
+MIN_MEDIAN_TURNOVER_20D_TWD = 50_000_000  # 近 20 日成交金額中位數硬門檻（5,000 萬）
+DISPOSITION_RISK_TAG = (
+    "【🚨 處置股過熱預警：短線急漲或高週轉，隨時面臨證交所注意/分盤處置導致流動性驟降，嚴禁右側追高】"
+)
+MARGIN_CALENDAR_NOTE = (
+    "【ℹ️ 制度性停資券窗口：近期資券減少受股東會/除權息強制回補影響，降低籌碼沉澱加分權重】"
+)
+
+
+def passes_liquidity_median_guard(
+    df_kline: pd.DataFrame,
+    min_median_turnover: float = MIN_MEDIAN_TURNOVER_20D_TWD,
+) -> bool:
+    """近 20 日成交金額「中位數」是否達標（嚴禁使用平均數，防單日爆量誘多的殭屍股）。
+
+    缺少 ``Trading_money`` 欄位或有效資料不足 20 筆時視為無法判斷而放行（不誤殺）。
+    """
+    if df_kline is None or "Trading_money" not in df_kline.columns:
+        return True
+    money = pd.to_numeric(df_kline["Trading_money"], errors="coerce").dropna().tail(20)
+    if len(money) < 20:
+        return True
+    return float(money.median()) >= float(min_median_turnover)
+
+
+def evaluate_disposition_risk(
+    df_kline: pd.DataFrame,
+    shares_outstanding: float | None = None,
+) -> str:
+    """注意／處置股（分盤交易）過熱預警；觸發回傳 `DISPOSITION_RISK_TAG`，否則空字串。
+
+    - 短線急漲：近 5 日累積漲幅 >= 25% 或近 10 日 >= 40%。
+    - 高週轉：近 3 日平均週轉率 >= 15% 且當日振幅 >= 8%（需提供 ``shares_outstanding``）。
+    """
+    if df_kline is None or df_kline.empty or "close" not in df_kline.columns:
+        return ""
+    frame = _normalize_ohlcv(df_kline)
+    if len(frame) < 6:
+        fallback = df_kline.copy()
+        fallback["date"] = pd.to_datetime(fallback.get("date"), errors="coerce")
+        fallback["close"] = pd.to_numeric(fallback["close"], errors="coerce")
+        fallback = fallback.dropna(subset=["close"]).sort_values("date").reset_index(drop=True)
+        if len(fallback) < 6:
+            return ""
+        c_ser = fallback["close"]
+        c_t = float(c_ser.iloc[-1])
+        r5 = (c_t / float(c_ser.iloc[-6]) - 1.0) * 100.0
+        r10 = (c_t / float(c_ser.iloc[-11]) - 1.0) * 100.0 if len(c_ser) >= 11 else 0.0
+        return DISPOSITION_RISK_TAG if (r5 >= 25.0 or r10 >= 40.0) else ""
+    close = frame["close"]
+    close_t = float(close.iloc[-1])
+    ret5 = (close_t / float(close.iloc[-6]) - 1.0) * 100.0
+    ret10 = (
+        (close_t / float(close.iloc[-11]) - 1.0) * 100.0 if len(frame) >= 11 else 0.0
+    )
+    if ret5 >= 25.0 or ret10 >= 40.0:
+        return DISPOSITION_RISK_TAG
+
+    if shares_outstanding and shares_outstanding > 0 and "volume" in frame.columns:
+        vol_shares = frame["volume"].tail(3)
+        # _normalize_ohlcv 的 volume 可能是股數（Trading_Volume）或張數（vol_lots）
+        if "Trading_Volume" not in df_kline.columns and "vol_lots" in df_kline.columns:
+            vol_shares = vol_shares * 1000.0
+        turnover = float((vol_shares / float(shares_outstanding)).mean()) * 100.0
+        prev_close = float(close.iloc[-2])
+        amplitude = (
+            (float(frame["high"].iloc[-1]) - float(frame["low"].iloc[-1])) / prev_close * 100.0
+            if prev_close > 0 else 0.0
+        )
+        if turnover >= 15.0 and amplitude >= 8.0:
+            return DISPOSITION_RISK_TAG
+    return ""
+
+
+def _build_dividend_event_map(df_dividend: pd.DataFrame | None) -> dict[str, dict[str, float]]:
+    """相容標準化 `(ex_date/ex_dividend_date, cash_dividend, stock_dividend)` 與 FinMind 原始 `TaiwanStockDividend`。"""
+    if df_dividend is None or not isinstance(df_dividend, pd.DataFrame) or df_dividend.empty:
+        return {}
+    div_map: dict[str, dict[str, float]] = {}
+
+    def _add(dt_val: object, cash: float, stock: float) -> None:
+        if dt_val is None or str(dt_val).strip() in ("", "None", "nan", "NaT"):
+            return
+        ts = pd.to_datetime(dt_val, errors="coerce")
+        if pd.isna(ts):
+            return
+        key = ts.strftime("%Y-%m-%d")
+        bucket = div_map.setdefault(key, {"cash_dividend": 0.0, "stock_dividend": 0.0})
+        bucket["cash_dividend"] += max(0.0, cash)
+        bucket["stock_dividend"] += max(0.0, stock)
+
+    for record in df_dividend.to_dict("records"):
+        ex_dt = record.get("ex_date") or record.get("ex_dividend_date")
+        if ex_dt is not None and str(ex_dt).strip() not in ("", "None", "nan"):
+            c_val = float(record.get("cash_dividend", 0.0) or 0.0)
+            s_val = float(record.get("stock_dividend", 0.0) or 0.0)
+            _add(ex_dt, c_val, s_val)
+            continue
+        # Raw FinMind TaiwanStockDividend columns
+        c_earn = float(record.get("CashEarningsDistribution", 0.0) or 0.0)
+        c_surp = float(record.get("CashStatutorySurplus", 0.0) or 0.0)
+        s_earn = float(record.get("StockEarningsDistribution", 0.0) or 0.0)
+        s_surp = float(record.get("StockStatutorySurplus", 0.0) or 0.0)
+        if c_earn + c_surp > 0:
+            _add(record.get("CashExDividendTradingDate"), c_earn + c_surp, 0.0)
+        if s_earn + s_surp > 0:
+            _add(record.get("StockExDividendTradingDate"), 0.0, s_earn + s_surp)
+    return div_map
+
+
+def extract_ex_dividend_dates(df_dividend: pd.DataFrame | None) -> list[date]:
+    """從股利表擷取所有有效除權息日期，供強制回補日曆窗口檢核使用。"""
+    div_map = _build_dividend_event_map(df_dividend)
+    out: list[date] = []
+    for k in sorted(div_map.keys()):
+        try:
+            out.append(date.fromisoformat(k))
+        except ValueError:
+            continue
+    return out
+
+
+def compensate_ex_dividend_gaps(
+    df_kline: pd.DataFrame,
+    df_dividend: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """對 K 線做除權息「前複權回溯補償」（以最新交易日 T 為 1.0 基準）。
+
+    ``df_dividend`` 支援 ``(ex_date/ex_dividend_date, cash_dividend, stock_dividend)`` 或 FinMind
+    ``TaiwanStockDividend`` 原始欄位。除權息日之前的 OHLC（含 FinMind ``max`` / ``min``）乘上
+    ``(前收 - 現金股利) / (1 + 股票股利/10) / 前收``；原價保留於 ``raw_*``。
+    """
+    df = df_kline.sort_values("date").copy().reset_index(drop=True)
+    div_map = _build_dividend_event_map(df_dividend)
+    if not div_map:
+        return df
+
+    df["adj_factor"] = 1.0
+    date_keys = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+    for idx in range(1, len(df)):
+        record = div_map.get(date_keys.iloc[idx])
+        if record is None:
+            continue
+        prev_close = float(df.loc[idx - 1, "close"])
+        cash_div = float(record.get("cash_dividend", 0.0) or 0.0)
+        stock_div_per_share = float(record.get("stock_dividend", 0.0) or 0.0) / 10.0
+        if prev_close > cash_div and (1.0 + stock_div_per_share) > 0:
+            ex_ref_price = (prev_close - cash_div) / (1.0 + stock_div_per_share)
+            df.loc[: idx - 1, "adj_factor"] *= ex_ref_price / prev_close
+
+    for col in ("open", "high", "low", "close", "max", "min"):
+        if col in df.columns:
+            df[f"raw_{col}"] = df[col]
+            df[col] = (pd.to_numeric(df[col], errors="coerce") * df["adj_factor"]).round(2)
+    return df
+
+
+def is_mandatory_margin_covering_window(
+    as_of: date,
+    ex_dividend_dates: list[date] | None = None,
+    *,
+    trading_days_before_ex: int = 7,
+) -> bool:
+    """3/15~4/25 股東會停資券期，或除權息日前 7 個交易日（以工作日近似）內為 True。"""
+    if date(as_of.year, 3, 15) <= as_of <= date(as_of.year, 4, 25):
+        return True
+    for ex_date in ex_dividend_dates or []:
+        if ex_date < as_of:
+            continue
+        if len(pd.bdate_range(as_of, ex_date)) - 1 <= trading_days_before_ex:
+            return True
+    return False
+
+
+def _holding_level_lower_bound(level: object) -> float | None:
+    """解析 FinMind 股權分散級距的持股下限（股）。"""
+    text = str(level).lower().replace(",", "")
+    if "total" in text or "差異" in text or "合計" in text:
+        return None
+    numbers = re.findall(r"\d+", text)
+    if not numbers:
+        return None
+    return float(numbers[0])
+
+
+def evaluate_weekly_tdcc_anchor(
+    df_holding: pd.DataFrame | None,
+    paid_in_capital_twd: float | None = None,
+) -> dict[str, object] | None:
+    """週級別集保大戶底氣（股權分散表最新兩週比較）。
+
+    實收資本額 >= 30 億採 1,000 張以上，否則 400 張以上持股比例。輸出含 ``tdcc_base_date``，
+    避免 AI 將上週五集保誤認為今日盤後籌碼。資料不足（不足兩週）回傳 None。
+    """
+    if df_holding is None or not isinstance(df_holding, pd.DataFrame) or df_holding.empty:
+        return None
+    frame = df_holding.copy()
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame["percent"] = pd.to_numeric(frame.get("percent"), errors="coerce")
+    frame = frame.dropna(subset=["date", "percent"])
+    dates = sorted(frame["date"].unique())
+    if len(dates) < 2:
+        return None
+
+    big_lots = 1000 if (paid_in_capital_twd or 0) >= 3_000_000_000 else 400
+    threshold_shares = big_lots * 1000
+
+    def _major_pct(day: object) -> float:
+        day_rows = frame.loc[frame["date"] == day]
+        total = 0.0
+        for row in day_rows.itertuples(index=False):
+            lower = _holding_level_lower_bound(row.HoldingSharesLevel)
+            # 級距下限 >= 門檻 (如 "400,001-600,000" 之 400001 >= 400000)
+            if lower is not None and lower >= threshold_shares:
+                total += float(row.percent)
+        return total
+
+    def _people(day: object) -> float | None:
+        if "people" not in frame.columns:
+            return None
+        rows = frame.loc[frame["date"] == day]
+        lvl = rows["HoldingSharesLevel"].astype(str).str.lower()
+        total_rows = rows.loc[lvl.str.contains("total|合計", regex=True)]
+        if not total_rows.empty:
+            val = float(pd.to_numeric(total_rows["people"], errors="coerce").dropna().iloc[0])
+            return val if val > 0 else None
+        non_diff = rows.loc[~lvl.str.contains("差異", regex=False)]
+        return float(pd.to_numeric(non_diff["people"], errors="coerce").sum()) or None
+
+    latest_day = dates[-1]
+    prev_day = dates[-2] if len(dates) < 3 else dates[-3]
+    latest_pct = _major_pct(latest_day)
+    prev_pct = _major_pct(prev_day)
+    people_latest, people_prev = _people(latest_day), _people(prev_day)
+    people_chg = (
+        round((people_latest / people_prev - 1.0) * 100.0, 2)
+        if people_latest and people_prev else None
+    )
+    base_date = pd.Timestamp(latest_day).strftime("%Y-%m-%d")
+    diff = round(latest_pct - prev_pct, 2)
+    return {
+        "tdcc_base_date": base_date,
+        "major_threshold_lots": big_lots,
+        "latest_major_pct": round(latest_pct, 2),
+        "major_holder_2w_diff": diff,
+        "total_shareholders_chg_pct": people_chg,
+        "summary": (
+            f"集保基準日 {base_date}：{big_lots} 張以上大戶持股 {latest_pct:.2f}%"
+            f"（近兩週 {diff:+.2f} 個百分點）"
+        ),
+    }
+
+
+def fetch_or_cache_tdcc_holding(
+    stock_id: str,
+    *,
+    as_of: date | None = None,
+    cache_path: Path = Path("finmind_reports/.state/tdcc_holding_cache.json"),
+    loader: DataLoader | None = None,
+    ttl_days: int = 6,
+) -> pd.DataFrame | None:
+    """讀取或抓取 FinMind `taiwan_stock_holding_shares_per`（週級別 6 日快取，不浪費額度）。"""
+    today = as_of or _today_in_taipei()
+    sid = str(stock_id).strip()
+    store: dict[str, Any] = {}
+    if cache_path.is_file():
+        try:
+            loaded = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                store = loaded
+        except Exception:  # noqa: BLE001
+            store = {}
+    entry = store.get(sid)
+    if isinstance(entry, Mapping):
+        try:
+            fetched_dt = date.fromisoformat(str(entry.get("fetched_at", ""))[:10])
+            if (today - fetched_dt).days <= ttl_days and isinstance(entry.get("rows"), list):
+                return pd.DataFrame(entry["rows"])
+        except ValueError:
+            pass
+    if loader is None or not hasattr(loader, "taiwan_stock_holding_shares_per"):
+        return None
+    try:
+        start_str = (pd.Timestamp(today) - pd.Timedelta(days=35)).strftime("%Y-%m-%d")
+        df = loader.taiwan_stock_holding_shares_per(
+            stock_id=sid, start_date=start_str, end_date=today.isoformat()
+        )
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return None
+        cols = [c for c in ("date", "HoldingSharesLevel", "percent", "people") if c in df.columns]
+        slim_rows = df[cols].copy()
+        slim_rows["date"] = pd.to_datetime(slim_rows["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        records = slim_rows.dropna(subset=["date"]).to_dict("records")
+        store[sid] = {"fetched_at": today.isoformat(), "rows": records}
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+        return pd.DataFrame(records)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("TDCC holding fetch skipped for %s: %s", sid, exc)
+        return None
+
+
+# Spec aliases for SASD v5.4.0 Phase 3 internal helpers
+_evaluate_disposition_risk = evaluate_disposition_risk
+_compensate_ex_dividend_gaps = compensate_ex_dividend_gaps
+_is_mandatory_margin_covering_window = is_mandatory_margin_covering_window
+_evaluate_weekly_tdcc_anchor = evaluate_weekly_tdcc_anchor
+
+
+@dataclass(frozen=True)
+class MarginMicrostructureResult:
+    margin_pattern: str  # MAIN_FORCE_MARGIN_LOCK / CLEAN_INSTITUTIONAL_LOCK / RETAIL_MARGIN_CHASING_TRAP / CHIP_NEUTRAL
+    semantic_tag: str
+
+
+def classify_daily_margin_efficiency(
+    open_p: float,
+    high_p: float,
+    low_p: float,
+    close_p: float,
+    prev_close_p: float,
+    volume_lots: float,
+    margin_net_change_lots: float,
+    inst_net_buy_lots: float,
+    trust_holding_pct: float,
+    trust_3d_net_buy_lots: float,
+    return_10d_pct: float,
+) -> MarginMicrostructureResult:
+    """日融資增減 × K 線實體效率四象限分類。量與融資/法人單位皆為「張」。"""
+    candle_range = max(high_p - low_p, 0.01)
+    close_pos_in_range = (close_p - low_p) / candle_range
+    upper_shadow_ratio = (high_p - max(open_p, close_p)) / candle_range
+    day_ret_pct = (close_p - prev_close_p) / prev_close_p * 100.0
+
+    margin_vol_ratio = margin_net_change_lots / max(volume_lots, 1.0)
+    inst_vol_ratio = inst_net_buy_lots / max(volume_lots, 1.0)
+
+    if inst_vol_ratio >= 0.15 and margin_net_change_lots <= 0:
+        sweet_spot_note = ""
+        if 0.5 <= trust_holding_pct <= 8.0 and trust_3d_net_buy_lots > 0:
+            sweet_spot_note = f"（投信持股比 {trust_holding_pct:.1f}% 處於初買鎖碼甜蜜點）"
+        return MarginMicrostructureResult(
+            "CLEAN_INSTITUTIONAL_LOCK",
+            f"【💎 法人鎖碼散戶下車：三大法人買超佔成交量 {inst_vol_ratio*100:.1f}% 且融資逆勢減少 "
+            f"{abs(int(margin_net_change_lots))} 張{sweet_spot_note}】",
+        )
+
+    if margin_vol_ratio >= 0.12 and margin_net_change_lots >= 200:
+        if (
+            day_ret_pct >= 3.0
+            and close_p > open_p
+            and close_pos_in_range >= 0.75
+            and upper_shadow_ratio <= 0.25
+            and return_10d_pct <= 16.0
+        ):
+            return MarginMicrostructureResult(
+                "MAIN_FORCE_MARGIN_LOCK",
+                f"【🔥 主力融資鎖碼：起漲初期帶量長紅收高 (收盤位階 {close_pos_in_range*100:.0f}%) "
+                f"伴隨融資大增 {int(margin_net_change_lots)} 張，屬內資大戶槓桿建倉】",
+            )
+        if close_p <= open_p or upper_shadow_ratio >= 0.40 or return_10d_pct > 18.0:
+            return MarginMicrostructureResult(
+                "RETAIL_MARGIN_CHASING_TRAP",
+                f"【🚨 散戶融資套牢警訊：融資暴增 {int(margin_net_change_lots)} 張 "
+                f"(佔量 {margin_vol_ratio*100:.1f}%) 卻留上影線/收弱或處於波段高檔，籌碼極度凌亂】",
+            )
+
+    return MarginMicrostructureResult(
+        "CHIP_NEUTRAL",
+        f"【➖ 日籌碼中性：法人淨買賣佔量 {inst_vol_ratio*100:.1f}%，融資增減 {int(margin_net_change_lots)} 張】",
+    )
 
 def fetch_news_excerpt(url: str, *, timeout: float = 3.0, max_chars: int = 250) -> str:
     """擷取新聞正文前 max_chars 字；逾時或失敗回傳空字串（呼叫端優雅降級回標題）。"""
@@ -1172,6 +1549,58 @@ def evaluate_market_regime(
     }
 
 
+def _attach_dual_index_regime_quota(
+    regime: dict[str, object],
+    *,
+    as_of: date,
+    enable_live_router: bool,
+    prices_df: pd.DataFrame | None = None,
+    futures_surge_lots: float = 3500.0,
+    futures_total_limit: float = 42000.0,
+) -> dict[str, object]:
+    """為大盤紅綠燈字典附加 SASD v5.4.0 Phase 3 `regime_quota` 策略配額。"""
+    try:
+        from macro_context import RegimeRouter, quota_from_market_regime
+    except Exception:  # noqa: BLE001
+        return regime
+
+    if enable_live_router:
+        try:
+            t_closes: list[float] | None = None
+            o_closes: list[float] | None = None
+            if prices_df is not None and not prices_df.empty and "stock_id" in prices_df.columns:
+                t_sub = prices_df.loc[prices_df["stock_id"].astype(str).str.strip() == "TAIEX"]
+                if len(t_sub) >= 20:
+                    t_closes = pd.to_numeric(t_sub.sort_values("date")["close"], errors="coerce").dropna().tolist()
+                o_sub = prices_df.loc[prices_df["stock_id"].astype(str).str.strip().isin(("TPEx", "OTC"))]
+                if len(o_sub) >= 20:
+                    o_closes = pd.to_numeric(o_sub.sort_values("date")["close"], errors="coerce").dropna().tolist()
+            dual = RegimeRouter.fetch_live_dual_regime(
+                taiex_closes=t_closes,
+                otc_closes=o_closes,
+                as_of_date=as_of.isoformat(),
+                futures_net_short_surge_lots=futures_surge_lots,
+                futures_total_net_short_limit=futures_total_limit,
+            )
+            if dual and isinstance(dual.get("quota"), dict):
+                q_dict = dual["quota"]
+                regime["regime_quota"] = q_dict
+                regime["dual_index_detail"] = dual
+                tag = str(q_dict.get("regime_summary_tag") or "").strip()
+                if tag and tag not in str(regime.get("summary") or ""):
+                    regime["summary"] = f"{regime.get('summary', '')}｜🧭 雙核心路由：{tag}".lstrip("｜")
+                if q_dict.get("regime_state") == "RED_DEFENSIVE":
+                    regime["light"] = "🔴紅燈"
+                elif q_dict.get("regime_state") == "YELLOW_ROTATION" and "🟢" in str(regime.get("light") or ""):
+                    regime["light"] = "🟡黃燈"
+                return regime
+        except Exception:  # noqa: BLE001
+            logger.debug("Dual-index regime router live fetch failed, using fallback", exc_info=True)
+
+    regime["regime_quota"] = quota_from_market_regime(regime).to_dict()
+    return regime
+
+
 def fetch_or_load_market_regime(
     *,
     daily_directory: Path | None = None,
@@ -1179,8 +1608,11 @@ def fetch_or_load_market_regime(
     loader: DataLoader | None = None,
     benchmark_id: str = "0050",
     margin_info: Mapping[str, Any] | None = None,
+    enable_dual_index_router: bool = False,
+    futures_surge_lots: float = 3500.0,
+    futures_total_limit: float = 42000.0,
 ) -> dict[str, object]:
-    """優先從當日緩存或本地 prices.csv 讀取大盤紅綠燈，若無則透過 FinMind 抓取 0050 日線並快取。"""
+    """優先從當日緩存或本地 prices.csv 讀取大盤紅綠燈，若無則透過 FinMind 抓取基準日線並快取。"""
     today = as_of or _today_in_taipei()
     cache_path = (
         daily_directory / f"{today.isoformat()}_market_regime.json"
@@ -1191,7 +1623,11 @@ def fetch_or_load_market_regime(
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if isinstance(cached, dict) and cached.get("light") and "MA189" in cached:
-                if "margin_regime" in cached or margin_info is None:
+                if ("margin_regime" in cached or margin_info is None) and (
+                    not enable_dual_index_router or "regime_quota" in cached
+                ):
+                    if "regime_quota" not in cached:
+                        _attach_dual_index_regime_quota(cached, as_of=today, enable_live_router=False)
                     return cached
         except Exception:
             pass
@@ -1203,14 +1639,23 @@ def fetch_or_load_market_regime(
         except Exception:
             margin_info = None
 
+    local_prices_df: pd.DataFrame | None = None
     if daily_directory is not None:
         prices_path = daily_directory / f"{today.isoformat()}_prices.csv"
         if prices_path.is_file():
             try:
-                prices_df = pd.read_csv(prices_path, dtype={"stock_id": str})
-                sub = prices_df.loc[prices_df["stock_id"].astype(str).str.strip() == benchmark_id].copy()
+                local_prices_df = pd.read_csv(prices_path, dtype={"stock_id": str})
+                sub = local_prices_df.loc[local_prices_df["stock_id"].astype(str).str.strip() == benchmark_id].copy()
                 if not sub.empty:
                     regime = evaluate_market_regime(sub, benchmark_label=benchmark_id, margin_info=margin_info)
+                    _attach_dual_index_regime_quota(
+                        regime,
+                        as_of=today,
+                        enable_live_router=enable_dual_index_router,
+                        prices_df=local_prices_df,
+                        futures_surge_lots=futures_surge_lots,
+                        futures_total_limit=futures_total_limit,
+                    )
                     if cache_path is not None:
                         cache_path.write_text(
                             json.dumps(regime, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -1225,6 +1670,14 @@ def fetch_or_load_market_regime(
             df = _fetch_stock_prices(loader, benchmark_id, start_date, today.isoformat())
             if not df.empty:
                 regime = evaluate_market_regime(df, benchmark_label=benchmark_id, margin_info=margin_info)
+                _attach_dual_index_regime_quota(
+                    regime,
+                    as_of=today,
+                    enable_live_router=enable_dual_index_router,
+                    prices_df=local_prices_df,
+                    futures_surge_lots=futures_surge_lots,
+                    futures_total_limit=futures_total_limit,
+                )
                 if cache_path is not None:
                     cache_path.parent.mkdir(parents=True, exist_ok=True)
                     cache_path.write_text(
@@ -1234,7 +1687,16 @@ def fetch_or_load_market_regime(
         except Exception:
             logger.warning("Failed to fetch market regime benchmark %s", benchmark_id, exc_info=True)
 
-    return evaluate_market_regime(pd.DataFrame(), benchmark_label=benchmark_id, margin_info=margin_info)
+    fallback_regime = evaluate_market_regime(pd.DataFrame(), benchmark_label=benchmark_id, margin_info=margin_info)
+    _attach_dual_index_regime_quota(
+        fallback_regime,
+        as_of=today,
+        enable_live_router=enable_dual_index_router,
+        prices_df=local_prices_df,
+        futures_surge_lots=futures_surge_lots,
+        futures_total_limit=futures_total_limit,
+    )
+    return fallback_regime
 
 
 TAXONOMY_CACHE_DEFAULT_PATH = Path("finmind_reports/.state/stock_taxonomy.json")
@@ -2560,6 +3022,51 @@ def _output_stem(market: str, industry: str) -> str:
     return f"{timestamp}_{MARKET_CODES[market]}_{safe_industry or 'industry'}"
 
 
+def _fetch_or_cache_dividend_events(
+    loader: DataLoader | None,
+    stock_id: str,
+    start_date: str,
+    end_date: str,
+    *,
+    cache_path: Path = Path("finmind_reports/.state/dividend_events_cache.json"),
+    ttl_days: int = 30,
+) -> pd.DataFrame | None:
+    """快取個股除權息事件表（TTL 30 日），僅於 K 線出現除權息等級向下跳空時查詢。"""
+    sid = str(stock_id).strip()
+    today = _today_in_taipei()
+    store: dict[str, Any] = {}
+    if cache_path.is_file():
+        try:
+            loaded = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                store = loaded
+        except Exception:  # noqa: BLE001
+            store = {}
+    cached = store.get(sid)
+    if isinstance(cached, Mapping):
+        try:
+            fetched_dt = date.fromisoformat(str(cached.get("fetched_at", ""))[:10])
+            if (today - fetched_dt).days <= ttl_days and isinstance(cached.get("events"), list):
+                return pd.DataFrame(cached["events"])
+        except ValueError:
+            pass
+    if loader is None or not hasattr(loader, "taiwan_stock_dividend"):
+        return None
+    try:
+        raw_div = loader.taiwan_stock_dividend(stock_id=sid, start_date=start_date, end_date=end_date)
+        if not isinstance(raw_div, pd.DataFrame):
+            return None
+        div_map = _build_dividend_event_map(raw_div)
+        events = [{"ex_date": k, **v} for k, v in sorted(div_map.items())]
+        store[sid] = {"fetched_at": today.isoformat(), "events": events}
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+        return pd.DataFrame(events)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Dividend events fetch skipped for %s: %s", sid, exc)
+        return None
+
+
 def scan_industry(
     loader: DataLoader,
     stocks: pd.DataFrame,
@@ -2568,6 +3075,8 @@ def scan_industry(
     output_dir: Path,
     as_of: date | None = None,
     request_pause_seconds: float | None = REQUEST_PAUSE_SECONDS,
+    min_median_turnover: float = MIN_MEDIAN_TURNOVER_20D_TWD,
+    enable_ex_dividend_compensation: bool = False,
 ) -> tuple[Path, Path, Path | None, int]:
     today = as_of or _today_in_taipei()
     report_start_date = (
@@ -2593,6 +3102,16 @@ def scan_industry(
             )
             if prices.empty:
                 raise ValueError("FinMind 未回傳日線資料")
+            if not passes_liquidity_median_guard(prices, min_median_turnover):
+                raise ValueError("近 20 日成交金額中位數低於門檻，流動性不足")
+            if enable_ex_dividend_compensation and "close" in prices.columns:
+                c_series = pd.to_numeric(prices.sort_values("date")["close"], errors="coerce")
+                if (c_series.pct_change() <= -0.02).any():
+                    div_df = _fetch_or_cache_dividend_events(
+                        loader, stock_id, fetch_start_date, end_date
+                    )
+                    if div_df is not None and not div_df.empty:
+                        prices = compensate_ex_dividend_gaps(prices, div_df)
             analyzed = add_moving_averages(prices)
             analyzed = analyzed.loc[
                 analyzed["date"] >= pd.Timestamp(report_start_date)
@@ -2797,6 +3316,24 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
         datetime.strptime(config["daily_start_time"], "%H:%M")
     except ValueError as error:
         raise ValueError("daily_start_time 必須符合 HH:MM 格式。") from error
+    for bool_key in (
+        "enable_ex_dividend_compensation",
+        "ai_picker_red_blue_audit",
+        "enable_dual_index_regime_router",
+        "enable_signal_audit",
+    ):
+        if bool_key in config and not isinstance(config.get(bool_key), bool):
+            raise ValueError(f"設定 {bool_key} 必須是布林值。")
+    for num_key in (
+        "min_median_turnover_20d_twd",
+        "futures_net_short_surge_lots",
+        "futures_total_net_short_limit",
+    ):
+        if num_key in config and (
+            not isinstance(config.get(num_key), (int, float))
+            or isinstance(config.get(num_key), bool)
+        ):
+            raise ValueError(f"設定 {num_key} 必須是數字。")
     return config
 
 
@@ -3262,6 +3799,12 @@ def scan_configured_universe(
                         output_dir=temporary_output,
                         as_of=today,
                         request_pause_seconds=None,
+                        min_median_turnover=float(
+                            config.get("min_median_turnover_20d_twd", MIN_MEDIAN_TURNOVER_20D_TWD)
+                        ),
+                        enable_ex_dividend_compensation=bool(
+                            config.get("enable_ex_dividend_compensation", False)
+                        ),
                     )
                 except Exception:
                     logger.exception("Failed to scan %s / %s", market, industry)
@@ -3325,6 +3868,9 @@ def scan_configured_universe(
                     as_of=today,
                     loader=loader,
                     benchmark_id=benchmark_id,
+                    enable_dual_index_router=bool(config.get("enable_dual_index_regime_router", False)),
+                    futures_surge_lots=float(config.get("futures_net_short_surge_lots", 3500.0)),
+                    futures_total_limit=float(config.get("futures_total_net_short_limit", 42000.0)),
                 )
             # 若 prices.csv 尚未包含該大盤代號，將大盤基準日線追加至 prices.csv，方便後續 AI 嚴選流程秒級重算
             prices_frame = report_files["prices"]
@@ -3401,7 +3947,24 @@ def scan_configured_universe(
                 as_of=today,
                 loader=loader,
                 benchmark_id=benchmark_id,
+                enable_dual_index_router=bool(config.get("enable_dual_index_regime_router", False)),
+                futures_surge_lots=float(config.get("futures_net_short_surge_lots", 3500.0)),
+                futures_total_limit=float(config.get("futures_total_net_short_limit", 42000.0)),
             )
+
+    # SASD v5.4.0 Phase 3：盤後自動回填 signal_audit_log 之 T+1~T+10 實盤路徑並同步 Google Sheets
+    if config.get("enable_signal_audit"):
+        try:
+            run_signal_audit_backfill(
+                config,
+                as_of=today,
+                daily_directory=daily_directory,
+                extra_prices_df=report_files["prices"],
+                loader=loader,
+                sync_gsheet=bool(config.get("sync_alignment_to_gsheet") or config.get("sync_signals_to_gsheet")),
+            )
+        except Exception:
+            logger.warning("盤後事後審計 (signal_audit) 回填略過", exc_info=True)
 
     if config["post_alignment_to_discord"]:
         bot_token = (
@@ -3882,7 +4445,88 @@ def _make_parser() -> argparse.ArgumentParser:
         help="強制啟用 Vertex AI Batch（未指定時讀 ai_picker_use_vertex_batch 與 VERTEX_BATCH_ENABLED）",
     )
     rebound_parser.add_argument("--no-batch", dest="batch", action="store_false", help="強制改用即時 API，不使用 Vertex AI Batch")
+
+    audit_parser = subparsers.add_parser(
+        "audit-signals",
+        help="SASD v5.4.0 Phase 3：盤後回填 signal_audit.db 事後績效、同步 09_Signal_Audit_Log 並產出審計週報",
+    )
+    audit_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("finmind_scanner.json"),
+        help="JSON 設定檔路徑（預設：finmind_scanner.json）",
+    )
+    audit_parser.add_argument("--date", help="指定審計基準日期 YYYY-MM-DD（預設今日）")
+    audit_parser.add_argument("--db-path", type=Path, help="覆寫 signal_audit.db 路徑")
+    audit_parser.add_argument("--weekly-summary", action="store_true", help="輸出 Weekly Quantitative Audit Summary")
+    audit_parser.add_argument("--post-to-discord", action="store_true", help="將審計週報推播至 Discord")
+    audit_parser.add_argument("--no-gsheet", action="store_true", help="不同步 Google Sheets 09_Signal_Audit_Log")
+    audit_parser.add_argument("--dry-run", action="store_true", help="僅顯示審計摘要，不同步 Sheets / Discord")
     return parser
+
+
+def run_signal_audit_backfill(
+    config: Mapping[str, object],
+    *,
+    as_of: date | None = None,
+    daily_directory: Path | None = None,
+    extra_prices_df: pd.DataFrame | None = None,
+    loader: DataLoader | None = None,
+    db_path: Path | None = None,
+    sync_gsheet: bool = True,
+    emit_weekly_summary: bool = False,
+    post_discord: bool = False,
+) -> dict[str, Any]:
+    """執行 `SignalAuditStore` 盤後 T+1~T+10 路徑回填、Google Sheets 同步與週報輸出。"""
+    from signal_audit_service import (
+        DEFAULT_AUDIT_DB_PATH,
+        SIGNAL_AUDIT_GSHEET_TAB,
+        SignalAuditStore,
+        build_local_and_finmind_bars_fetcher,
+        format_weekly_summary_markdown,
+    )
+
+    today = as_of or _today_in_taipei()
+    output_root = Path(str(config.get("output_directory") or "finmind_reports"))
+    daily_dir = daily_directory or (output_root / "daily")
+    resolved_db = db_path or Path(str(config.get("signal_audit_db_path") or DEFAULT_AUDIT_DB_PATH))
+    tab_name = str(config.get("signal_audit_gsheet_tab_name") or SIGNAL_AUDIT_GSHEET_TAB)
+
+    store = SignalAuditStore(resolved_db)
+    fetcher = build_local_and_finmind_bars_fetcher(
+        daily_dir, loader=loader, extra_prices_df=extra_prices_df
+    )
+    updated_count = store.backfill_pending(fetcher)
+    synced_rows = store.sync_to_gsheet(tab_name=tab_name) if sync_gsheet else 0
+
+    is_friday = today.weekday() == 4
+    summary = store.build_weekly_summary()
+    summary_md = ""
+    if emit_weekly_summary or is_friday:
+        summary_md = format_weekly_summary_markdown(summary, as_of_str=today.isoformat())
+        if post_discord and summary_md:
+            bot_token = (os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
+            channel_id = str(config.get("stock_channel_id") or os.getenv("STOCK_CHANNEL_ID") or "").strip()
+            if bot_token and channel_id.isdigit():
+                req = Request(
+                    f"{DISCORD_API_BASE_URL}/channels/{channel_id}/messages",
+                    data=json.dumps({"content": summary_md, "flags": 4}, ensure_ascii=False).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bot {bot_token}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "DiscordService (signal audit)",
+                    },
+                    method="POST",
+                )
+                with urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS):  # noqa: S310
+                    pass
+
+    return {
+        "updated_count": updated_count,
+        "synced_rows": synced_rows,
+        "summary": summary,
+        "summary_markdown": summary_md,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3928,6 +4572,27 @@ def main(argv: list[str] | None = None) -> int:
                 skip_gsheet=args.no_gsheet,
                 skip_discord=args.no_discord,
             )
+            return 0
+
+        if args.command == "audit-signals":
+            config = load_scan_config(args.config)
+            as_of_dt = date.fromisoformat(args.date) if args.date else _today_in_taipei()
+            loader_opt = DataLoader(token=api_token) if (api_token and not args.dry_run) else None
+            audit_res = run_signal_audit_backfill(
+                config,
+                as_of=as_of_dt,
+                loader=loader_opt,
+                db_path=args.db_path,
+                sync_gsheet=(not args.no_gsheet and not args.dry_run),
+                emit_weekly_summary=True,
+                post_discord=(args.post_to_discord and not args.dry_run),
+            )
+            print(
+                f"[audit-signals] 已更新回填 {audit_res['updated_count']} 筆訊號"
+                f"｜同步 Google Sheets {audit_res['synced_rows']} 筆。"
+            )
+            if audit_res["summary_markdown"]:
+                print("\n" + audit_res["summary_markdown"])
             return 0
 
         if args.command == "init-universe":

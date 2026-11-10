@@ -11,6 +11,8 @@
   "min_trading_volume_lots": 1000,
   "highlight_volume_lots": 3000,
   "min_turnover_twd": 100000000,
+  "min_median_turnover_20d_twd": 50000000,
+  "enable_ex_dividend_compensation": true,
   "volume_filter_mode": "today_or_ma20_or_turnover",
   "delisted_missing_days_threshold": 5,
   "dormant_recheck_days": 14,
@@ -282,5 +284,12 @@
   "post_rebound_to_discord": true,
   "rebound_auto_run_ai": false,
   "rebound_ai_min_candidates": 3,
-  "rebound_ai_max_candidates": 15
+  "rebound_ai_max_candidates": 15,
+  "ai_picker_red_blue_audit": true,
+  "enable_dual_index_regime_router": true,
+  "futures_net_short_surge_lots": 3500,
+  "futures_total_net_short_limit": 42000,
+  "enable_signal_audit": true,
+  "signal_audit_db_path": "data/signal_audit.db",
+  "signal_audit_gsheet_tab_name": "09_Signal_Audit_Log"
 }

@@ -252,6 +252,68 @@ class TestMarginFeatures(unittest.TestCase):
         self.assertIn("大盤融資斷頭清洗(單日-52億)", decision["trigger_reason"])
         self.assertGreater(decision["dip_score"], 20)
 
+    def test_daily_margin_candle_efficiency_distinguishes_lock_vs_trap(self):
+        from finmind_stock_scanner import (
+            classify_daily_margin_efficiency,
+            evaluate_weekly_tdcc_anchor,
+            is_mandatory_margin_covering_window,
+        )
+
+        # 情境 A: 融資增加 +220 張，股價強勢收最高 (close=109.8, high=110, low=102)
+        res_lock = classify_daily_margin_efficiency(
+            open_p=103.0,
+            high_p=110.0,
+            low_p=102.0,
+            close_p=109.8,
+            prev_close_p=103.0,
+            volume_lots=1100.0,
+            margin_net_change_lots=220.0,
+            inst_net_buy_lots=50.0,
+            trust_holding_pct=2.0,
+            trust_3d_net_buy_lots=30.0,
+            return_10d_pct=8.0,
+        )
+        self.assertEqual(res_lock.margin_pattern, "MAIN_FORCE_MARGIN_LOCK")
+        self.assertIn("主力融資鎖碼", res_lock.semantic_tag)
+
+        # 情境 B: 融資同樣增加 +250 張，卻留長上影線收最低附近 (high=110, close=102.5, open=106, low=102)
+        res_trap = classify_daily_margin_efficiency(
+            open_p=106.0,
+            high_p=110.0,
+            low_p=102.0,
+            close_p=102.5,
+            prev_close_p=105.0,
+            volume_lots=1200.0,
+            margin_net_change_lots=250.0,
+            inst_net_buy_lots=-100.0,
+            trust_holding_pct=0.0,
+            trust_3d_net_buy_lots=-20.0,
+            return_10d_pct=20.0,
+        )
+        self.assertEqual(res_trap.margin_pattern, "RETAIL_MARGIN_CHASING_TRAP")
+        self.assertIn("散戶融資套牢警訊", res_trap.semantic_tag)
+
+        # 日曆回補雷達（除權息前 6 個交易日）
+        in_win = is_mandatory_margin_covering_window(date(2026, 7, 2), [date(2026, 7, 10)])
+        self.assertTrue(in_win)
+
+        # 週頻集保總人數列優先（避免分級人數 + 合計列重複加總）
+        tdcc_df = pd.DataFrame(
+            [
+                {"date": "2026-10-23", "HoldingSharesLevel": "1-999", "percent": 5.0, "people": 8000},
+                {"date": "2026-10-23", "HoldingSharesLevel": "1,000,001以上", "percent": 42.0, "people": 120},
+                {"date": "2026-10-23", "HoldingSharesLevel": "total", "percent": 100.0, "people": 10000},
+                {"date": "2026-10-30", "HoldingSharesLevel": "1-999", "percent": 4.2, "people": 7500},
+                {"date": "2026-10-30", "HoldingSharesLevel": "1,000,001以上", "percent": 44.5, "people": 135},
+                {"date": "2026-10-30", "HoldingSharesLevel": "total", "percent": 100.0, "people": 9300},
+            ]
+        )
+        tdcc_info = evaluate_weekly_tdcc_anchor(tdcc_df, paid_in_capital_twd=3_000_000_000.0)
+        self.assertIsNotNone(tdcc_info)
+        assert tdcc_info is not None
+        self.assertAlmostEqual(tdcc_info["major_holder_2w_diff"], 2.5)
+        self.assertAlmostEqual(tdcc_info["total_shareholders_chg_pct"], -7.0)
+
 
 if __name__ == "__main__":
     unittest.main()

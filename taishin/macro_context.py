@@ -307,3 +307,282 @@ def fetch_global_macro_context(
         "compact_line": compact_line,
         "prompt_block": "\n".join(prompt_lines),
     }
+
+
+# --------------------------------------------------------------------------- #
+# SASD v5.4.0-Phase3：加權 + 櫃買 (OTC) 雙核心紅綠燈策略路由
+# --------------------------------------------------------------------------- #
+from collections.abc import Sequence  # noqa: E402
+from dataclasses import asdict, dataclass  # noqa: E402
+import os  # noqa: E402
+from typing import Literal  # noqa: E402
+
+FUTURES_NET_SHORT_SURGE_LOTS = 3_500
+FUTURES_TOTAL_NET_SHORT_LIMIT = 42_000
+
+
+@dataclass(frozen=True)
+class RegimeQuotaConfig:
+    regime_state: Literal["GREEN_BULL", "YELLOW_ROTATION", "RED_DEFENSIVE"]
+    max_right_breakout_picks: int      # 右側帶量突破單每日入選上限
+    max_style_b_pullback_picks: int    # Style B 支撐回測低接單每日入選上限
+    min_sector_breadth_pct: float      # 所屬細分產業站上 MA17 家數比最低門檻 (%)
+    max_allowed_sector_pe_ratio: float # 允許之最高同產業相對本益比比值
+    regime_summary_tag: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def evaluate_market_regime_quota(
+    *,
+    taiex_close: float,
+    taiex_ma20: float,
+    taiex_ma20_slope: float,
+    otc_close: float,
+    otc_ma20: float,
+    otc_ma20_slope: float,
+    foreign_futures_net_short_change: float = 0.0,
+    foreign_futures_total_net_short: float = 0.0,
+    futures_net_short_surge_lots: float = FUTURES_NET_SHORT_SURGE_LOTS,
+    futures_total_net_short_limit: float = FUTURES_TOTAL_NET_SHORT_LIMIT,
+) -> RegimeQuotaConfig:
+    """依加權、櫃買與外資台指期淨空單，輸出當日策略配額。
+
+    - `*_slope`：MA20 今日減前一日（< 0 代表下彎）。
+    - `foreign_futures_net_short_change`：外資台指期單日淨空單增加口數（正值＝增加空單）。
+    - `foreign_futures_total_net_short`：外資台指期總淨空單口數（正值）。
+    """
+    taiex_below = taiex_close < taiex_ma20
+    otc_below = otc_close < otc_ma20
+    both_below = taiex_below and otc_below
+    slopes_down = taiex_ma20_slope < 0 and otc_ma20_slope < 0
+
+    if both_below and slopes_down:
+        return RegimeQuotaConfig(
+            "RED_DEFENSIVE", 0, 1, 50.0, 0.85,
+            "🔴 空頭防禦：加權與櫃買雙破 MA20 且下彎，關閉右側追高，Style B 最多 1 檔",
+        )
+
+    futures_stress = (
+        foreign_futures_net_short_change >= futures_net_short_surge_lots
+        or foreign_futures_total_net_short > futures_total_net_short_limit
+    )
+    if taiex_below or otc_below or futures_stress:
+        return RegimeQuotaConfig(
+            "YELLOW_ROTATION", 1, 3, 45.0, 1.05,
+            "🟡 震盪分歧：僅限最強族群龍頭右側 1 檔，Style B 低接 3 檔",
+        )
+
+    return RegimeQuotaConfig(
+        "GREEN_BULL", 3, 2, 30.0, 1.30,
+        "🟢 多頭進攻：加權與櫃買站上 MA20，右側突破 3 檔、回測低接 2 檔",
+    )
+
+
+def fetch_yahoo_daily_closes(
+    yahoo_symbol: str,
+    *,
+    range_str: str = "60d",
+    session: Any | None = None,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> list[float]:
+    """從 Yahoo Finance v8 Chart API 取得近期有效日收盤價序列（用於 `^TWII` 加權與 `^TWOII` 櫃買 MA20）。"""
+    encoded = quote(yahoo_symbol, safe="")
+    url = YAHOO_CHART_URL.format(symbol=encoded)
+    http = session or requests
+    try:
+        resp = http.get(
+            url,
+            params={"range": range_str, "interval": "1d"},
+            headers=USER_AGENT_HEADERS,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        result_list = (payload or {}).get("chart", {}).get("result") or []
+        if not result_list:
+            return []
+        quote_list = ((result_list[0].get("indicators") or {}).get("quote") or [{}])[0]
+        raw_closes = quote_list.get("close") or []
+        return [val for raw in raw_closes if (val := _safe_float(raw)) is not None and val > 0]
+    except Exception as err:  # noqa: BLE001
+        logger.debug("Yahoo daily closes fetch failed for %s: %s", yahoo_symbol, err)
+        return []
+
+
+def fetch_foreign_tx_futures_net_short(
+    *,
+    as_of_date: str | None = None,
+    finmind_token: str | None = None,
+    session: Any | None = None,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> tuple[float, float]:
+    """查詢 FinMind `TaiwanFuturesInstitutionalInvestors` 外資台指期 (TX) 未平倉淨空單與單日增減。
+
+    回傳 ``(net_short_change_1d_lots, total_net_short_lots)``；失敗或無資料時優雅降級回 ``(0.0, 0.0)``。
+    """
+    token = (finmind_token if finmind_token is not None else os.getenv("FINMIND_API_TOKEN", "")).strip()
+    end_dt = datetime.strptime(as_of_date[:10], "%Y-%m-%d") if as_of_date else datetime.now(timezone.utc)
+    start_str = (end_dt - timedelta(days=14)).strftime("%Y-%m-%d")
+    end_str = end_dt.strftime("%Y-%m-%d")
+    params: dict[str, str] = {
+        "dataset": "TaiwanFuturesInstitutionalInvestors",
+        "data_id": "TX",
+        "start_date": start_str,
+        "end_date": end_str,
+    }
+    if token:
+        params["token"] = token
+
+    http = session or requests
+    try:
+        resp = http.get("https://api.finmindtrade.com/api/v4/data", params=params, timeout=timeout)
+        resp.raise_for_status()
+        rows = (resp.json() or {}).get("data") or []
+    except Exception as err:  # noqa: BLE001
+        logger.debug("FinMind TX futures institutional fetch skipped/failed: %s", err)
+        return 0.0, 0.0
+
+    by_date: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        name = str(row.get("name") or row.get("institutional_investors") or "").strip()
+        if name not in ("外資", "外資及陸資", "Foreign_Investor"):
+            continue
+        dt = str(row.get("date") or "").strip()[:10]
+        if not dt:
+            continue
+        # FinMind 欄位：open_interest_net / long_open_interest_balance_volume - short_open_interest_balance_volume
+        net_oi = _safe_float(row.get("open_interest_net"))
+        if net_oi is None:
+            long_oi = _safe_float(row.get("long_open_interest_balance_volume")) or 0.0
+            short_oi = _safe_float(row.get("short_open_interest_balance_volume")) or 0.0
+            net_oi = long_oi - short_oi
+        # 淨空單以正值表達（若外資為淨多單則淨空單為 0，但增減仍反映空方壓力變化）
+        net_short = -float(net_oi)
+        by_date[dt] = net_short
+
+    if not by_date:
+        return 0.0, 0.0
+    sorted_dates = sorted(by_date.keys())
+    latest_short = by_date[sorted_dates[-1]]
+    prev_short = by_date[sorted_dates[-2]] if len(sorted_dates) >= 2 else latest_short
+    chg = round(latest_short - prev_short, 1)
+    return chg, round(max(0.0, latest_short), 1)
+
+
+def quota_from_market_regime(market_regime: Mapping[str, Any] | None) -> RegimeQuotaConfig:
+    """從 `market_regime` 字典還原 `RegimeQuotaConfig`；若無雙核心欄位則依燈號保守推導。"""
+    if isinstance(market_regime, Mapping):
+        raw_q = market_regime.get("regime_quota")
+        if isinstance(raw_q, RegimeQuotaConfig):
+            return raw_q
+        if isinstance(raw_q, Mapping) and raw_q.get("regime_state") in (
+            "GREEN_BULL",
+            "YELLOW_ROTATION",
+            "RED_DEFENSIVE",
+        ):
+            return RegimeQuotaConfig(
+                regime_state=raw_q["regime_state"],
+                max_right_breakout_picks=int(raw_q.get("max_right_breakout_picks", 1)),
+                max_style_b_pullback_picks=int(raw_q.get("max_style_b_pullback_picks", 2)),
+                min_sector_breadth_pct=float(raw_q.get("min_sector_breadth_pct", 45.0)),
+                max_allowed_sector_pe_ratio=float(raw_q.get("max_allowed_sector_pe_ratio", 1.05)),
+                regime_summary_tag=str(raw_q.get("regime_summary_tag") or ""),
+            )
+        light = str(market_regime.get("light") or "")
+        if "🔴" in light:
+            return RegimeQuotaConfig(
+                "RED_DEFENSIVE", 0, 1, 50.0, 0.85,
+                "🔴 空頭防禦：大盤紅燈防禦態勢，關閉右側追高，Style B 最多 1 檔",
+            )
+        if "🟢" in light:
+            return RegimeQuotaConfig(
+                "GREEN_BULL", 3, 2, 30.0, 1.30,
+                "🟢 多頭進攻：大盤綠燈偏多，右側突破 3 檔、回測低接 2 檔",
+            )
+    return RegimeQuotaConfig(
+        "YELLOW_ROTATION", 1, 3, 45.0, 1.05,
+        "🟡 震盪分歧：僅限最強族群龍頭右側 1 檔，Style B 低接 3 檔",
+    )
+
+
+class RegimeRouter:
+    """SASD v5.4.0 Phase 3 加權 + 櫃買 (OTC) 雙核心紅綠燈與外資期貨避險路由器。"""
+
+    @staticmethod
+    def compute_ma20_and_slope(closes: Sequence[float]) -> tuple[float, float, float] | None:
+        clean = [float(c) for c in closes if _safe_float(c) is not None and float(c) > 0]
+        if len(clean) < 20:
+            return None
+        close_t = clean[-1]
+        ma20_t = sum(clean[-20:]) / 20.0
+        ma20_prev = (sum(clean[-21:-1]) / 20.0) if len(clean) >= 21 else ma20_t
+        return round(close_t, 2), round(ma20_t, 2), round(ma20_t - ma20_prev, 4)
+
+    @classmethod
+    def evaluate_from_series(
+        cls,
+        taiex_closes: Sequence[float],
+        otc_closes: Sequence[float],
+        *,
+        foreign_futures_net_short_change: float = 0.0,
+        foreign_futures_total_net_short: float = 0.0,
+        futures_net_short_surge_lots: float = FUTURES_NET_SHORT_SURGE_LOTS,
+        futures_total_net_short_limit: float = FUTURES_TOTAL_NET_SHORT_LIMIT,
+    ) -> dict[str, Any] | None:
+        t_stats = cls.compute_ma20_and_slope(taiex_closes)
+        o_stats = cls.compute_ma20_and_slope(otc_closes)
+        if t_stats is None or o_stats is None:
+            return None
+        quota = evaluate_market_regime_quota(
+            taiex_close=t_stats[0],
+            taiex_ma20=t_stats[1],
+            taiex_ma20_slope=t_stats[2],
+            otc_close=o_stats[0],
+            otc_ma20=o_stats[1],
+            otc_ma20_slope=o_stats[2],
+            foreign_futures_net_short_change=foreign_futures_net_short_change,
+            foreign_futures_total_net_short=foreign_futures_total_net_short,
+            futures_net_short_surge_lots=futures_net_short_surge_lots,
+            futures_total_net_short_limit=futures_total_net_short_limit,
+        )
+        return {
+            "quota": quota.to_dict(),
+            "taiex": {"close": t_stats[0], "ma20": t_stats[1], "ma20_slope": t_stats[2]},
+            "otc": {"close": o_stats[0], "ma20": o_stats[1], "ma20_slope": o_stats[2]},
+            "futures": {
+                "foreign_net_short_change": foreign_futures_net_short_change,
+                "foreign_total_net_short": foreign_futures_total_net_short,
+            },
+        }
+
+    @classmethod
+    def fetch_live_dual_regime(
+        cls,
+        *,
+        taiex_closes: Sequence[float] | None = None,
+        otc_closes: Sequence[float] | None = None,
+        as_of_date: str | None = None,
+        finmind_token: str | None = None,
+        session: Any | None = None,
+        futures_net_short_surge_lots: float = FUTURES_NET_SHORT_SURGE_LOTS,
+        futures_total_net_short_limit: float = FUTURES_TOTAL_NET_SHORT_LIMIT,
+    ) -> dict[str, Any] | None:
+        t_series = list(taiex_closes) if taiex_closes else fetch_yahoo_daily_closes("^TWII", session=session)
+        o_series = list(otc_closes) if otc_closes else fetch_yahoo_daily_closes("^TWOII", session=session)
+        if len(t_series) < 20 or len(o_series) < 20:
+            return None
+        fut_chg, fut_tot = fetch_foreign_tx_futures_net_short(
+            as_of_date=as_of_date, finmind_token=finmind_token, session=session
+        )
+        return cls.evaluate_from_series(
+            t_series,
+            o_series,
+            foreign_futures_net_short_change=fut_chg,
+            foreign_futures_total_net_short=fut_tot,
+            futures_net_short_surge_lots=futures_net_short_surge_lots,
+            futures_total_net_short_limit=futures_total_net_short_limit,
+        )

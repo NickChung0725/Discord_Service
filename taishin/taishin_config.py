@@ -123,6 +123,15 @@ TAISHIN_SHEET_SCHEMAS: dict[str, list[str]] = {
         "realized_pnl",
         "user_note",
         "updated_at",
+        "Audit_Grade",
+        "Execution_Tactic",
+        "Ideal_Buy_Or_Ref",
+        "Chase_Limit_Price",
+        "Hard_Stop_Loss",
+        "TP1_Target_Or_POC",
+        "Deterministic_RR",
+        "Bear_Case_Warning",
+        "Invalidation_Triggers",
     ],
 }
 

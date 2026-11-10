@@ -694,6 +694,107 @@ def compute_sector_median_pe(
     return float(default_pe)
 
 
+def build_sector_metrics_from_prices(prices_df: pd.DataFrame | None) -> dict[str, dict[str, Any]]:
+    """從 `daily/{date}_prices.csv` 快速彙整全市場個股最新 `{close, ma17, ret_pct, industry_category}`。"""
+    if prices_df is None or prices_df.empty or "stock_id" not in prices_df.columns:
+        return {}
+    frame = prices_df.copy()
+    frame["stock_id"] = frame["stock_id"].astype(str).str.strip()
+    if "date" in frame.columns:
+        frame = frame.sort_values(["stock_id", "date"], kind="stable")
+
+    metrics: dict[str, dict[str, Any]] = {}
+    for sid, grp in frame.groupby("stock_id", sort=False):
+        if not sid or grp.empty:
+            continue
+        last = grp.iloc[-1]
+        try:
+            close_f = float(last.get("close"))
+        except (TypeError, ValueError):
+            continue
+        if pd.isna(close_f) or close_f <= 0:
+            continue
+        ma17_raw = last.get("MA17")
+        try:
+            ma17_f = float(ma17_raw) if ma17_raw is not None and not pd.isna(ma17_raw) else None
+        except (TypeError, ValueError):
+            ma17_f = None
+        if ma17_f is None and len(grp) >= 17:
+            c_tail = pd.to_numeric(grp["close"], errors="coerce").dropna().tail(17)
+            if len(c_tail) == 17:
+                ma17_f = float(c_tail.mean())
+        if ma17_f is None or ma17_f <= 0:
+            continue
+
+        ret_pct = 0.0
+        if len(grp) >= 2:
+            try:
+                prev_c = float(grp.iloc[-2].get("close"))
+                if prev_c > 0 and not pd.isna(prev_c):
+                    ret_pct = round((close_f - prev_c) / prev_c * 100.0, 2)
+            except (TypeError, ValueError):
+                ret_pct = 0.0
+        metrics[str(sid)] = {
+            "close": close_f,
+            "ma17": ma17_f,
+            "ret_pct": ret_pct,
+            "industry_category": str(last.get("industry_category") or "").strip(),
+        }
+    return metrics
+
+
+def compute_sector_breadth(
+    sector_name: str,
+    stock_metrics: Mapping[str, Mapping[str, Any]],
+    *,
+    taxonomy_records: Mapping[str, Mapping[str, Any]],
+    target_stock_id: str | None = None,
+) -> dict[str, Any]:
+    """計算同細分產業資金共振度（SASD v5.4.0 Phase 3 SectorBreadth）。
+
+    ``stock_metrics``：``{stock_id: {"close", "ma17", "ret_pct"}}``。
+    回傳站上 MA17 家數比（%）、樣本數，以及 ``target_stock_id`` 在族群內的漲幅百分位
+    （100 = 最強；樣本 < 2 時為 None）。
+    """
+    target = str(sector_name or "").strip()
+    members = [
+        sid for sid, rec in taxonomy_records.items()
+        if str(rec.get("sub_industry") or "").strip() == target and sid in stock_metrics
+    ]
+    if not members and target:
+        members = [
+            sid for sid, m in stock_metrics.items()
+            if isinstance(m, Mapping) and str(m.get("industry_category") or "").strip() == target
+        ]
+    above = 0
+    valid = 0
+    for sid in members:
+        m = stock_metrics[sid]
+        try:
+            close, ma17 = float(m["close"]), float(m["ma17"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if pd.isna(close) or pd.isna(ma17):
+            continue
+        valid += 1
+        above += 1 if close >= ma17 else 0
+
+    percentile: float | None = None
+    if target_stock_id is not None and str(target_stock_id) in members and len(members) >= 2:
+        rets = {sid: float(stock_metrics[sid].get("ret_pct") or 0.0) for sid in members}
+        mine = rets[str(target_stock_id)]
+        below = sum(1 for v in rets.values() if v < mine)
+        percentile = round(below / (len(rets) - 1) * 100.0, 1)
+
+    return {
+        "sector_name": target,
+        "member_count": valid,
+        "above_ma17_count": above,
+        "breadth_pct": round(above / valid * 100.0, 1) if valid else 0.0,
+        "return_percentile": percentile,
+    }
+
+
 class TaxonomyService:
     """管理本地 stock_taxonomy.json 與 Google Sheets [08_Stock_Taxonomy] 雙向快取與 AI 生成。"""
 
@@ -759,6 +860,22 @@ class TaxonomyService:
             taxonomy_records=self._records,
             fallback_sector=fallback_sector,
             default_pe=default_pe,
+        )
+
+    def compute_sector_breadth(
+        self,
+        sector_name: str,
+        stock_metrics: Mapping[str, Mapping[str, Any]],
+        *,
+        target_stock_id: str | None = None,
+    ) -> dict[str, Any]:
+        """透過本地 08_Stock_Taxonomy 分類知識庫計算細分產業資金共振度 (SectorBreadth)。"""
+        self.load()
+        return compute_sector_breadth(
+            sector_name,
+            stock_metrics,
+            taxonomy_records=self._records,
+            target_stock_id=target_stock_id,
         )
 
     def get_or_create_sync(

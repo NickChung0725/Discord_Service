@@ -4,6 +4,30 @@
 
 ---
 
+## [v5.7.0] - 2026-11-09
+### ✨ 新增功能 (Added) — SASD Phase 3：台股微結構過濾、雙核心大盤路由與無未來函數審計閉環（含 Phase 1~3 全鏈路接線）
+* **台股微結構過濾與除權息補償（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py) & [`finmind_scanner.json`](/finmind_scanner.json)）**：
+  * 實作並接入 `passes_liquidity_median_guard()`（近 20 日成交金額中位數 $\ge 5,000$ 萬台幣硬門檻，防範單日爆量殭屍股）與 `evaluate_disposition_risk()`（近 5/10 日急漲與高週轉注意／處置分盤交易預警）。
+  * 實作並接入 `compensate_ex_dividend_gaps()` 與 `extract_ex_dividend_dates()`（以 T 日現價為 1.0 基準對歷史 OHLC 做前複權回溯補償，消除 6～9 月除權息假死叉與假 Volume POC 套牢區）。
+  * 實作三層籌碼微結構拆解：`is_mandatory_margin_covering_window()`（3/15～4/25 股東會與除權息前 7 交易日強制回補失真註記）、`fetch_or_cache_tdcc_holding()` + `evaluate_weekly_tdcc_anchor()`（依實收資本額 $\ge 30$ 億動態切換 1,000 張／400 張大戶週底氣，附 `tdcc_base_date`）與 `classify_daily_margin_efficiency()`（日融資增減 × K 線實體效率四象限分類，精準區分 `MAIN_FORCE_MARGIN_LOCK` 主力鎖碼與 `RETAIL_MARGIN_CHASING_TRAP` 散戶套牢）。
+* **加權＋櫃買（OTC）雙核心紅綠燈與外資期貨避險路由（[`taishin/macro_context.py`](/taishin/macro_context.py)）**：
+  * 新增 `RegimeQuotaConfig`、`evaluate_market_regime_quota()`、`fetch_yahoo_daily_closes()`、`fetch_foreign_tx_futures_net_short()` 與 `RegimeRouter`，結合加權指數、櫃買指數（OTC）MA20 位階斜率與外資台指期淨空單變化，動態輸出 `GREEN_BULL` / `YELLOW_ROTATION` / `RED_DEFENSIVE` 策略配額（右側突破上限、Style B 低接上限、族群共振門檻與相對估值上限），並接入 `fetch_or_load_market_regime()`。
+* **同細分產業資金共振度（[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)）**：
+  * 新增 `build_sector_metrics_from_prices()` 與 `compute_sector_breadth()`，統計同細分產業站上 17MA 比例與日報酬同業百分位（PR 值），攔截孤掌難鳴之假突破。
+* **無未來函數事後審計閉環與 CLI（[`quant/signal_audit_service.py`](/quant/signal_audit_service.py) & [`finmind_stock_scanner.py`](/finmind_stock_scanner.py)）**：
+  * 新增 SQLite `signal_audit_log`（`data/signal_audit.db`，嚴守 Leading Commas SQL 規範）、`evaluate_forward_path()` 三條防自欺鐵律（`Open_{T+1} * 1.005` 摩擦成本與低接成交分離、同日碰撞停損優先悲觀認定 `STOP_LOSS_HIT` + `is_whipsawed`、`REJECT_TRAP` 錯殺率 `is_false_negative_miss`）、`SignalAuditStore`（含 `sync_to_gsheet` 同步至 `09_Signal_Audit_Log`）與 `format_weekly_summary_markdown()`。
+  * 新增 CLI 子命令 `audit-signals`，並將事後回填與 Google Sheets 同步完整接入 19:00 `scan_configured_universe()` 與 21:00 `run_pipeline()`（每逢週五盤後自動附加 `Weekly Quantitative Audit Summary` 推播）。
+
+### 🔧 優化與全鏈路補齊 (Changed & Verified across Phase 1~3)
+* **Pass 1 紅藍軍審計全鏈路接線與原生 Structured Output（[`services/ai_service.py`](/services/ai_service.py) & [`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
+  * `ask_vertex_ai_with_meta()` 新增 `response_schema`、`system_instruction`、`temperature` 支援，Pass 1 紅藍軍審計透過 `GenerateContentConfig(response_mime_type="application/json", response_schema=BatchAuditResponse)` 原生鎖定自回歸防偏誤順序；新增 `_filter_recent_rss_news()` 精準保留近 5 交易日新聞；`_enforce_post_audit_guards()` 與 `enforce_regime_quotas()` 完整串接處置禁追高、紅黃燈配額、族群廣度與橫斷面相對 PE 硬攔截。
+* **Phase 2 橫斷面同業 PE 自動串接（[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)）**：
+  * 新增 `compute_fundamental_features()` 與 `compute_cross_sectional_pe_map()`，自動由 `08_Stock_Taxonomy` 計算動態同業中位數 PE，並由 `03_Balance_Sheet` 提取實收資本額供集保大戶門檻判定。
+* **Google Sheets 9 個確定性審計欄位擴充與傳遞（[`quant/fundamental_config.py`](/quant/fundamental_config.py)、[`taishin/taishin_config.py`](/taishin/taishin_config.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * `AI_Daily_Picks` 與 `05_Position_Thesis_Memory` 同步擴充 `Audit_Grade`、`Execution_Tactic`、`Ideal_Buy_Or_Ref`、`Chase_Limit_Price`、`Hard_Stop_Loss`、`TP1_Target_Or_POC`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers` 共 9 欄，於 22:45 `sync-memory` 自動繼承鎖定 Python 硬停損與 TP1 點位（維持 12+5 核心表數不變）。
+* **測試覆蓋**：新增與擴充 [`tests/test_phase3_microstructure.py`](/tests/test_phase3_microstructure.py)、[`tests/test_stage_guards.py`](/tests/test_stage_guards.py)、[`tests/test_margin_features.py`](/tests/test_margin_features.py)、[`tests/test_finmind_stock_scanner.py`](/tests/test_finmind_stock_scanner.py)，全儲存庫單元測試 100% 通過。
+
+---
 ## [v5.6.1] - 2026-11-09
 ### 🔧 優化與修正 (Fixed & Changed)
 * **修復 08:15 晨報呼叫 Vertex AI 404 NOT_FOUND 錯誤（AI 端點與 BigQuery Location 職責分離）**：

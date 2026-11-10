@@ -752,7 +752,14 @@ def get_bq_location() -> str:
     ).strip()
 
 
-def _call_vertex_ai_once(prompt: str, *, model: str | None = None) -> AIResponse:
+def _call_vertex_ai_once(
+    prompt: str,
+    *,
+    model: str | None = None,
+    response_schema: Any | None = None,
+    system_instruction: str | None = None,
+    temperature: float | None = None,
+) -> AIResponse:
     project_id = (os.getenv("GOOGLE_CLOUD_PROJECT_ID") or "").strip()
     location = get_vertex_location()
     vertex_api_key = (os.getenv("VERTEX_API_KEY") or "").strip() or None
@@ -770,10 +777,22 @@ def _call_vertex_ai_once(prompt: str, *, model: str | None = None) -> AIResponse
         client_kwargs["api_key"] = vertex_api_key
 
     client = genai.Client(**client_kwargs)
-    response = client.models.generate_content(
-        model=resolved_model,
-        contents=prompt,
-    )
+    gen_kwargs: dict[str, Any] = {
+        "model": resolved_model,
+        "contents": prompt,
+    }
+    if response_schema is not None or system_instruction is not None or temperature is not None:
+        cfg_kwargs: dict[str, Any] = {}
+        if response_schema is not None:
+            cfg_kwargs["response_mime_type"] = "application/json"
+            cfg_kwargs["response_schema"] = response_schema
+        if system_instruction is not None:
+            cfg_kwargs["system_instruction"] = system_instruction
+        if temperature is not None:
+            cfg_kwargs["temperature"] = temperature
+        gen_kwargs["config"] = types.GenerateContentConfig(**cfg_kwargs)
+
+    response = client.models.generate_content(**gen_kwargs)
     answer = getattr(response, "text", "")
     if not answer:
         raise RuntimeError("Vertex AI returned an empty response.")
@@ -917,6 +936,9 @@ async def ask_vertex_ai_with_meta(
     task_type: str | None = None,
     stock_id: str | None = None,
     custom_id: str | None = None,
+    response_schema: Any | None = None,
+    system_instruction: str | None = None,
+    temperature: float | None = None,
 ) -> AIResponse:
     """Ask Vertex AI and return response metadata; never falls back to Google AI Studio."""
 
@@ -933,7 +955,13 @@ async def ask_vertex_ai_with_meta(
                 )
                 time.sleep(delay)
             try:
-                meta = _call_vertex_ai_once(prompt, model=resolved_model)
+                meta = _call_vertex_ai_once(
+                    prompt,
+                    model=resolved_model,
+                    response_schema=response_schema,
+                    system_instruction=system_instruction,
+                    temperature=temperature,
+                )
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
                 _print_ai_telemetry(
                     provider=meta.provider,

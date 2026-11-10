@@ -936,6 +936,87 @@ class ReboundAndMarketRegimeTests(unittest.TestCase):
         self.assertEqual(rows[0]["market_light"], "🟡黃燈")
         self.assertEqual(rows[0]["war_room_url"], "https://x/2357.html")
 
+    def test_liquidity_median_filters_single_day_volume_spike(self) -> None:
+        from finmind_stock_scanner import passes_liquidity_median_guard
+
+        dates = pd.bdate_range("2026-09-01", periods=20)
+        # 19 天皆僅 800 萬成交值，最後 1 天暴衝 15 億（平均 > 8,000 萬，但中位數僅 800 萬 < 5,000 萬）
+        turnovers = [8_000_000.0] * 19 + [1_500_000_000.0]
+        df_zombie = pd.DataFrame(
+            {
+                "date": [d.strftime("%Y-%m-%d") for d in dates],
+                "close": [100.0] * 20,
+                "Trading_Volume": [t / 100.0 for t in turnovers],
+                "Trading_money": turnovers,
+            }
+        )
+        self.assertFalse(passes_liquidity_median_guard(df_zombie, min_median_turnover=50_000_000.0))
+
+        df_healthy = pd.DataFrame(
+            {
+                "date": [d.strftime("%Y-%m-%d") for d in dates],
+                "close": [100.0] * 20,
+                "Trading_Volume": [800_000.0] * 20,
+                "Trading_money": [80_000_000.0] * 20,
+            }
+        )
+        self.assertTrue(passes_liquidity_median_guard(df_healthy, min_median_turnover=50_000_000.0))
+
+    def test_ex_dividend_gap_compensation_prevents_false_poc_resistance(self) -> None:
+        from finmind_stock_scanner import (
+            compensate_ex_dividend_gaps,
+            compute_deterministic_trade_setup,
+        )
+
+        dates = pd.bdate_range("2026-06-01", periods=65)
+        rows = []
+        for idx, dt in enumerate(dates):
+            if idx < 54:
+                # 除息前密集在 105.0 元（除息前一日收 106.0 元；配息 6 元後等效價約 99.06 元）
+                c = 106.0 if idx == 53 else 105.0
+                vol = 8_000_000.0 if idx >= 49 else 2_000_000.0
+            else:
+                # 10 個交易日前除息 6 元（100.0 元開出）後緩步墊高至今日 102.0 元
+                c = round(100.0 + (idx - 54) * 0.2, 2)
+                vol = 2_000_000.0
+            rows.append(
+                {
+                    "date": dt.strftime("%Y-%m-%d"),
+                    "open": round(c - 0.2, 2),
+                    "max": round(c + 0.5, 2),
+                    "min": round(c - 0.5, 2),
+                    "close": c,
+                    "Trading_Volume": vol,
+                }
+            )
+        raw_df = pd.DataFrame(rows)
+        ex_dt_str = dates[54].strftime("%Y-%m-%d")
+        # 同時測試 FinMind 原始欄位格式 (CashExDividendTradingDate + CashEarningsDistribution)
+        div_df = pd.DataFrame(
+            [
+                {
+                    "CashExDividendTradingDate": ex_dt_str,
+                    "CashEarningsDistribution": 6.0,
+                    "CashStatutorySurplus": 0.0,
+                }
+            ]
+        )
+
+        unadjusted_setup = compute_deterministic_trade_setup(raw_df)
+        compensated_df = compensate_ex_dividend_gaps(raw_df, div_df)
+        compensated_setup = compute_deterministic_trade_setup(compensated_df)
+
+        # 未還原前 POC 落在 105 元（誤判為上方巨量套牢壓力且跌破 17MA）；前複權還原後 105 元換算為 ~99.06 元（低於現價 102.0 元之底部支撐）
+        self.assertAlmostEqual(float(unadjusted_setup["volume_poc_60d"]), 105.0, delta=0.5)
+        self.assertEqual(unadjusted_setup["tp1_source"], "VOLUME_POC_RESISTANCE")
+        self.assertGreater(float(unadjusted_setup["ma17_t"]), float(unadjusted_setup["close_t"]))
+        self.assertAlmostEqual(float(compensated_setup["volume_poc_60d"]), 99.06, delta=0.2)
+        self.assertLess(float(compensated_setup["volume_poc_60d"]), float(compensated_setup["close_t"]))
+        self.assertLess(float(compensated_setup["ma17_t"]), float(compensated_setup["close_t"]))
+        self.assertLess(float(compensated_setup["atr_14"]), float(unadjusted_setup["atr_14"]))
+        self.assertEqual(compensated_setup["tp1_source"], "ATR_3X_TARGET")
+        self.assertIn("raw_max", compensated_df.columns)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2209,9 +2209,17 @@ def match_entry_to_picks(
         ref_close = _to_float(matched.get("close_at_pick"), avg_cost_price)
         ref_ma17 = _to_float(matched.get("ma17_at_pick"), ref_close)
 
-        tp1 = extract_first_price(matched.get("target_price_1")) or extract_first_price(pub_plan.get("target_price_1"))
+        tp1 = (
+            extract_first_price(matched.get("TP1_Target_Or_POC"))
+            or extract_first_price(matched.get("target_price_1"))
+            or extract_first_price(pub_plan.get("target_price_1"))
+        )
         tp2 = extract_first_price(matched.get("target_price_2")) or extract_first_price(pub_plan.get("target_price_2"))
-        sl = extract_first_price(matched.get("stop_loss_price")) or extract_first_price(pub_plan.get("stop_loss_price"))
+        sl = (
+            extract_first_price(matched.get("Hard_Stop_Loss"))
+            or extract_first_price(matched.get("stop_loss_price"))
+            or extract_first_price(pub_plan.get("stop_loss_price"))
+        )
 
         base_px = avg_cost_price if avg_cost_price > 0 else ref_close
         if tp1 <= 0 and base_px > 0:
@@ -2226,7 +2234,10 @@ def match_entry_to_picks(
         )
         thesis = str(matched.get("entry_thesis") or pub_verdict or "依據 AI 嚴選訊號建倉").strip()
         invalidation = str(
-            matched.get("risk_note") or pub_plan.get("invalidation") or "跌破關鍵防守均線或基本面轉弱退場"
+            matched.get("Invalidation_Triggers")
+            or matched.get("risk_note")
+            or pub_plan.get("invalidation")
+            or "跌破關鍵防守均線或基本面轉弱退場"
         ).strip()
         war_url = str(matched.get("war_room_url") or pub_war_room).strip()
 
@@ -2242,6 +2253,15 @@ def match_entry_to_picks(
             "entry_thesis": thesis,
             "invalidation_rule": invalidation,
             "war_room_url": war_url,
+            "Audit_Grade": str(matched.get("Audit_Grade") or "").strip(),
+            "Execution_Tactic": str(matched.get("Execution_Tactic") or "").strip(),
+            "Ideal_Buy_Or_Ref": matched.get("Ideal_Buy_Or_Ref", ""),
+            "Chase_Limit_Price": matched.get("Chase_Limit_Price", ""),
+            "Hard_Stop_Loss": matched.get("Hard_Stop_Loss", round(sl, 2)),
+            "TP1_Target_Or_POC": matched.get("TP1_Target_Or_POC", round(tp1, 2)),
+            "Deterministic_RR": matched.get("Deterministic_RR", ""),
+            "Bear_Case_Warning": str(matched.get("Bear_Case_Warning") or "").strip(),
+            "Invalidation_Triggers": str(matched.get("Invalidation_Triggers") or "").strip(),
         }
 
     # 3. Search Rebound_Watchlist (Pattern A Rebound)
@@ -2704,6 +2724,15 @@ def reconcile_position_memory(
             "realized_pnl": "",
             "user_note": "",
             "updated_at": now_iso,
+            "Audit_Grade": matched.get("Audit_Grade", ""),
+            "Execution_Tactic": matched.get("Execution_Tactic", ""),
+            "Ideal_Buy_Or_Ref": matched.get("Ideal_Buy_Or_Ref", ""),
+            "Chase_Limit_Price": matched.get("Chase_Limit_Price", ""),
+            "Hard_Stop_Loss": matched.get("Hard_Stop_Loss", init_sl),
+            "TP1_Target_Or_POC": matched.get("TP1_Target_Or_POC", tp1),
+            "Deterministic_RR": matched.get("Deterministic_RR", ""),
+            "Bear_Case_Warning": matched.get("Bear_Case_Warning", ""),
+            "Invalidation_Triggers": matched.get("Invalidation_Triggers", ""),
         }
         updated_memory.append(new_card)
         known_position_ids.add(pid)

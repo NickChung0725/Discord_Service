@@ -626,6 +626,25 @@ def _analyze_revenue_momentum(
         else:
             # latest_month == 1
             ly_jan_feb_avg = _to_float(latest.get("last_year_jan_feb_avg_revenue"))
+            if ly_jan_feb_avg is None and latest_year:
+                ly_jan_rec = next(
+                    (r for r in records if _extract_rev_ym(r) == (latest_year - 1, 1)),
+                    None,
+                )
+                ly_feb_rec = next(
+                    (r for r in records if _extract_rev_ym(r) == (latest_year - 1, 2)),
+                    None,
+                )
+                ly_vals = [
+                    v
+                    for v in (
+                        _to_float(ly_jan_rec.get("revenue")) if ly_jan_rec else None,
+                        _to_float(ly_feb_rec.get("revenue")) if ly_feb_rec else None,
+                    )
+                    if v is not None and v > 0
+                ]
+                if len(ly_vals) == 2:
+                    ly_jan_feb_avg = sum(ly_vals) / 2.0
             cond_yoy = (
                 latest_yoy is not None
                 and latest_yoy > 0
@@ -1002,6 +1021,7 @@ class FundamentalFeatureSummary:
     margin_trends: _AutoDictResult
     forward_valuation: _AutoDictResult
     prompt_block: str
+    paid_in_capital_twd: float = 0.0
 
     def to_prompt_block(self) -> str:
         return self.prompt_block
@@ -1010,7 +1030,29 @@ class FundamentalFeatureSummary:
         return self.prompt_block
 
 
-def build_ai_fundamental_prompt_block(
+def _infer_last_q4_yoy_from_statements(statements: list[dict[str, Any]]) -> float | None:
+    for idx, q_row in enumerate(statements):
+        qtr = str(q_row.get("year_qtr") or "").strip().upper()
+        raw_dt = str(q_row.get("raw_date") or q_row.get("date") or "").strip()
+        is_q4 = qtr.endswith("Q4") or raw_dt.endswith("12-31")
+        if not is_q4:
+            continue
+        for k in ("qtr_rev_yoy_pct", "rev_yoy_pct", "yoy_pct"):
+            val = _to_float(q_row.get(k))
+            if val is not None:
+                return val
+        rev_cur = _to_float(q_row.get("revenue", q_row.get("Revenue", q_row.get("rev_亿元"))))
+        if rev_cur is not None and rev_cur > 0 and len(qtr) >= 6 and qtr[:4].isdigit():
+            prev_q4 = f"{int(qtr[:4]) - 1}Q4"
+            for older in statements[idx + 1 :]:
+                if str(older.get("year_qtr") or "").strip().upper() == prev_q4:
+                    rev_prev = _to_float(older.get("revenue", older.get("Revenue", older.get("rev_亿元"))))
+                    if rev_prev is not None and rev_prev > 0:
+                        return round(((rev_cur / rev_prev) - 1.0) * 100.0, 2)
+    return None
+
+
+def compute_fundamental_features(
     stock_id: str,
     stock_name: str = "",
     sub_industry: str = "未分類",
@@ -1023,9 +1065,10 @@ def build_ai_fundamental_prompt_block(
     trailing_pe: float | None = None,
     last_q4_yoy_pct: float | None = None,
     prev_quarter_revenue: float | None = None,
+    paid_in_capital_twd: float = 0.0,
     config: FundamentalEngineConfig = DEFAULT_FUNDAMENTAL_ENGINE_CONFIG,
-) -> str:
-    """組裝供 alignment_ai_picker.py 直接注入 Prompt 之高密度語意特徵區塊 (Section 3.5)。"""
+) -> FundamentalFeatureSummary:
+    """組裝結構化 `FundamentalFeatureSummary` 與高密度語意特徵區塊 (SASD v5.4.0 Phase 2)。"""
     statements = _normalize_statements_newest_first(quarterly_statements)
     try:
         shares, share_tier = _infer_safe_weighted_shares(
@@ -1036,14 +1079,22 @@ def build_ai_fundamental_prompt_block(
         )
         shares_yi = shares / 1e8
         share_line = f"{share_tier} (真實流通股數：{shares_yi:.2f} 億股，已排除面額誤差)"
+        safe_shares_opt: float | None = shares
     except ValueError:
         shares = 0.0
+        safe_shares_opt = None
         share_tier = "UNAVAILABLE"
         share_line = "UNAVAILABLE (財報無 |EPS| >= 0.25 之季度且無市值保底資料)"
 
+    resolved_q4_yoy = (
+        last_q4_yoy_pct
+        if last_q4_yoy_pct is not None
+        else _infer_last_q4_yoy_from_statements(statements)
+    )
+
     rev_res = _analyze_revenue_momentum(
         monthly_revenues or [],
-        last_q4_yoy_pct=last_q4_yoy_pct,
+        last_q4_yoy_pct=resolved_q4_yoy,
         prev_quarter_revenue=prev_quarter_revenue,
         config=config,
     )
@@ -1085,7 +1136,51 @@ def build_ai_fundamental_prompt_block(
         f"- 三率獲利品質：{margin_res['summary_line']}",
         f"- 前瞻估值對齊：{val_res['summary_line']}",
     ]
-    return "\n".join(lines)
+    prompt_block = "\n".join(lines)
+    return FundamentalFeatureSummary(
+        stock_id=str(stock_id).strip(),
+        stock_name=str(stock_name).strip(),
+        sub_industry=str(sub_industry or "未分類").strip(),
+        safe_weighted_shares=safe_shares_opt,
+        share_inference_tier=share_tier,
+        revenue_momentum=rev_res,
+        margin_trends=margin_res,
+        forward_valuation=val_res,
+        prompt_block=prompt_block,
+        paid_in_capital_twd=float(paid_in_capital_twd or 0.0),
+    )
+
+
+def build_ai_fundamental_prompt_block(
+    stock_id: str,
+    stock_name: str = "",
+    sub_industry: str = "未分類",
+    *,
+    quarterly_statements: list[dict[str, Any]] | pd.DataFrame | None = None,
+    monthly_revenues: list[dict[str, Any]] | pd.DataFrame | None = None,
+    latest_close_price: float | None = None,
+    fallback_market_cap: float | None = None,
+    sector_benchmark_pe: float = 20.0,
+    trailing_pe: float | None = None,
+    last_q4_yoy_pct: float | None = None,
+    prev_quarter_revenue: float | None = None,
+    config: FundamentalEngineConfig = DEFAULT_FUNDAMENTAL_ENGINE_CONFIG,
+) -> str:
+    """組裝供 alignment_ai_picker.py 直接注入 Prompt 之高密度語意特徵區塊 (Section 3.5)。"""
+    return compute_fundamental_features(
+        stock_id=stock_id,
+        stock_name=stock_name,
+        sub_industry=sub_industry,
+        quarterly_statements=quarterly_statements,
+        monthly_revenues=monthly_revenues,
+        latest_close_price=latest_close_price,
+        fallback_market_cap=fallback_market_cap,
+        sector_benchmark_pe=sector_benchmark_pe,
+        trailing_pe=trailing_pe,
+        last_q4_yoy_pct=last_q4_yoy_pct,
+        prev_quarter_revenue=prev_quarter_revenue,
+        config=config,
+    ).prompt_block
 
 
 @dataclass
@@ -2417,25 +2512,66 @@ class FundamentalAnalyzer:
             logger.debug("Phase 2 semantic block skipped for %s", stock_id, exc_info=True)
         return "\n".join(lines)
 
-    def build_ai_fundamental_prompt_block(
+    def compute_cross_sectional_pe_map(self, close_map: Mapping[str, float]) -> dict[str, float]:
+        """從快取表 `05_AI_Metrics_Wide` 最新 TTM EPS 與當日收盤價建立全池橫斷面 PE 對照表。"""
+        if not close_map:
+            return {}
+        try:
+            ws = self.cache._get_worksheet("05_AI_Metrics_Wide")  # noqa: SLF001
+            records = self.cache._get_records_cached(ws)  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            return {}
+
+        latest_by_sid: dict[str, tuple[str, float]] = {}
+        for rec in records:
+            sid = str(rec.get("stock_id") or "").strip()
+            if not sid:
+                continue
+            ttm_eps = _to_float(rec.get("ttm_eps"))
+            if ttm_eps is None or ttm_eps <= 0:
+                continue
+            raw_dt = str(rec.get("raw_date") or rec.get("year_qtr") or "")
+            prev = latest_by_sid.get(sid)
+            if prev is None or raw_dt >= prev[0]:
+                latest_by_sid[sid] = (raw_dt, ttm_eps)
+
+        pe_map: dict[str, float] = {}
+        for sid, close_px in close_map.items():
+            c_val = _to_float(close_px)
+            if c_val is None or c_val <= 0:
+                continue
+            entry = latest_by_sid.get(str(sid).strip())
+            if entry and entry[1] > 0:
+                pe_map[str(sid).strip()] = round(c_val / entry[1], 4)
+        return pe_map
+
+    def compute_fundamental_features(
         self,
         stock_id: str,
         *,
         close: float | None = None,
         stock_name: str = "",
         sub_industry: str = "",
-        sector_benchmark_pe: float = 20.0,
+        sector_benchmark_pe: float | None = None,
+        sector_pe_lookup: Mapping[str, float] | None = None,
+        fallback_market_cap: float | None = None,
         wide_df: pd.DataFrame | None = None,
         is_df: pd.DataFrame | None = None,
         rev_df: pd.DataFrame | None = None,
-    ) -> str:
-        """從快取表讀取財報與月營收，產出 SASD v5.4.0 Phase 2 高密度語意特徵區塊。"""
+        bs_df: pd.DataFrame | None = None,
+    ) -> FundamentalFeatureSummary:
+        """從快取表讀取財報、月營收與資產負債表，產出結構化 `FundamentalFeatureSummary`。"""
         if wide_df is None:
             wide_df = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
         if is_df is None:
             is_df = self.cache._read_stock_rows(self.cache._get_worksheet("02_Income_Statement"), stock_id)  # noqa: SLF001
         if rev_df is None:
             rev_df = self.cache._read_stock_rows(self.cache._get_worksheet("01_Monthly_Revenue"), stock_id)  # noqa: SLF001
+        if bs_df is None:
+            try:
+                bs_df = self.cache._read_stock_rows(self.cache._get_worksheet("03_Balance_Sheet"), stock_id)  # noqa: SLF001
+            except Exception:  # noqa: BLE001
+                bs_df = pd.DataFrame()
 
         combined_q: list[dict[str, Any]] = []
         if is_df is not None and not is_df.empty:
@@ -2451,27 +2587,80 @@ class FundamentalAnalyzer:
         elif is_map:
             combined_q = list(is_map.values())
 
-        if not sub_industry:
+        paid_in_capital_twd = 0.0
+        if bs_df is not None and not bs_df.empty and "capital_stock" in bs_df.columns:
+            sorted_bs = bs_df.sort_values("raw_date") if "raw_date" in bs_df.columns else bs_df
+            cap_series = pd.to_numeric(sorted_bs["capital_stock"], errors="coerce").dropna()
+            if not cap_series.empty:
+                paid_in_capital_twd = float(cap_series.iloc[-1])
+
+        if fallback_market_cap is None and paid_in_capital_twd > 0 and close is not None and close > 0:
+            fallback_market_cap = (paid_in_capital_twd / 10.0) * float(close)
+
+        tax_svc = None
+        if not sub_industry or sector_benchmark_pe is None:
             try:
                 from taxonomy_service import TaxonomyService
 
-                rec = TaxonomyService().get_cached(stock_id)
-                if rec:
-                    sub_industry = str(rec.get("sub_industry") or "").strip()
-                    if not stock_name:
-                        stock_name = str(rec.get("stock_name") or "").strip()
+                tax_svc = TaxonomyService()
+                if not sub_industry:
+                    rec = tax_svc.get_cached(stock_id)
+                    if rec:
+                        sub_industry = str(rec.get("sub_industry") or "").strip()
+                        if not stock_name:
+                            stock_name = str(rec.get("stock_name") or "").strip()
             except Exception:  # noqa: BLE001
-                pass
+                tax_svc = None
 
-        return build_ai_fundamental_prompt_block(
+        resolved_sub = sub_industry or "未分類"
+        if sector_benchmark_pe is None:
+            if tax_svc is not None and sector_pe_lookup:
+                try:
+                    sector_benchmark_pe = tax_svc.compute_sector_median_pe(resolved_sub, sector_pe_lookup)
+                except Exception:  # noqa: BLE001
+                    sector_benchmark_pe = 20.0
+            else:
+                sector_benchmark_pe = 20.0
+
+        return compute_fundamental_features(
             stock_id=stock_id,
             stock_name=stock_name,
-            sub_industry=sub_industry or "未分類",
+            sub_industry=resolved_sub,
             quarterly_statements=combined_q,
             monthly_revenues=rev_df,
             latest_close_price=close,
-            sector_benchmark_pe=sector_benchmark_pe,
+            fallback_market_cap=fallback_market_cap,
+            sector_benchmark_pe=float(sector_benchmark_pe),
+            paid_in_capital_twd=paid_in_capital_twd,
         )
+
+    def build_ai_fundamental_prompt_block(
+        self,
+        stock_id: str,
+        *,
+        close: float | None = None,
+        stock_name: str = "",
+        sub_industry: str = "",
+        sector_benchmark_pe: float | None = None,
+        sector_pe_lookup: Mapping[str, float] | None = None,
+        wide_df: pd.DataFrame | None = None,
+        is_df: pd.DataFrame | None = None,
+        rev_df: pd.DataFrame | None = None,
+        bs_df: pd.DataFrame | None = None,
+    ) -> str:
+        """從快取表讀取財報與月營收，產出 SASD v5.4.0 Phase 2 高密度語意特徵區塊。"""
+        return self.compute_fundamental_features(
+            stock_id=stock_id,
+            close=close,
+            stock_name=stock_name,
+            sub_industry=sub_industry,
+            sector_benchmark_pe=sector_benchmark_pe,
+            sector_pe_lookup=sector_pe_lookup,
+            wide_df=wide_df,
+            is_df=is_df,
+            rev_df=rev_df,
+            bs_df=bs_df,
+        ).prompt_block
 
     def _escape_html(self, text: str) -> str:
         return (

@@ -886,7 +886,8 @@ AUDITOR_SYSTEM_PROMPT = """你是一位掌管部位風控的台股機構級「�
    - 右側突破強勢股：嚴禁建議「死等拉回平盤才買」（會導致真飆股踏空、只買到假突破倒貨股），亦嚴禁 09:00 開盤盲目市價追高；必須採用 `BREAKOUT_0915_VWAP_OR_1315_CLOSE`（早盤冷卻 15 分鐘確認站穩均價線且低於追價上限試單 50%，或 13:15 尾盤確認站穩買進）。
    - Style B 回測股：必須採用 `STYLE_B_PULLBACK_LIMIT` 於支撐區間限價低接。
 5. 庫存共伴曝險鐵律：若候選股被標記為 `SECTOR_OR_CORR_FULL_SWAP_ONLY`（代表使用者台新帳戶中已有同產業或 60 日報酬相關係數 >= 0.80 的高度共伴持股），除非該股基本面與籌碼強度遠勝現有庫存，否則一律判定為 `REJECT_TRAP`。
-6. 寧缺勿濫否決權（Zero-Pick Veto）：如果整批候選股都存在結構性瑕疵，請毫不猶豫將全部股票評為 `REJECT_TRAP`。全數淘汰是完全正確且受讚賞的專業決策。"""
+6. 寧缺勿濫否決權（Zero-Pick Veto）：如果整批候選股都存在結構性瑕疵，請毫不猶豫將全部股票評為 `REJECT_TRAP`。全數淘汰是完全正確且受讚賞的專業決策。
+7. 微結構與大盤氣候鐵律：若標註『⚠️ 處置與流動性凍結預警』嚴禁建議右側追高突破；若標註『⚠️ 融資套牢誘多』、『⚠️ 散戶接刀警報』或『⚠️ 個股孤狼假突破』，必須列為重大空方破綻並從嚴降級或打入 `REJECT_TRAP`；若標註『MARGIN_CALENDAR_NOTE（強制融券回補窗口）』則屬制度性買盤，不得誤判為基本面利多。"""
 
 
 class StockAuditItem(BaseModel):
@@ -950,36 +951,178 @@ def _enforce_post_audit_guards(
     items: list[StockAuditItem],
     setups: Mapping[str, Mapping[str, object]],
     exposures: Mapping[str, object],
+    *,
+    context_by_stock: Mapping[str, Mapping[str, object]] | None = None,
+    regime_quota: Mapping[str, object] | None = None,
 ) -> list[StockAuditItem]:
-    """AI 回傳後的 Python 確定性攔截，防止 LLM 偶發性違規。
+    """AI 回傳後的 Python 確定性攔截，防止 LLM 偶發性違規（Phase 1 + Phase 3 微結構與大盤風控）。
 
     1. 風報比 < 1.8（或無法計算）卻給 S_TIER：降級 A_TIER_PULLBACK；右側突破型直接 REJECT_TRAP。
-    2. 庫存曝險為 SECTOR_OR_CORR_FULL_SWAP_ONLY 且非 REJECT_TRAP：戰術強制改為 PORTFOLIO_SWAP_ONLY。
+    2. 處置風險預警標的非空時：禁止右側突破追高（RIGHT_BREAKOUT -> REJECT_TRAP；其他改 STYLE_B_PULLBACK_LIMIT）。
+    3. 大盤雙指數風控路由器（RegimeQuotaConfig）：紅燈全面禁止右側突破、黃燈右側突破須 PR85+、族群廣度與相對 PE 上限硬攔截。
+    4. 庫存曝險為 SECTOR_OR_CORR_FULL_SWAP_ONLY 且非 REJECT_TRAP：戰術強制改為 PORTFOLIO_SWAP_ONLY。
     """
     guarded: list[StockAuditItem] = []
     for item in items:
         update: dict[str, object] = {}
         setup = setups.get(item.stock_id)
+        ctx = (context_by_stock or {}).get(item.stock_id) or {}
         grade = item.verdict_grade
+        tactic = item.execution_strategy_type
+        reasoning = item.conflict_resolution_reasoning
+        sig_type = str((setup or {}).get("signal_type") or "")
+
         if setup is not None and grade == "S_TIER_SNIPER":
             rr = setup.get("deterministic_rr_ratio")
             if rr is None or float(rr) < AUDIT_RR_GUARD_THRESHOLD:
-                if setup.get("signal_type") == "RIGHT_BREAKOUT":
+                if sig_type == "RIGHT_BREAKOUT":
                     grade = "REJECT_TRAP"
-                    update["execution_strategy_type"] = "NO_TRADE"
+                    tactic = "NO_TRADE"
                 else:
                     grade = "A_TIER_PULLBACK"
                 update["verdict_grade"] = grade
-                update["conflict_resolution_reasoning"] = (
-                    f"{item.conflict_resolution_reasoning}｜[Python 攔截] 風報比 {rr} < "
+                update["execution_strategy_type"] = tactic
+                reasoning = (
+                    f"{reasoning}｜[Python 攔截] 風報比 {rr} < "
                     f"{AUDIT_RR_GUARD_THRESHOLD}，S 級評等已被降級為 {grade}。"
                 )
+                update["conflict_resolution_reasoning"] = reasoning
+
+        # Phase 3.1: 處置風險預警禁止右側突破追高
+        disp_tag = str(ctx.get("disposition_tag") or "").strip()
+        if grade != "REJECT_TRAP" and disp_tag:
+            if sig_type == "RIGHT_BREAKOUT":
+                grade = "REJECT_TRAP"
+                tactic = "NO_TRADE"
+                reasoning = f"{reasoning}｜[Python 處置攔截] 觸發處置流動性預警，禁止右側突破追高。"
+                update["verdict_grade"] = grade
+                update["execution_strategy_type"] = tactic
+                update["conflict_resolution_reasoning"] = reasoning
+            elif tactic == "BREAKOUT_0915_VWAP_OR_1315_CLOSE":
+                grade = "A_TIER_PULLBACK"
+                tactic = "STYLE_B_PULLBACK_LIMIT"
+                reasoning = f"{reasoning}｜[Python 處置降級] 觸發處置流動性預警，強制改為回測限價低接。"
+                update["verdict_grade"] = grade
+                update["execution_strategy_type"] = tactic
+                update["conflict_resolution_reasoning"] = reasoning
+
+        # Phase 3.3 & 3.4: 雙指數大盤風控路由器、族群廣度與前瞻估值上限攔截
+        if grade != "REJECT_TRAP" and regime_quota:
+            r_code = str(regime_quota.get("regime_state") or regime_quota.get("regime") or "")
+            max_rb = int(regime_quota.get("max_right_breakout_picks", 99) or 0)
+            is_rb = sig_type == "RIGHT_BREAKOUT" or tactic == "BREAKOUT_0915_VWAP_OR_1315_CLOSE"
+            if is_rb and (r_code == "RED_DEFENSIVE" or max_rb <= 0):
+                grade = "REJECT_TRAP"
+                tactic = "NO_TRADE"
+                reasoning = f"{reasoning}｜[Python 大盤風控攔截] 紅燈防禦期全面禁止右側突破追價。"
+                update["verdict_grade"] = grade
+                update["execution_strategy_type"] = tactic
+                update["conflict_resolution_reasoning"] = reasoning
+            elif is_rb and r_code == "YELLOW_ROTATION":
+                ret_pr = ctx.get("return_percentile")
+                if ret_pr is not None and float(ret_pr) < 85.0:
+                    grade = "REJECT_TRAP"
+                    tactic = "NO_TRADE"
+                    reasoning = (
+                        f"{reasoning}｜[Python 黃燈強度攔截] 黃燈震盪期右側突破須達同業強弱 PR85（目前 PR{ret_pr}）。"
+                    )
+                    update["verdict_grade"] = grade
+                    update["execution_strategy_type"] = tactic
+                    update["conflict_resolution_reasoning"] = reasoning
+
+            min_breadth = float(regime_quota.get("min_sector_breadth_pct", 0.0) or 0.0)
+            b_members = int(ctx.get("sector_member_count", 0) or 0)
+            b_pct = ctx.get("sector_breadth_pct")
+            if grade != "REJECT_TRAP" and min_breadth > 0 and b_members >= 3 and b_pct is not None:
+                if float(b_pct) < min_breadth:
+                    grade = "REJECT_TRAP"
+                    tactic = "NO_TRADE"
+                    reasoning = (
+                        f"{reasoning}｜[Python 族群廣度攔截] 同細分產業站上 17MA 比例 {b_pct}% < 門檻 {min_breadth}%。"
+                    )
+                    update["verdict_grade"] = grade
+                    update["execution_strategy_type"] = tactic
+                    update["conflict_resolution_reasoning"] = reasoning
+
+            max_pe_ratio = float(regime_quota.get("max_allowed_sector_pe_ratio", 999.0) or 999.0)
+            pe_ratio = ctx.get("sector_pe_ratio")
+            if grade != "REJECT_TRAP" and pe_ratio is not None and float(pe_ratio) > max_pe_ratio:
+                grade = "REJECT_TRAP"
+                tactic = "NO_TRADE"
+                reasoning = (
+                    f"{reasoning}｜[Python 估值上限攔截] 前瞻 PE 相對同業比值 {pe_ratio}x > 當前氣候上限 {max_pe_ratio}x。"
+                )
+                update["verdict_grade"] = grade
+                update["execution_strategy_type"] = tactic
+                update["conflict_resolution_reasoning"] = reasoning
+
         if grade != "REJECT_TRAP":
             status = _exposure_field(exposures.get(item.stock_id), "exposure_status")
             if status == "SECTOR_OR_CORR_FULL_SWAP_ONLY":
                 update["execution_strategy_type"] = "PORTFOLIO_SWAP_ONLY"
         guarded.append(item.model_copy(update=update) if update else item)
     return guarded
+
+
+def enforce_regime_quotas(
+    decision: dict,
+    audit_records: Mapping[str, Mapping[str, object]],
+    regime_quota: Mapping[str, object] | None,
+    *,
+    frame: pd.DataFrame | None = None,
+) -> dict:
+    """依雙指數大盤風控路由器（RegimeQuotaConfig）嚴格限制右側突破與回測低接之當日入選檔數上限。"""
+    if not decision or not regime_quota:
+        return decision
+    max_rb = int(regime_quota.get("max_right_breakout_picks", 99))
+    max_sb = int(regime_quota.get("max_style_b_pullback_picks", 99))
+    row_map = _row_lookup(frame) if frame is not None and not frame.empty else {}
+
+    kept: list[dict] = []
+    demoted: list[dict] = []
+    rb_count = 0
+    sb_count = 0
+    for pick in decision.get("top_picks", []):
+        sid = str(pick.get("stock_id", ""))
+        rec = audit_records.get(sid) or pick.get("audit") or {}
+        tactic = str(rec.get("Execution_Tactic") or "")
+        sig_text = str((row_map.get(sid) or {}).get("signal") or "")
+        is_rb = tactic == "BREAKOUT_0915_VWAP_OR_1315_CLOSE" or (
+            not tactic and ("突破" in sig_text or "站上" in sig_text) and "回踩" not in sig_text
+        )
+        if is_rb:
+            if rb_count < max_rb:
+                rb_count += 1
+                kept.append(pick)
+            else:
+                demoted.append(
+                    {
+                        "stock_id": sid,
+                        "reason": f"【大盤氣候配額調控】當日右側突破上限 {max_rb} 檔已滿，移列觀察名單。",
+                    }
+                )
+        else:
+            if sb_count < max_sb:
+                sb_count += 1
+                kept.append(pick)
+            else:
+                demoted.append(
+                    {
+                        "stock_id": sid,
+                        "reason": f"【大盤氣候配額調控】當日回測低接上限 {max_sb} 檔已滿，移列觀察名單。",
+                    }
+                )
+
+    for idx, p in enumerate(kept, start=1):
+        p["rank"] = idx
+    decision["top_picks"] = kept
+    if demoted:
+        existing_w = {str(w.get("stock_id")) for w in decision.get("watchlist", [])}
+        for d_item in demoted:
+            if d_item["stock_id"] not in existing_w:
+                decision.setdefault("watchlist", []).append(d_item)
+                existing_w.add(d_item["stock_id"])
+    return decision
 
 
 def select_audit_survivors(items: list[StockAuditItem]) -> list[StockAuditItem]:
@@ -1024,11 +1167,14 @@ def build_audit_block(
     exposure: object,
     news: list[Mapping[str, object]],
     fundamental_block: str = "",
+    microstructure_block: str = "",
 ) -> str:
-    """組裝單檔候選股的審計資料卡（Python 點位 + 庫存曝險 + 新聞量價反應 + Phase 2 基本面語意特徵）。"""
+    """組裝單檔候選股的審計資料卡（Python 點位 + 庫存曝險 + 新聞量價反應 + Phase 2 基本面 + Phase 3 微結構）。"""
     lines = [f"### 【審計標的】{row.get('stock_id')} {row.get('stock_name', '')}"]
     if fundamental_block:
         lines.append(fundamental_block)
+    if microstructure_block:
+        lines.append(microstructure_block)
     if setup:
         lines.append(
             f"- 訊號型態：{setup['signal_type']}｜收盤 {setup['close_t']}｜ATR14 {setup['atr_14']}"
@@ -1103,7 +1249,10 @@ async def _audit_batch(
     ids = {sid for sid, _ in batch}
     try:
         meta = await ask_vertex_ai_with_meta(
-            build_audit_prompt([block for _, block in batch]), model=model, tag="red_blue_audit"
+            build_audit_prompt([block for _, block in batch]),
+            model=model,
+            tag="red_blue_audit",
+            response_schema=BatchAuditResponse,
         )
     except Exception as error:  # noqa: BLE001
         print(f"[warn] 紅藍軍審計批次 {sorted(ids)} 呼叫失敗：{type(error).__name__}: {error}")
@@ -1132,6 +1281,65 @@ async def run_red_blue_audit(
         items.extend(batch_items)
         missing.extend(batch_missing)
     return items, missing
+
+
+def _filter_recent_rss_news(
+    raw_news: list[Mapping[str, object]],
+    stock_prices: pd.DataFrame | None,
+    *,
+    trading_days: int = 5,
+    target_date: date | None = None,
+) -> list[dict[str, object]]:
+    """過濾保留近 5 個交易日內的即時 RSS 新聞（若無日期或無法解析則保留以維持相容）。"""
+    if not raw_news:
+        return []
+    from datetime import timedelta
+    from email.utils import parsedate_to_datetime
+
+    cutoff: date | None = None
+    if stock_prices is not None and not stock_prices.empty and "date" in stock_prices.columns:
+        parsed_dates: list[date] = []
+        for raw_dt in stock_prices["date"].dropna().astype(str).unique():
+            try:
+                parsed_dates.append(date.fromisoformat(raw_dt[:10]))
+            except ValueError:
+                continue
+        if parsed_dates:
+            parsed_dates.sort()
+            idx = max(0, len(parsed_dates) - max(1, trading_days))
+            cutoff = parsed_dates[idx]
+    if cutoff is None and target_date is not None:
+        cutoff = target_date - timedelta(days=9)
+    if cutoff is None:
+        return [dict(it) for it in raw_news]
+
+    filtered: list[dict[str, object]] = []
+    for it in raw_news:
+        pub_raw = str(it.get("pubDate") or it.get("pub_date") or "").strip()
+        if not pub_raw:
+            filtered.append(dict(it))
+            continue
+        pub_d: date | None = None
+        try:
+            pub_d = parsedate_to_datetime(pub_raw).date()
+        except Exception:  # noqa: BLE001
+            try:
+                pub_d = date.fromisoformat(pub_raw[:10])
+            except ValueError:
+                pub_d = None
+        if pub_d is None or pub_d >= cutoff:
+            filtered.append(dict(it))
+    return filtered
+
+
+def _resolve_audit_db_path(config: Mapping[str, object], output_root: Path) -> Path:
+    raw = str(config.get("signal_audit_db_path", "data/signal_audit.db") or "data/signal_audit.db").strip()
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    if str(output_root) and output_root != Path("finmind_reports") and raw == "data/signal_audit.db":
+        return output_root / ".state" / "signal_audit.db"
+    return _ROOT / candidate
 
 
 def _taxonomy_sector_resolver(config: Mapping[str, object]):
@@ -1175,16 +1383,28 @@ async def run_audit_stage(
     daily_dir: Path,
     analyzer: object | None = None,
     model: str | None = None,
+    market_regime: Mapping[str, object] | None = None,
+    dry_run: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, object]], list[dict[str, str]]]:
-    """Pass 1 紅藍軍審計：Python 點位 → 庫存曝險 → 新聞量價對齊 → AI 審計 → Python 硬性攔截。
+    """Pass 1 紅藍軍審計：除息補償 → 點位 → 處置/三層籌碼/族群廣度 → 庫存曝險 → 新聞量價對齊 → AI 審計 → 硬攔截 → 訊號留痕。
 
     回傳 (倖存候選 frame, {stock_id: audit_record}, 被淘汰清單 [{stock_id, reason}])。
     """
     from finmind_stock_scanner import (
+        MARGIN_CALENDAR_NOTE,
         align_news_with_price_action,
-        compute_deterministic_trade_setup,
+        classify_daily_margin_efficiency,
+        compensate_ex_dividend_gaps,
+        evaluate_disposition_risk,
+        evaluate_weekly_tdcc_anchor,
+        extract_ex_dividend_dates,
         fetch_news_excerpt,
+        fetch_or_cache_tdcc_holding,
+        compute_deterministic_trade_setup,
+        is_mandatory_margin_covering_window,
     )
+    from macro_context import quota_from_market_regime
+    from taxonomy_service import TaxonomyService, build_sector_metrics_from_prices, compute_sector_breadth
     from taishin_portfolio_service import evaluate_candidate_exposure, load_portfolio_exposure_inputs
 
     prices = _load_prices_for_audit(daily_dir, target_date)
@@ -1192,24 +1412,266 @@ async def run_audit_stage(
         load_portfolio_exposure_inputs, daily_dir, _taxonomy_sector_resolver(config)
     )
 
+    regime_quota_dict: dict[str, object] | None = None
+    if market_regime:
+        rq = market_regime.get("regime_quota")
+        if isinstance(rq, Mapping):
+            regime_quota_dict = dict(rq)
+        elif bool(_cfg(config, "enable_dual_index_regime_router", False)):
+            regime_quota_dict = quota_from_market_regime(market_regime).to_dict()
+
+    universe_metrics: dict[str, dict[str, object]] = {}
+    close_map: dict[str, float] = {}
+    if prices is not None and not prices.empty:
+        universe_metrics = build_sector_metrics_from_prices(prices)
+        close_map = {sid: float(m["close"]) for sid, m in universe_metrics.items() if float(m.get("close", 0)) > 0}
+
+    sector_pe_lookup: dict[str, float] = {}
+    if analyzer is not None and hasattr(analyzer, "compute_cross_sectional_pe_map") and close_map:
+        try:
+            sector_pe_lookup = await asyncio.to_thread(analyzer.compute_cross_sectional_pe_map, close_map)
+        except Exception:  # noqa: BLE001
+            sector_pe_lookup = {}
+
+    tax_map: dict[str, dict[str, object]] = {}
+    try:
+        tax_svc = TaxonomyService(
+            cache_path=Path(str(config.get("taxonomy_cache_path", "finmind_reports/.state/stock_taxonomy.json"))),
+            ttl_days=int(config.get("taxonomy_ttl_days", 90)),
+            sheet_tab_name=str(config.get("taxonomy_gsheet_tab_name", "08_Stock_Taxonomy")),
+        )
+        tax_map = tax_svc.load()
+    except Exception:  # noqa: BLE001
+        tax_map = {}
+
+    enable_ex_div = bool(_cfg(config, "enable_ex_dividend_compensation", True))
+    cache_obj = getattr(analyzer, "cache", None) if analyzer is not None else None
+    loader = getattr(cache_obj, "_finmind", None) if cache_obj is not None else None
+
     setups: dict[str, dict[str, object]] = {}
     exposures: dict[str, object] = {}
+    audit_contexts: dict[str, dict[str, object]] = {}
     blocks: list[tuple[str, str]] = []
     rows = analyzed.to_dict("records")
     for row in rows:
         sid = str(row["stock_id"])
-        stock_prices = prices.loc[prices["stock_id"] == sid] if prices is not None else None
-        has_prices = stock_prices is not None and not stock_prices.empty
-        setup = compute_deterministic_trade_setup(stock_prices) if has_prices else None
+        sub_ind = _effective_sector_key(row)
+        raw_stock_prices = prices.loc[prices["stock_id"] == sid].copy() if prices is not None else None
+        has_prices = raw_stock_prices is not None and not raw_stock_prices.empty
+
+        # 讀取快取股利表（供除權息跳空補償與強制融券回補日曆雷達共用）
+        div_df: pd.DataFrame | None = None
+        if cache_obj is not None:
+            try:
+                div_df = await asyncio.to_thread(
+                    cache_obj._read_stock_rows,  # noqa: SLF001
+                    cache_obj._get_worksheet("06_Dividend_Policy"),  # noqa: SLF001
+                    sid,
+                )
+            except Exception:  # noqa: BLE001
+                div_df = None
+
+        # Phase 2 基本面語意特徵與安全流通股數 / 實收資本額
+        fund_block = ""
+        safe_shares: float | None = None
+        paid_in_cap_twd: float = 0.0
+        sector_pe_ratio: float | None = None
+        if analyzer is not None and hasattr(analyzer, "compute_fundamental_features"):
+            try:
+                feat_summary = await asyncio.to_thread(
+                    analyzer.compute_fundamental_features,
+                    sid,
+                    close=_parse_optional_num(row.get("close")),
+                    stock_name=str(row.get("stock_name", "") or ""),
+                    sub_industry=sub_ind,
+                    sector_pe_lookup=sector_pe_lookup,
+                )
+                fund_block = feat_summary.prompt_block
+                safe_shares = feat_summary.safe_weighted_shares
+                paid_in_cap_twd = float(getattr(feat_summary, "paid_in_capital_twd", 0.0) or 0.0)
+                val_ratio = feat_summary.forward_valuation.get("sector_pe_ratio")
+                sector_pe_ratio = float(val_ratio) if val_ratio is not None else None
+            except Exception as error:  # noqa: BLE001
+                print(f"[warn] {sid} 基本面語意特徵計算失敗（略過）：{error}")
+        elif analyzer is not None and hasattr(analyzer, "build_ai_fundamental_prompt_block"):
+            try:
+                fund_block = await asyncio.to_thread(
+                    analyzer.build_ai_fundamental_prompt_block,
+                    sid,
+                    close=_parse_optional_num(row.get("close")),
+                    stock_name=str(row.get("stock_name", "") or ""),
+                    sub_industry=sub_ind,
+                )
+            except Exception as error:  # noqa: BLE001
+                print(f"[warn] {sid} 基本面語意特徵計算失敗（略過）：{error}")
+
+        # Phase 3.1: 除權息跳空補償（僅用於技術點位/POC/ATR 計算；處置風險維持真實原始價格與週轉率）
+        prices_for_setup = raw_stock_prices
+        if has_prices and enable_ex_div and div_df is not None and not div_df.empty:
+            try:
+                prices_for_setup = compensate_ex_dividend_gaps(raw_stock_prices, div_df)
+            except Exception:  # noqa: BLE001
+                prices_for_setup = raw_stock_prices
+
+        setup = compute_deterministic_trade_setup(prices_for_setup) if has_prices else None
         if setup:
             setups[sid] = setup
+
+        # Phase 3.1: 處置股與流動性凍結預警
+        disposition_tag = ""
+        if has_prices:
+            try:
+                disposition_tag = evaluate_disposition_risk(raw_stock_prices, shares_outstanding=safe_shares)
+            except Exception:  # noqa: BLE001
+                disposition_tag = ""
+
+        # Phase 3.3: 同族群資金廣度共振
+        breadth_info: dict[str, object] = {}
+        if universe_metrics:
+            try:
+                breadth_info = compute_sector_breadth(
+                    sub_ind,
+                    universe_metrics,
+                    taxonomy_records=tax_map,
+                    target_stock_id=sid,
+                )
+            except Exception:  # noqa: BLE001
+                breadth_info = {}
+
+        # Phase 3.2: 三層式籌碼微結構引擎（日曆回補雷達 + 週頻集保大戶錨點 + 日頻融資K棒效率）
+        chip_notes: list[str] = []
+        try:
+            ex_dates = extract_ex_dividend_dates(div_df)
+            if is_mandatory_margin_covering_window(target_date, ex_dates):
+                chip_notes.append(MARGIN_CALENDAR_NOTE)
+        except Exception:  # noqa: BLE001
+            pass
+
+        if paid_in_cap_twd > 0 and (loader is not None or not dry_run):
+            try:
+                tdcc_df = await asyncio.to_thread(
+                    fetch_or_cache_tdcc_holding,
+                    sid,
+                    as_of=target_date,
+                    cache_path=daily_dir.parent / ".state" / "tdcc_holding_cache.json",
+                    loader=loader if not dry_run else None,
+                )
+                tdcc_info = evaluate_weekly_tdcc_anchor(tdcc_df, paid_in_cap_twd)
+                if isinstance(tdcc_info, Mapping) and tdcc_info.get("summary"):
+                    chip_notes.append(str(tdcc_info["summary"]))
+            except Exception:  # noqa: BLE001
+                pass
+
+        if has_prices and cache_obj is not None:
+            try:
+                chip_df = await asyncio.to_thread(
+                    cache_obj._read_stock_rows,  # noqa: SLF001
+                    cache_obj._get_worksheet("07_Chip_Summary"),  # noqa: SLF001
+                    sid,
+                )
+                if chip_df is not None and not chip_df.empty:
+                    chip_latest = chip_df.iloc[-1].to_dict()
+                    sorted_bars = raw_stock_prices.sort_values("date")
+                    last_bar = sorted_bars.iloc[-1]
+                    b_open = float(last_bar.get("open", last_bar.get("close", 0.0)) or 0.0)
+                    b_high = float(last_bar.get("max", last_bar.get("high", b_open)) or b_open)
+                    b_low = float(last_bar.get("min", last_bar.get("low", b_open)) or b_open)
+                    b_close = float(last_bar.get("close", 0.0) or 0.0)
+                    prev_close_p = (
+                        float(sorted_bars.iloc[-2]["close"])
+                        if len(sorted_bars) >= 2
+                        else (b_open if b_open > 0 else max(b_close, 1.0))
+                    )
+                    c_10d_ago = (
+                        float(sorted_bars.iloc[-11]["close"])
+                        if len(sorted_bars) >= 11
+                        else float(sorted_bars.iloc[0]["close"])
+                    )
+                    ret_10d = ((b_close - c_10d_ago) / c_10d_ago * 100.0) if c_10d_ago > 0 else 0.0
+                    if "Trading_Volume" in last_bar and pd.notna(last_bar.get("Trading_Volume")):
+                        b_vol_lots = float(last_bar.get("Trading_Volume", 0.0) or 0.0) / 1000.0
+                    else:
+                        b_vol_lots = float(last_bar.get("vol_lots", 0.0) or 0.0)
+                    est_daily_m_chg = float(chip_latest.get("margin_chg_5d_lots", 0.0) or 0.0) / 5.0
+                    est_daily_inst = float(chip_latest.get("three_inst_net_5d_lots", 0.0) or 0.0) / 5.0
+                    trust_5d = float(chip_latest.get("trust_net_buy_5d_lots", 0.0) or 0.0)
+                    trust_hold_pct = (
+                        max(
+                            0.0,
+                            float(chip_latest.get("trust_net_buy_20d_lots", 0.0) or 0.0)
+                            * 1000.0
+                            / float(safe_shares)
+                            * 100.0,
+                        )
+                        if (safe_shares and safe_shares > 0)
+                        else 0.0
+                    )
+                    eff_res = classify_daily_margin_efficiency(
+                        open_p=b_open,
+                        high_p=b_high,
+                        low_p=b_low,
+                        close_p=b_close,
+                        prev_close_p=max(prev_close_p, 0.01),
+                        volume_lots=b_vol_lots,
+                        margin_net_change_lots=est_daily_m_chg,
+                        inst_net_buy_lots=est_daily_inst,
+                        trust_holding_pct=trust_hold_pct,
+                        trust_3d_net_buy_lots=trust_5d * 0.6,
+                        return_10d_pct=ret_10d,
+                    )
+                    if eff_res.margin_pattern != "CHIP_NEUTRAL":
+                        chip_notes.append(eff_res.semantic_tag)
+            except Exception:  # noqa: BLE001
+                pass
+
+        micro_lines: list[str] = []
+        if regime_quota_dict:
+            r_label = regime_quota_dict.get("regime_state") or regime_quota_dict.get("regime") or ""
+            r_banner = regime_quota_dict.get("regime_summary_tag") or regime_quota_dict.get("banner") or ""
+            micro_lines.append(
+                f"- 大盤雙指數風控：{r_label}｜右側突破配額上限 "
+                f"{regime_quota_dict.get('max_right_breakout_picks')} 檔｜回測低接上限 "
+                f"{regime_quota_dict.get('max_style_b_pullback_picks')} 檔"
+                + (f"｜{r_banner}" if r_banner else "")
+            )
+        if disposition_tag:
+            micro_lines.append(f"- 處置流動性雷達：{disposition_tag}")
+        if breadth_info and int(breadth_info.get("member_count", 0) or 0) > 0:
+            b_cnt = int(breadth_info.get("member_count", 0) or 0)
+            b_pct_val = float(breadth_info.get("breadth_pct", 0.0) or 0.0)
+            pr_val = breadth_info.get("return_percentile")
+            pr_text = f"PR{pr_val}" if pr_val is not None else "樣本不足"
+            b_tag = (
+                "🔥 族群齊漲共振"
+                if b_pct_val >= 60.0
+                else ("⚠️ 孤軍深入" if b_cnt >= 3 and b_pct_val < 35.0 else "➖ 族群中性")
+            )
+            micro_lines.append(
+                f"- 同族群資金廣度（{sub_ind or '未分類'}，共 {b_cnt} 檔）："
+                f"站上 17MA 比例 {b_pct_val}%｜個股日報酬同業 {pr_text}｜{b_tag}"
+            )
+        if chip_notes:
+            micro_lines.append("- 三層籌碼微結構：" + " ｜ ".join(chip_notes))
+        microstructure_block = "\n".join(micro_lines)
+
+        audit_contexts[sid] = {
+            "disposition_tag": disposition_tag,
+            "sector_breadth_pct": breadth_info.get("breadth_pct"),
+            "sector_member_count": breadth_info.get("member_count", 0),
+            "return_percentile": breadth_info.get("return_percentile"),
+            "sector_pe_ratio": sector_pe_ratio,
+            "sub_industry": sub_ind,
+            "stock_name": str(row.get("stock_name", "") or ""),
+            "close": _parse_optional_num(row.get("close")),
+        }
+
         exposure = None
         if holdings and has_prices:
             exposure = evaluate_candidate_exposure(
                 sid,
-                _effective_sector_key(row),
+                sub_ind,
                 holdings,
-                candidate_prices=stock_prices,
+                candidate_prices=raw_stock_prices,
                 holding_prices=holding_prices,
             )
             exposures[sid] = exposure
@@ -1220,30 +1682,84 @@ async def run_audit_stage(
                     analyzer._fetch_google_news_rss,  # noqa: SLF001
                     f"{sid} {row.get('stock_name', '')} 台股".strip(),
                 )
+                recent_news = _filter_recent_rss_news(
+                    raw_news,
+                    raw_stock_prices,
+                    trading_days=5,
+                    target_date=target_date,
+                )
                 news = await asyncio.to_thread(
                     align_news_with_price_action,
-                    raw_news[:AUDIT_NEWS_MAX_ITEMS],
-                    stock_prices,
+                    recent_news[:AUDIT_NEWS_MAX_ITEMS],
+                    raw_stock_prices,
                     excerpt_fetcher=lambda url: fetch_news_excerpt(url, timeout=3.0),
                 )
             except Exception as error:  # noqa: BLE001
                 print(f"[warn] {sid} 新聞量價對齊失敗（略過）：{error}")
-        fund_block = ""
-        if analyzer is not None and hasattr(analyzer, "build_ai_fundamental_prompt_block"):
-            try:
-                fund_block = await asyncio.to_thread(
-                    analyzer.build_ai_fundamental_prompt_block,
-                    sid,
-                    close=_parse_optional_num(row.get("close")),
-                    stock_name=str(row.get("stock_name", "") or ""),
-                    sub_industry=_effective_sector_key(row),
-                )
-            except Exception as error:  # noqa: BLE001
-                print(f"[warn] {sid} 基本面語意特徵計算失敗（略過）：{error}")
-        blocks.append((sid, build_audit_block(row, setup, exposure, news, fund_block)))
+        blocks.append((sid, build_audit_block(row, setup, exposure, news, fund_block, microstructure_block)))
 
     items, missing = await run_red_blue_audit(blocks, model=model)
-    guarded = _enforce_post_audit_guards(items, setups, exposures)
+    guarded = _enforce_post_audit_guards(
+        items,
+        setups,
+        exposures,
+        context_by_stock=audit_contexts,
+        regime_quota=regime_quota_dict,
+    )
+
+    # Phase 3.5: 訊號留痕與勝率歸因資料庫（記錄所有 S_TIER / A_TIER / REJECT_TRAP，以利 False Negative 驗證）
+    if bool(_cfg(config, "enable_signal_audit", False)) and not dry_run and guarded:
+        try:
+            from signal_audit_service import SignalAuditStore
+
+            store = SignalAuditStore(_resolve_audit_db_path(config, daily_dir.parent))
+            light_txt = str((market_regime or {}).get("light") or "")
+            fallback_regime = (
+                "GREEN_BULL"
+                if "🟢" in light_txt
+                else ("RED_DEFENSIVE" if "🔴" in light_txt else "YELLOW_ROTATION")
+            )
+            regime_str = str(
+                (regime_quota_dict or {}).get("regime_state")
+                or (regime_quota_dict or {}).get("regime")
+                or fallback_regime
+            )
+            for g_item in guarded:
+                g_setup = setups.get(g_item.stock_id) or {}
+                g_ctx = audit_contexts.get(g_item.stock_id) or {}
+                close_val = (
+                    _parse_optional_num(g_setup.get("close_t"))
+                    or _parse_optional_num(g_ctx.get("close"))
+                    or 0.0
+                )
+                if close_val <= 0:
+                    continue
+                chase_val = _parse_optional_num(g_setup.get("chase_limit_price")) or round(close_val * 1.03, 2)
+                stop_val = _parse_optional_num(g_setup.get("hard_stop_loss")) or round(close_val * 0.93, 2)
+                tp1_val = _parse_optional_num(g_setup.get("tp1_price")) or round(close_val * 1.10, 2)
+                sig_type_val = str(g_setup.get("signal_type") or "STYLE_B_PULLBACK")
+                store.record_signal(
+                    {
+                        "signal_date": target_date.isoformat(),
+                        "stock_id": g_item.stock_id,
+                        "stock_name": str(g_ctx.get("stock_name") or g_item.stock_name or g_item.stock_id),
+                        "sector_name": str(g_ctx.get("sub_industry") or ""),
+                        "regime_state": regime_str,
+                        "scanner_signal_type": sig_type_val,
+                        "ai_verdict_grade": g_item.verdict_grade,
+                        "execution_strategy_type": g_item.execution_strategy_type,
+                        "close_t": close_val,
+                        "ideal_buy_zone_low": _parse_optional_num(g_setup.get("ideal_buy_zone_low")),
+                        "ideal_buy_zone_high": _parse_optional_num(g_setup.get("ideal_buy_zone_high")),
+                        "chase_limit_price": chase_val,
+                        "hard_stop_loss": stop_val,
+                        "tp1_price": tp1_val,
+                        "deterministic_rr_ratio": _parse_optional_num(g_setup.get("deterministic_rr_ratio")) or 0.0,
+                    }
+                )
+        except Exception as error:  # noqa: BLE001
+            print(f"[warn] 寫入 SignalAuditStore 訊號留痕失敗（略過）：{error}")
+
     survivors = select_audit_survivors(guarded)
     survivor_ids = {i.stock_id for i in survivors}
 
@@ -1263,7 +1779,7 @@ async def run_audit_stage(
 
 
 def apply_audit_to_decision(decision: dict, audit_records: Mapping[str, Mapping[str, object]]) -> dict:
-    """將 Python 確定性點位與審計結論併入 top_picks；TP1 / 停損一律沿用 Python 計算值。"""
+    """將 Python 確定性點位與審計結論併入 top_picks 與 watchlist；TP1 / 停損一律沿用 Python 計算值。"""
     for pick in decision.get("top_picks", []):
         record = audit_records.get(str(pick.get("stock_id")))
         if not record:
@@ -1273,6 +1789,10 @@ def apply_audit_to_decision(decision: dict, audit_records: Mapping[str, Mapping[
             pick["target_price_1"] = f"{record['TP1_Target_Or_POC']}（Python 確定性點位）"
         if record.get("Hard_Stop_Loss") is not None:
             pick["stop_loss_price"] = f"{record['Hard_Stop_Loss']}（Python 確定性硬停損）"
+    for w_item in decision.get("watchlist", []):
+        record = audit_records.get(str(w_item.get("stock_id")))
+        if record and "audit" not in w_item:
+            w_item["audit"] = dict(record)
     return decision
 
 
@@ -1547,8 +2067,9 @@ def build_pick_rows(
     decision: dict,
     frame: pd.DataFrame,
     results: Mapping[str, Mapping[str, object]],
+    audit_records: Mapping[str, Mapping[str, object]] | None = None,
 ) -> list[dict[str, object]]:
-    """Rows for AI_Daily_Picks."""
+    """Rows for AI_Daily_Picks (including SASD v5.4.0 Phase 1 deterministic audit columns)."""
     rows = _row_lookup(frame)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     output: list[dict[str, object]] = []
@@ -1576,6 +2097,11 @@ def build_pick_rows(
         s1_dict = _stage1_summary_dict(stock_id)
         s1_plan = s1_dict.get("trade_plan") if isinstance(s1_dict.get("trade_plan"), Mapping) else {}
         is_actionable = category in ("TOP_PICK", "WATCHLIST")
+        audit_map: Mapping[str, object] = (
+            item.get("audit")
+            if isinstance(item.get("audit"), Mapping)
+            else ((audit_records or {}).get(stock_id) or {})
+        )
 
         tactical_type = (
             str(item.get("tactical_type") or (s1_plan.get("tactical_type") if is_actionable else "") or "").strip()
@@ -1591,6 +2117,15 @@ def build_pick_rows(
                 or ""
             ).strip()
         )
+        raw_triggers = audit_map.get("Invalidation_Triggers", "")
+        if isinstance(raw_triggers, (list, tuple)):
+            triggers_str = "；".join(str(t) for t in raw_triggers if str(t).strip())
+        else:
+            triggers_str = str(raw_triggers or "").strip()
+
+        def _audit_cell(key: str) -> object:
+            val = audit_map.get(key, "")
+            return "" if val is None else val
 
         return {
             "pk_key": f"{target_date.isoformat()}_{stock_id}",
@@ -1621,6 +2156,15 @@ def build_pick_rows(
             "target_price_1": tp1,
             "target_price_2": tp2,
             "stop_loss_price": sl,
+            "Audit_Grade": _audit_cell("Audit_Grade"),
+            "Execution_Tactic": _audit_cell("Execution_Tactic"),
+            "Ideal_Buy_Or_Ref": _audit_cell("Ideal_Buy_Or_Ref"),
+            "Chase_Limit_Price": _audit_cell("Chase_Limit_Price"),
+            "Hard_Stop_Loss": _audit_cell("Hard_Stop_Loss"),
+            "TP1_Target_Or_POC": _audit_cell("TP1_Target_Or_POC"),
+            "Deterministic_RR": _audit_cell("Deterministic_RR"),
+            "Bear_Case_Warning": _audit_cell("Bear_Case_Warning"),
+            "Invalidation_Triggers": triggers_str,
         }
 
     for pick in decision["top_picks"]:
@@ -1719,6 +2263,7 @@ async def run_pipeline(
             as_of=target_date,
             loader=getattr(cache, "_finmind", None),
             benchmark_id=str(_cfg(config, "market_benchmark_id", "0050")),
+            enable_dual_index_router=bool(_cfg(config, "enable_dual_index_regime_router", False)),
         )
         results, failures = await analyze_candidates(
             selected,
@@ -1764,6 +2309,8 @@ async def run_pipeline(
                 daily_dir=daily_dir,
                 analyzer=analyzer,
                 model=portfolio_model,
+                market_regime=market_regime,
+                dry_run=dry_run,
             )
             pre_filtered_avoid = [*pre_filtered_avoid, *audit_rejected]
             audit_all_rejected = analyzed.empty
@@ -1823,6 +2370,10 @@ async def run_pipeline(
     if decision is not None:
         decision = enforce_sector_cap(decision, analyzed)
         decision = apply_audit_to_decision(decision, audit_records)
+        if bool(_cfg(config, "enable_dual_index_regime_router", False)):
+            rq_map = (market_regime or {}).get("regime_quota")
+            if isinstance(rq_map, Mapping):
+                decision = enforce_regime_quotas(decision, audit_records, rq_map, frame=selected_all)
         decision = merge_pre_filtered_avoid(decision, pre_filtered_avoid)
     portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
@@ -1867,6 +2418,26 @@ async def run_pipeline(
         market_regime=market_regime,
     )
 
+    # Phase 3.5: 週五盤後勝率歸因與 False Negative 檢討報告 + 09_Signal_Audit_Log 同步
+    audit_store = None
+    if bool(_cfg(config, "enable_signal_audit", False)):
+        try:
+            from signal_audit_service import SignalAuditStore, format_weekly_summary_markdown
+
+            audit_store = SignalAuditStore(_resolve_audit_db_path(config, output_root))
+            if target_date.weekday() == 4:
+                weekly_summary = audit_store.build_weekly_summary()
+                if (weekly_summary.get("settled_trades", 0) or 0) > 0 or (
+                    weekly_summary.get("false_negative_rate") is not None
+                ):
+                    messages.append(
+                        format_weekly_summary_markdown(weekly_summary, as_of_str=target_date.isoformat())[
+                            :DISCORD_CHUNK_LIMIT
+                        ]
+                    )
+        except Exception as error:  # noqa: BLE001
+            print(f"[warn] 產生週五訊號勝率歸因摘要失敗（略過）：{error}")
+
     if dry_run:
         print("\n\n".join(messages))
         return 0
@@ -1899,12 +2470,23 @@ async def run_pipeline(
     if save_gsheet and decision is not None:
         try:
             cache.ensure_workbook_schema()
-            picks = pd.DataFrame(build_pick_rows(target_date, decision, selected_all, results))
+            picks = pd.DataFrame(
+                build_pick_rows(target_date, decision, selected_all, results, audit_records=audit_records)
+            )
             if not picks.empty:
                 worksheet = cache._get_worksheet(PICKS_SHEET_NAME)  # noqa: SLF001
                 cache._upsert_delta(worksheet, picks, key_col="pk_key")  # noqa: SLF001
         except Exception as error:  # noqa: BLE001
             print(f"[warn] 寫入 {PICKS_SHEET_NAME} 失敗：{error}")
+
+    if save_gsheet and audit_store is not None:
+        try:
+            audit_tab = str(_cfg(config, "signal_audit_gsheet_tab_name", "09_Signal_Audit_Log"))
+            synced_audit = audit_store.sync_to_gsheet(tab_name=audit_tab)
+            if synced_audit > 0:
+                print(f"已同步 {synced_audit} 筆訊號留痕至 Google Sheets [{audit_tab}]。")
+        except Exception as error:  # noqa: BLE001
+            print(f"[warn] 同步訊號留痕至 Google Sheets 失敗：{error}")
 
     if post_discord:
         sent = post_messages_to_discord(messages, channel_id, bot_token)
