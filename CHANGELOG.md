@@ -4,6 +4,18 @@
 
 ---
 
+## [v5.7.2] - 2026-11-11
+### 🔧 優化與錯誤修正 (Fixed & Changed) — BigQuery AI 日誌短命 CLI 寫入防護與同步保障
+* **參考 `finmind-ai-pick` 健全實作，修復短命 CLI / systemd oneshot 服務的 BigQuery 歸檔 Race Condition（[`services/ai_service.py`](/services/ai_service.py)）**：
+  * **背景死鎖成因**：`finmind-ai-pick` 因走 Vertex AI Batch 模式，寫入 BigQuery 永久日誌（`save_to_permanent_logs`）是同步阻塞執行（等候 `load_job.result()`），絕不掉資料；而台新晨報等在線 API 原先採 `threading.Thread(daemon=True)` 背景執行，在短命 oneshot 腳本（1~2 秒退出）中會被作業系統強制殺死，導致 BigQuery 掉記錄。
+  * **實作 `flush_bq_archives()` 與 Python `atexit` 機制**：全域追蹤背景歸檔執行緒，並透過 `atexit.register(flush_bq_archives)` 確保進程退出前必定等待所有 BigQuery load jobs 寫入完成（上限 10 秒），徹底解決 daemon thread 被提前截斷的問題。
+  * **擴充 `blocking_bq_log` 參數**：`ask_gemini_with_meta()`、`ask_gemini_diagnosis_with_meta()` 與 `ask_vertex_ai_with_meta()` 均支援 `blocking_bq_log: bool = False` 參數，提供呼叫端比照 Batch 模式的同步阻塞保證。
+* **台新帳務與晨報日誌同步保證與時間戳記擴充（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * `run_morning_battle_ai_review()`（開盤作戰指令）與 `run_portfolio_ai_diagnosis()`（持股健診與建倉劇本同步）啟用 `blocking_bq_log=True`，且在函式結尾顯式調用 `flush_bq_archives()`。
+  * `custom_id` 由年月日擴充為精確時分秒時間戳記（`MORNING_BRIEF_YYYYMMDD_HHMMSS` 與 `THESIS_YYYYMMDD_HHMMSS_PORTFOLIO`），消除同一天多次手動重跑時 ID 碰撞無法識別的問題。
+
+---
+
 ## [v5.7.1] - 2026-11-11
 ### 🔧 優化與排程時間調整 (Changed)
 * **AI 嚴選選股定時排程由 21:00 調整至 21:30**：

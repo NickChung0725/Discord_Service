@@ -12,6 +12,7 @@ SASD v3.5.1:
 from __future__ import annotations
 
 import asyncio
+import atexit
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -507,6 +508,7 @@ async def ask_gemini_with_meta(
     task_type: str | None = None,
     stock_id: str | None = None,
     custom_id: str | None = None,
+    blocking_bq_log: bool = False,
 ) -> AIResponse:
     """Ask Google AI Studio and return full response metadata.
 
@@ -557,6 +559,7 @@ async def ask_gemini_with_meta(
                     task_type=task_type,
                     stock_id=stock_id,
                     custom_id=custom_id,
+                    blocking=blocking_bq_log,
                 )
             if error is not None:
                 raise error
@@ -649,6 +652,7 @@ async def ask_gemini_diagnosis_with_meta(
     task_type: str | None = None,
     stock_id: str | None = None,
     custom_id: str | None = None,
+    blocking_bq_log: bool = False,
 ) -> AIResponse:
     """Stage 1 單股診斷。
 
@@ -667,6 +671,7 @@ async def ask_gemini_diagnosis_with_meta(
             task_type=task_type,
             stock_id=stock_id,
             custom_id=custom_id,
+            blocking_bq_log=blocking_bq_log,
         )
 
     try:
@@ -681,6 +686,7 @@ async def ask_gemini_diagnosis_with_meta(
             task_type=task_type,
             stock_id=stock_id,
             custom_id=custom_id,
+            blocking_bq_log=blocking_bq_log,
         )
     except Exception as error:  # noqa: BLE001
         logger.warning(
@@ -695,6 +701,7 @@ async def ask_gemini_diagnosis_with_meta(
             task_type=task_type,
             stock_id=stock_id,
             custom_id=custom_id,
+            blocking_bq_log=blocking_bq_log,
         )
 
 
@@ -939,6 +946,7 @@ async def ask_vertex_ai_with_meta(
     response_schema: Any | None = None,
     system_instruction: str | None = None,
     temperature: float | None = None,
+    blocking_bq_log: bool = False,
 ) -> AIResponse:
     """Ask Vertex AI and return response metadata; never falls back to Google AI Studio."""
 
@@ -996,6 +1004,7 @@ async def ask_vertex_ai_with_meta(
                     task_type=task_type,
                     stock_id=stock_id,
                     custom_id=custom_id,
+                    blocking=blocking_bq_log,
                 )
                 return meta
             except MissingVertexConfigError:
@@ -1299,6 +1308,27 @@ def _archive_online_call_sync(
         logger.warning("Online AI 呼叫歸檔至 BigQuery 失敗: %s", exc)
 
 
+_ARCHIVE_THREADS_LOCK = threading.Lock()
+_ARCHIVE_THREADS: list[threading.Thread] = []
+
+
+def flush_bq_archives(timeout_seconds: float = 10.0) -> None:
+    """Wait for all pending background BigQuery archive threads to complete.
+
+    Registered via ``atexit`` to guarantee that short-lived CLI / systemd oneshot
+    scripts (such as taishin-morning-brief) never drop records due to daemon thread kill.
+    """
+    with _ARCHIVE_THREADS_LOCK:
+        active = [t for t in _ARCHIVE_THREADS if t.is_alive()]
+    for t in active:
+        t.join(timeout=timeout_seconds)
+    with _ARCHIVE_THREADS_LOCK:
+        _ARCHIVE_THREADS[:] = [t for t in _ARCHIVE_THREADS if t.is_alive()]
+
+
+atexit.register(flush_bq_archives)
+
+
 def _archive_online_call(
     *,
     prompt: str,
@@ -1308,24 +1338,40 @@ def _archive_online_call(
     task_type: str | None = None,
     stock_id: str | None = None,
     custom_id: str | None = None,
+    blocking: bool = False,
 ) -> None:
-    """Fire-and-forget archive of one ONLINE_GEMINI call; never blocks nor raises."""
+    """Archive one ONLINE_GEMINI call to BigQuery; never raises.
+
+    If ``blocking=True``, synchronously awaits BigQuery load job completion (like Vertex Batch).
+    Otherwise spawns a daemon thread tracked by ``_ARCHIVE_THREADS`` and flushed at exit.
+    """
     if not _bq_logging_enabled():
         return
+    kwargs = {
+        "prompt": prompt,
+        "meta": meta,
+        "elapsed_sec": elapsed_ms / 1000.0,
+        "tag": tag,
+        "task_type": task_type,
+        "stock_id": stock_id,
+        "custom_id": custom_id,
+    }
+    if blocking:
+        try:
+            _archive_online_call_sync(**kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("同步寫入 BigQuery 永久日誌失敗: %s", exc)
+        return
+
     try:
-        threading.Thread(
+        t = threading.Thread(
             target=_archive_online_call_sync,
-            kwargs={
-                "prompt": prompt,
-                "meta": meta,
-                "elapsed_sec": elapsed_ms / 1000.0,
-                "tag": tag,
-                "task_type": task_type,
-                "stock_id": stock_id,
-                "custom_id": custom_id,
-            },
+            kwargs=kwargs,
             daemon=True,
-        ).start()
+        )
+        t.start()
+        with _ARCHIVE_THREADS_LOCK:
+            _ARCHIVE_THREADS.append(t)
     except Exception as exc:  # noqa: BLE001
         logger.warning("無法啟動 BigQuery 歸檔執行緒: %s", exc)
 
