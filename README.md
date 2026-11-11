@@ -13,9 +13,9 @@
 | **週一至週五 08:15** | **台新盤前隔夜美股與嚴選持股開盤作戰晨報** | `systemd` (`taishin-morning-brief.timer`) | **SASD v5.2.0 法人級開盤作戰中心 (`morning-brief`)**：<br>1. **隔夜美股與國際總經環境 (`taishin/macro_context.py`)**：抓取費半 (`^SOX`)、那指 (`^IXIC`)、標普 (`^GSPC`)、台積電 ADR (`TSM`)、輝達 (`NVDA`)、`^VIX` 恐慌指數與美元台幣 (`TWD=X`) 漲跌，搭配近 48h 國際財經要聞判定 `RISK_ON` / `NEUTRAL` / `RISK_OFF`<br>2. **鎖定初始目標價 ＋ 風格 B 分批移動停利**：讀取 `05_Position_Thesis_Memory` 鎖定之買進當時 `initial_tp1` / `initial_tp2` / `initial_sl`（杜絕目標價每日漂移），計算「觸及 TP1 先出 50%（單張自動建議盤中零股賣 500 股）＋ 單向棘輪移動停利 (`trailing_stop`)」，呼叫付費版 `VERTEX_STAGE2_MODEL` 產出開盤掛單作戰指令並更新 `02_Portfolio_Holdings`（若無嚴選記憶持股則自動切換 **0-Token 純 Python 省流快報**；非嚴選股如 `0050` 僅列出 `📦 帳面損益觀察`）。 |
 | **週一至週五 13:15** | **0050 每週不定期定額智慧尋底評估** | `systemd` (`taishin-dca-0050.timer`) | **SASD v5.1.0 0050 智慧尋底引擎**：<br>1. 檢查本週 (`YYYY-Www`) 是否已買入 `0050`<br>2. **週一至週四**：若出現「跌破 17MA 負乖離 <= -1.5%」、「回踩 45MA 季線」、「RSI(14) <= 40 或 KD_K <= 30」、「近 10 日高點回落 >= 2.5%」任一低點訊號，立即觸發買進訊號<br>3. **週五 13:15**：若週一至週四皆未觸發，強制執行本週保底定投（依 `dip_score` 0~100 動態調整 `0.6x ~ 1.5x` 股數）<br>4. 預設 `TAISHIN_ENABLE_TRADING=false` 僅寫入 `04_DCA_0050_Tracker` 並推播 Discord 買入建議；開啟 `TAISHIN_ENABLE_TRADING=true` 且帶入 `--confirm-live-order` 時才呼叫 `sdk.stock.place_order` 下盤中零股 (`MarketType.IntradayOdd`)。 |
 | **週一至週五 19:00** | **第一階段：台股五線均線＋微結構流動性護欄＋雙核心大盤路由＋盤後審計回填** | `systemd` (`finmind-scan.timer`) | **全市場動態掃描與微結構審計回填（SASD v5.7.0）**：`industries=["ALL"]`，先以 TWSE/TPEx 盤後快照做 Stage 1「雙軌量能守門員」，對通過者呼叫 FinMind 日線並強制通過 **20 日成交金額中位數 ≥ 5,000 萬護欄**（`passes_liquidity_median_guard`，防單日爆量殭屍股）與**除權息跳空前複權回溯補償**（`compensate_ex_dividend_gaps`，消除假死叉與假套牢區）。篩選符合 `MA3 >= 各線`、`MA45 > MA117 > MA189` 且處於 `17/45MA 即將金叉 (-1.5%~0%)` 或 `剛金叉起漲 (0%~+2.5%)` 之強勢股，並同步啟動**加權（TAIEX）＋櫃買（OTC）＋外資台指期雙核心紅綠燈路由器（`RegimeRouter`）**：<br>1. 產出本地 CSV：`daily/{date}_prices.csv`、`daily/{date}_alignment_signals.csv`、`daily/{date}_failures.csv` 與含 `regime_quota` 之 `daily/{date}_market_regime.json`<br>2. 同步至 Google Sheets `MA_Signal_Tracker`（設定鍵：`sync_alignment_to_gsheet`）<br>3. **無未來函數事後審計回填（`run_signal_audit_backfill`）**：自動以最新日線回填 `data/signal_audit.db`（`Open_{T+1} + 0.5%` 摩擦成本、停損優先悲觀認定、`REJECT_TRAP` 錯殺率）並同步至 Google Sheets 輔助表 `09_Signal_Audit_Log`<br>4. 推播手機/LINE 雙行卡片版均線快報至 `ALIGNMENT_SIGNALS_CHANNEL_ID`。 |
-| **週一至週五 20:50** | **第二階段：左側「型態 A 高點回跌回踩長均線反彈」掃描與彈性 AI 診斷** | `systemd` (`finmind-rebound-ai.timer`) | 從當日產出之 `daily/{date}_prices.csv` 讀取近 60 個交易日數據，捕捉績優股急跌回踩長均線之均值回歸契機：<br>1. **型態 A 五大濾網**：`MA45 >= MA117 > MA189`、近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 `>= 10%`、收盤回踩 `45MA` 或 `117MA`（`-1.5% ~ +2.5%`）、反彈至 `17MA` 空間 `>= 5%`、K 線收盤強度 `(Close-Min)/(Max-Min) >= 0.55`<br>2. 產出本地 `daily/{date}_rebound_signals.csv` 與 `daily/{date}_rebound_failures.csv`<br>3. 寫入獨立 Google Sheets 工作表 `Rebound_Watchlist`<br>4. **彈性決策點**：先推播手機/LINE 雙行卡片版「今日符合反彈條件標的總數」與數字序號清單至 `ALIGNMENT_SIGNALS_CHANNEL_ID`（`alignment_signals#1566830891299508426`）；支援第一階段觀測標的數量（預設不自動跑 AI），或透過 `--run-ai` / `rebound_auto_run_ai`（當檔數落於 3~15 檔合理區間）無縫啟動 AI 深度診斷與推播。<br>5. **Stage 2 Prompt 反彈模式分流**：20:50 反彈清單在跨股嚴選時不沿用「17MA 下彎扣分」規則，改以「45MA/117MA 守穩 + 收盤強度 >= 0.55 + 反彈至 17MA 空間 >= 5%」檢核，且第一目標價優先設為 17MA 反壓。 |
-| **週一至週五 21:30** | **第三階段：右側強勢股基本面特徵＋微結構紅藍軍審計＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **事件驅動財報快取同步（Phase 2）**：每月 5 日起營收開獎窗口對落後標的自動觸發 Event-Driven Cache Bypass（含 6h 冷卻），補齊月營收、三大財報、衍生財務比率、股利與法人融資籌碼<br>2. **Stage 1 單股 Step 1~7 審計（`STAGE1_MODEL`）**：Stage 0 硬性攔截日量 < 300 張、本業虧損無合約負債與籌碼斷頭硬傷股；注入三層防呆流通股數、春節豁免營收動能、本業前瞻 EPS 與同業中位數 PE 對齊、三率語意標籤<br>3. **Pass 1 紅藍軍審計與微結構硬攔截（Phase 1~3，`ai_picker_red_blue_audit`）**：Python 先行執行除權息前複權補償、ATR14／60 日量 POC／追價上限／硬停損／TP1／風報比確定性計算、處置股過熱預警、三層籌碼微結構（停資券窗口＋週集保大戶底氣＋日融資 K 線實體效率）、同細分產業資金共振度（`SectorBreadth`）、台新庫存曝險相關係數檢核與近 5 交易日新聞量價反應對齊；透過 Vertex AI Structured Output（`response_schema=BatchAuditResponse`，先找空頭破綻最後才評級）並行審計，再由 Python 執行風報比 `< 1.8`、處置禁追高、雙核心大盤配額（紅燈禁右側突破、黃燈限 PR85+、族群廣度與相對 PE 上限）硬攔截，並將 `S_TIER` / `A_TIER` / `REJECT_TRAP` 全數寫入 `data/signal_audit.db`（支援 Zero-Pick Veto 空手觀望）<br>4. **Stage 2 跨股總決策與大盤配額調控（`VERTEX_STAGE2_MODEL`）**：套用 `enforce_regime_quotas()` 嚴格控管右側突破與 Style B 低接檔數上限，且 `target_price_1` / `stop_loss_price` 強制鎖定 Python 確定性點位<br>5. **戰情室發布、Google Sheets 同步與週五審計週報**：發布 GitHub Pages 戰情室，寫入 `AI_Daily_Picks`（含 9 個確定性審計欄位）並同步 `09_Signal_Audit_Log`；每逢**週五盤後自動附加「Weekly Quantitative Audit Summary（實戰獲利因子、逆向選擇 Delta、AI 錯殺率與調參建議）」**推播至 `STOCK_CHANNEL_ID`。 |
-| **週一至週五 22:45** | **第四階段：台新盤後對帳單同步與嚴選建倉記憶自動歸因鎖定** | `systemd` (`taishin-memory-sync.timer`) | **SASD v5.2.0 建倉記憶錨定引擎 (`sync-memory`)**：<br>1. 同步近 7 日對帳單 (`account_statment`)、成交明細 (`filled_history`)、已實現損益與最新庫存至 `01_Account_Statement` 與 `03_Settlement_And_PnL`<br>2. **波段切分與近 5 交易日嚴選歸因**：由對帳單自動還原未平倉買進波段，回查買進日往前 5 個交易日內之 `21:30 AI_Daily_Picks (TOP_PICK)` ➔ `WATCHLIST` ➔ `20:50 Rebound_Watchlist`，自動建立/更新 `05_Position_Thesis_Memory` 並釘死買進當時的 `initial_tp1` / `initial_tp2` / `initial_sl` 與進場論點（加碼僅重算均價與峰值股數，不覆寫初始目標價；非嚴選股不建卡）<br>3. **靜默無干擾通知**：平時靜默寫表，**僅當日有新綁定建倉記憶、完成 TP1 分批減碼或清倉結案時**推播精簡歸因快訊至 `TAISHIN_ALERT_CHANNEL_ID`。 |
+| **週一至週五 21:30** | **第二階段：右側強勢股基本面特徵＋微結構紅藍軍審計＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **事件驅動財報快取同步（Phase 2）**：每月 5 日起營收開獎窗口對落後標的自動觸發 Event-Driven Cache Bypass（含 6h 冷卻），補齊月營收、三大財報、衍生財務比率、股利與法人融資籌碼<br>2. **Stage 1 單股 Step 1~7 審計（`STAGE1_MODEL`）**：Stage 0 硬性攔截日量 < 300 張、本業虧損無合約負債與籌碼斷頭硬傷股；注入三層防呆流通股數、春節豁免營收動能、本業前瞻 EPS 與同業中位數 PE 對齊、三率語意標籤<br>3. **Pass 1 紅藍軍審計與微結構硬攔截（Phase 1~3，`ai_picker_red_blue_audit`）**：Python 先行執行除權息前複權補償、ATR14／60 日量 POC／追價上限／硬停損／TP1／風報比確定性計算、處置股過熱預警、三層籌碼微結構（停資券窗口＋週集保大戶底氣＋日融資 K 線實體效率）、同細分產業資金共振度（`SectorBreadth`）、台新庫存曝險相關係數檢核與近 5 交易日新聞量價反應對齊；透過 Vertex AI Structured Output（`response_schema=BatchAuditResponse`，先找空頭破綻最後才評級）並行審計，再由 Python 執行風報比 `< 1.8`、處置禁追高、雙核心大盤配額（紅燈禁右側突破、黃燈限 PR85+、族群廣度與相對 PE 上限）硬攔截，並將 `S_TIER` / `A_TIER` / `REJECT_TRAP` 全數寫入 `data/signal_audit.db`（支援 Zero-Pick Veto 空手觀望）<br>4. **Stage 2 跨股總決策與大盤配額調控（`VERTEX_STAGE2_MODEL`）**：套用 `enforce_regime_quotas()` 嚴格控管右側突破與 Style B 低接檔數上限，且 `target_price_1` / `stop_loss_price` 強制鎖定 Python 確定性點位<br>5. **戰情室發布、Google Sheets 同步與週五審計週報**：發布 GitHub Pages 戰情室，寫入 `AI_Daily_Picks`（含 9 個確定性審計欄位）並同步 `09_Signal_Audit_Log`；每逢**週五盤後自動附加「Weekly Quantitative Audit Summary（實戰獲利因子、逆向選擇 Delta、AI 錯殺率與調參建議）」**推播至 `STOCK_CHANNEL_ID`。 |
+| **週一至週五 22:00** | **第三階段：左側「型態 A 高點回跌回踩長均線反彈」掃描與彈性 AI 診斷** | `systemd` (`finmind-rebound-ai.timer`) | 從當日產出之 `daily/{date}_prices.csv` 讀取近 60 個交易日數據，捕捉績優股急跌回踩長均線之均值回歸契機：<br>1. **型態 A 五大濾網**：`MA45 >= MA117 > MA189`、近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 `>= 10%`、收盤回踩 `45MA` 或 `117MA`（`-1.5% ~ +2.5%`）、反彈至 `17MA` 空間 `>= 5%`、K 線收盤強度 `(Close-Min)/(Max-Min) >= 0.55`<br>2. 產出本地 `daily/{date}_rebound_signals.csv` 與 `daily/{date}_rebound_failures.csv`<br>3. 寫入獨立 Google Sheets 工作表 `Rebound_Watchlist`<br>4. **彈性決策點**：先推播手機/LINE 雙行卡片版「今日符合反彈條件標的總數」與數字序號清單至 `ALIGNMENT_SIGNALS_CHANNEL_ID`（`alignment_signals#1566830891299508426`）；支援第一階段觀測標的數量（預設不自動跑 AI），或透過 `--run-ai` / `rebound_auto_run_ai`（當檔數落於 3~15 檔合理區間）無縫啟動 AI 深度診斷與推播。<br>5. **Stage 2 Prompt 反彈模式分流**：22:00 反彈清單在跨股嚴選時不沿用「17MA 下彎扣分」規則，改以「45MA/117MA 守穩 + 收盤強度 >= 0.55 + 反彈至 17MA 空間 >= 5%」檢核，且第一目標價優先設為 17MA 反壓。 |
+| **週一至週五 22:45** | **第四階段：台新盤後對帳單同步與嚴選建倉記憶自動歸因鎖定** | `systemd` (`taishin-memory-sync.timer`) | **SASD v5.2.0 建倉記憶錨定引擎 (`sync-memory`)**：<br>1. 同步近 7 日對帳單 (`account_statment`)、成交明細 (`filled_history`)、已實現損益與最新庫存至 `01_Account_Statement` 與 `03_Settlement_And_PnL`<br>2. **波段切分與近 5 交易日嚴選歸因**：由對帳單自動還原未平倉買進波段，回查買進日往前 5 個交易日內之 `21:30 AI_Daily_Picks (TOP_PICK)` ➔ `WATCHLIST` ➔ `22:00 Rebound_Watchlist`，自動建立/更新 `05_Position_Thesis_Memory` 並釘死買進當時的 `initial_tp1` / `initial_tp2` / `initial_sl` 與進場論點（加碼僅重算均價與峰值股數，不覆寫初始目標價；非嚴選股不建卡）<br>3. **靜默無干擾通知**：平時靜默寫表，**僅當日有新綁定建倉記憶、完成 TP1 分批減碼或清倉結案時**推播精簡歸因快訊至 `TAISHIN_ALERT_CHANNEL_ID`。 |
 
 ---
 
@@ -40,7 +40,7 @@
 
 | 分頁名稱 | 定位與儲存內容 | 更新時機與快取策略 |
 | :--- | :--- | :--- |
-| **`00_Watchlist_Master`** | **主控索引與 AI 快取表**：記錄股名、產業、各表最新資料水位 (`last_rev_ym`, `last_fin_qtr`, `max_div_raw_date`, `max_chip_raw_date`)、探測冷卻時間 (`last_probe_at`)、結構化 `ai_summary_json` 與 `war_room_url`。 | 每次 `/stock_ai` 或 20:50 / 21:30 批次分析時自動維護。 |
+| **`00_Watchlist_Master`** | **主控索引與 AI 快取表**：記錄股名、產業、各表最新資料水位 (`last_rev_ym`, `last_fin_qtr`, `max_div_raw_date`, `max_chip_raw_date`)、探測冷卻時間 (`last_probe_at`)、結構化 `ai_summary_json` 與 `war_room_url`。 | 每次 `/stock_ai` 或 21:30 / 22:00 批次分析時自動維護。 |
 | **`01_Monthly_Revenue`** | **月營收動能表**：單月營收、`mom_pct` (月增率)、`yoy_pct` (年增率)。 | 依每月 10 日法定水位增量抓取（自動回頭重抓 1 期以吸收更正公告）。 |
 | **`02_Income_Statement`** | **綜合損益表 (單季)**：營收、成本、毛利、營業費用、營業利益、業外收支、稅前/稅後淨利、母公司淨利、EPS。 | 依法定財報截止日（5/15、8/14、11/14、3/31）增量抓取（回補 1 季）。 |
 | **`03_Balance_Sheet`** | **資產負債表 (季底)**：現金、金融資產、應收帳款、存貨、不動產廠房設備(PPE)、短長期借款、合約負債、應付帳款、股本、保留盈餘、權益總額（含資產=負債+權益自動驗算）。 | 同季報水位增量同步。 |
@@ -51,7 +51,7 @@
 | **`08_Stock_Taxonomy`** | **細分產業與同業知識庫**（SASD v5.0）：`stock_id`、`stock_name`、`official_industry`、`sector_group`、`sub_industry`（細分次產業，供 21:30 同業限額分群）、`component_nature`（主動/被動元件等）、`supply_chain_role`、`core_products`、`theme_tags`、`peers`（經 Python 真實代號防幻覺校驗）、`updated_at`。同步本地快取 `finmind_reports/.state/stock_taxonomy.json`。 | TTL 90 天；由 `GEMINI_MODEL`（免費 flash-lite）搭配 Yahoo 業務簡介產生，入榜訊號股與 `/stock_ai` 查詢時補齊。 |
 | **`MA_Signal_Tracker`** | **19:00 均線與量能強勢股追蹤表**：記錄每日符合五線排列之個股、標註「🆕 是（新進榜）/ 🔄 否（持續符合）」、「連續天數」、「每日執行狀況」、「17MA 近期走勢」、**「成交量(張) / 5日均量(張) / 20日均量(張) / 量能狀態(量比)」**並自動套用條件格式底色（放量點火自動亮橘紅加粗、低量冷門灰字警示）。 | 每日 19:00 `scan-all` 自動同步。 |
 | **`AI_Daily_Picks`** | **21:30 AI 嚴選進場歷史追蹤表**：記錄每日 AI 評選之 `TOP_PICK`、`WATCHLIST`、`AVOID` 清單、推薦當下收盤價、17MA/45MA 支撐價、單股財報分、總決策推薦分、法說展望評級、進場理由、結構化交易計畫與 **9 個確定性紅藍軍審計欄位**（`Audit_Grade`、`Execution_Tactic`、`Ideal_Buy_Or_Ref`、`Chase_Limit_Price`、`Hard_Stop_Loss`、`TP1_Target_Or_POC`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers`），供盤後建倉記憶鎖定目標價與長期回測勝率。 | 每日 21:30 `analyze-alignment` 自動寫入。 |
-| **`Rebound_Watchlist`** | **20:50 型態 A 長均線回踩反彈清單**：記錄 `pk_key`、`stock_id`、`stock_name`、`industry_category`、`scan_date`、`close_price`、`high_60d`、`drop_amount`、`drop_pct`、`support_ma`、`support_price`、`target_ma17`、`potential_return_pct`、`volume_status`、`market_light`、`ai_summary_json`、`war_room_url`。 | 每日 20:50 `analyze-rebound` 自動同步。 |
+| **`Rebound_Watchlist`** | **22:00 型態 A 長均線回踩反彈清單**：記錄 `pk_key`、`stock_id`、`stock_name`、`industry_category`、`scan_date`、`close_price`、`high_60d`、`drop_amount`、`drop_pct`、`support_ma`、`support_price`、`target_ma17`、`potential_return_pct`、`volume_status`、`market_light`、`ai_summary_json`、`war_room_url`。 | 每日 22:00 `analyze-rebound` 自動同步。 |
 
 > 💡 **事後審計輔助分頁（`09_Signal_Audit_Log`）**：由 [`quant/signal_audit_service.py`](/quant/signal_audit_service.py) 獨立維護本地 SQLite `data/signal_audit.db`，並於 19:00 / 21:30 / `audit-signals` 執行時自動將無未來函數事後追蹤紀錄（T+1 實質成交價、T+5/T+10 淨報酬、MFE/MAE、洗盤標記與 `REJECT_TRAP` 錯殺標記）同步至同一試算表之 `09_Signal_Audit_Log` 分頁（不計入 `SHEET_SCHEMAS` 核心 12 表）。
 
@@ -76,7 +76,7 @@
 ```text
 Discord_Service/
 ├── bot_server.py                # [常駐主入口] 綁定伺服器 (Guild) 之 Discord 機器人入口（含 Slash 指令、08:00 天氣與 6h 心跳排程）
-├── finmind_stock_scanner.py     # [量化主入口] 19:00 五線順勢掃描、20:50 型態A反彈掃描、21:30 AI 選股、大盤紅綠燈與 CLI 入口
+├── finmind_stock_scanner.py     # [量化主入口] 19:00 五線順勢掃描、21:30 AI 選股、22:00 型態A反彈掃描、大盤紅綠燈與 CLI 入口
 ├── taishin_portfolio_service.py # [帳務主入口] 08:15 開盤作戰晨報、13:15 0050 定投、22:45 建倉記憶歸因同步、歷史回補與 CLI 入口
 ├── .agent/skills/               # [Antigravity 本地專屬技能]
 │   └── portfolio-advisor/       # 個人台新庫存與嚴選建倉記憶顧問 Skill (透過 dump-context 唯讀調閱個人持股與國際盤)
@@ -92,7 +92,7 @@ Discord_Service/
 │   ├── fundamental_config.py    # 12 張 Google Sheets Schema、會計科目錨點與法人級 AI Prompt 模板
 │   ├── fundamental_cache.py     # Google Sheets 增量同步、事件驅動快取繞過、累季轉單季與衍生指標計算
 │   ├── fundamental_analyzer.py  # 單股 Step 1~7 財報診斷、三層防呆股數、春節豁免營收動能、本業前瞻估值與戰情室發布
-│   ├── alignment_ai_picker.py   # 20:50/21:30 訊號預篩、Pass 1 紅藍軍微結構審計、大盤配額調控與 Vertex AI 總決策
+│   ├── alignment_ai_picker.py   # 21:30/22:00 訊號預篩、Pass 1 紅藍軍微結構審計、大盤配額調控與 Vertex AI 總決策
 │   ├── signal_audit_service.py  # 無未來函數事後審計閉環（SQLite signal_audit.db、T+1~T+10 悲觀路徑回填、09_Signal_Audit_Log 同步與週報）
 │   ├── taxonomy_service.py      # TWSE/TPEx 盤後快照雙軌量能預篩、下市偵測、08_Stock_Taxonomy 與同族群資金共振度
 │   └── chart_generator.py       # FinMind 日 K + Yahoo 成交量 + MA/KD/MACD Plotly 互動圖表生成器
@@ -106,7 +106,7 @@ Discord_Service/
 ├── scripts/                     # [開發與診斷輔助腳本]
 │   └── test_log.py              # 本地 Google AI Studio / Vertex AI 連線測試腳本
 ├── certs/                       # [憑證與金鑰目錄] 存放台新 .pfx 憑證與 Google sheetbot.json (列入 .gitignore 嚴禁版控)
-├── finmind_scanner.json         # [掃描設定檔] 掃描市場/產業、排除清單、API 速率限制、19:00 / 20:50 / 21:30 排程開關設定
+├── finmind_scanner.json         # [掃描設定檔] 掃描市場/產業、排除清單、API 速率限制、19:00 / 21:30 / 22:00 排程開關設定
 ├── deploy/                      # [systemd 部署] Linux 常駐與定時排程設定檔
 │   ├── taishin-morning-brief.service # 08:15 台新盤前交割預警、隔夜美股與嚴選持股開盤作戰晨報服務
 │   ├── taishin-morning-brief.timer   # 週一至週五 08:15 定時器
@@ -114,10 +114,10 @@ Discord_Service/
 │   ├── taishin-dca-0050.timer        # 週一至週五 13:15 定時器
 │   ├── finmind-scan.service          # 19:00 均線掃描服務
 │   ├── finmind-scan.timer            # 週一至週五 19:00 定時器
-│   ├── finmind-rebound-ai.service    # 20:50 型態 A 長均線回踩反彈掃描與彈性 AI 診斷服務
-│   ├── finmind-rebound-ai.timer      # 週一至週五 20:50 定時器
 │   ├── finmind-ai-pick.service       # 21:30 AI 財報分析與選股服務
 │   ├── finmind-ai-pick.timer         # 週一至週五 21:30 定時器
+│   ├── finmind-rebound-ai.service    # 22:00 型態 A 長均線回踩反彈掃描與彈性 AI 診斷服務
+│   ├── finmind-rebound-ai.timer      # 週一至週五 22:00 定時器
 │   ├── taishin-memory-sync.service   # 22:45 台新盤後對帳單同步與嚴選建倉記憶自動歸因服務
 │   └── taishin-memory-sync.timer     # 週一至週五 22:45 定時器
 ├── tests/                       # [單元測試] 涵蓋氣象/AI、均線與反彈掃描、大盤紅綠燈、財報快取、AI 選股與台新模組之自動化測試
@@ -138,7 +138,7 @@ DISCORD_TOKEN=你的_Discord_Bot_Token
 GUILD_ID=你的_Discord_伺服器_ID
 ANNOUNCE_CHANNEL_ID=每日08:00天氣推播頻道ID
 STOCK_CHANNEL_ID=每日21:30_AI嚴選股票推播頻道ID
-ALIGNMENT_SIGNALS_CHANNEL_ID=每日19:00均線訊號與20:50反彈清單推播頻道ID
+ALIGNMENT_SIGNALS_CHANNEL_ID=每日19:00均線訊號與22:00反彈清單推播頻道ID
 GCP_VM_SERVER_CHANNEL_ID=每6小時心跳通知頻道ID
 
 # 2. 雙軌 AI 設定（Google AI Studio 免費版 ＋ GCP Vertex AI 付費版）
@@ -154,7 +154,7 @@ STAGE1_MODEL=gemini-3.8-flash
 
 # 2-2. GCP Vertex AI（付費版）
 # - Stage 1（/stock_ai 專題問答、多股比較、以及 21:30 單股診斷在免費層失敗時的升級備援）：VERTEX_STAGE1_MODEL
-# - Stage 2（20:50 / 21:30 跨股彙總決策選股，以及 08:15 盤前開盤作戰晨報）：VERTEX_STAGE2_MODEL
+# - Stage 2（21:30 / 22:00 跨股彙總決策選股，以及 08:15 盤前開盤作戰晨報）：VERTEX_STAGE2_MODEL
 # - VERTEX_MODEL：相容舊版設定，當 stage 專用變數未設定時才會 fallback
 # - VERTEX_LOCATION：AI 模型端點一律使用 global（避免特定模型如 gemini-4-argon / gemini-3.8-flash 於區域端點報 404 NOT_FOUND）
 # - BQ_LOCATION / GOOGLE_CLOUD_LOCATION：BigQuery 永久表與 Batch 暫存表放置區域（預設 us-central1）
@@ -167,7 +167,7 @@ VERTEX_MODEL=gemini-2.5-flash-lite
 VERTEX_STAGE1_MODEL=gemini-3.8-flash
 VERTEX_STAGE2_MODEL=gemini-2.5-pro
 
-# Vertex AI Batch 與 GCS 設定（SASD v5.3.0：21:30 / 20:50 AI 選股離線批次，50% 折扣）
+# Vertex AI Batch 與 GCS 設定（SASD v5.3.0：21:30 / 22:00 AI 選股離線批次，50% 折扣）
 VERTEX_BATCH_ENABLED=true
 GCS_BUCKET_NAME=nickchung_bucket
 GCS_BATCH_PREFIX=vertex_batch
@@ -248,13 +248,13 @@ uv run python finmind_stock_scanner.py analyze-rebound --date YYYY-MM-DD --run-a
 
 # ※ 21:30 單股診斷呼叫節流：ai_picker_call_interval_seconds 已調整為 13.0 秒（避免免費額度 429）
 
-# 手動預覽 20:50 型態 A 長均線回踩反彈清單（--dry-run 僅在終端機印出標的數量與清單）
+# 手動預覽 22:00 型態 A 長均線回踩反彈清單（--dry-run 僅在終端機印出標的數量與清單）
 uv run python finmind_stock_scanner.py analyze-rebound --date YYYY-MM-DD --dry-run
 
-# 正式執行 20:50 型態 A 反彈掃描（寫入 Rebound_Watchlist 並推播標的數量至 Discord）
+# 正式執行 22:00 型態 A 反彈掃描（寫入 Rebound_Watchlist 並推播標的數量至 Discord）
 uv run python finmind_stock_scanner.py analyze-rebound --date YYYY-MM-DD
 
-# 強制對 20:50 型態 A 反彈清單啟動 AI 深度財報診斷與嚴選推播
+# 強制對 22:00 型態 A 反彈清單啟動 AI 深度財報診斷與嚴選推播
 uv run python finmind_stock_scanner.py analyze-rebound --date YYYY-MM-DD --run-ai
 
 # v5.7.0：無未來函數事後審計回填（T+1~T+10 悲觀路徑結算、同步 09_Signal_Audit_Log、產出 Weekly Quantitative Audit Summary）
@@ -306,7 +306,7 @@ uv run python taishin_portfolio_service.py sync-daily --dry-run
 sudo systemctl disable --now taishin-statement.timer || true
 sudo rm -f /etc/systemd/system/taishin-statement.service /etc/systemd/system/taishin-statement.timer
 
-# 1. 部署 08:15 開盤作戰晨報、13:15 0050 智慧定投、19:00 均線掃描、20:50 型態 A 反彈、21:30 AI 順勢選股與 22:45 建倉記憶歸因排程
+# 1. 部署 08:15 開盤作戰晨報、13:15 0050 智慧定投、19:00 均線掃描、21:30 AI 順勢選股、22:00 型態 A 反彈與 22:45 建倉記憶歸因排程
 sudo cp ~/Discord_Service/deploy/taishin-morning-brief.service /etc/systemd/system/
 sudo cp ~/Discord_Service/deploy/taishin-morning-brief.timer /etc/systemd/system/
 sudo cp ~/Discord_Service/deploy/taishin-dca-0050.service /etc/systemd/system/
@@ -402,7 +402,7 @@ pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r "C:\path\to
 
 ## ☁️ Vertex AI Batch 離線批次（SASD v5.3.0）
 
-* 每日 21:30 `analyze-alignment`（及 20:50 `analyze-rebound --run-ai`）的 **Stage 1 單股診斷** 與 **Stage 2 跨股總決策** 預設走 Vertex AI Batch API（50% Token 折扣），免除 `sleep(13s)` 與 429 限流；`/stock_ai`、`/ai`、08:15 晨報仍為即時 API。
+* 每日 21:30 `analyze-alignment`（及 22:00 `analyze-rebound --run-ai`）的 **Stage 1 單股診斷** 與 **Stage 2 跨股總決策** 預設走 Vertex AI Batch API（50% Token 折扣），免除 `sleep(13s)` 與 429 限流；`/stock_ai`、`/ai`、08:15 晨報仍為即時 API。
 * 流程：FinMind 同步與快取檢查 → 只把 Cache Miss 的股票打包成一份 JSONL 上傳 GCS → 建立 Batch Job 並每 60 秒輪詢 → 解析輸出（以 `custom_id` 對齊）→ 戰情室 / Sheets / Discord。全數命中快取時不會建立 Stage 1 Job。
 * 開關優先序：CLI `--batch/--no-batch` > `finmind_scanner.json`（`ai_picker_use_vertex_batch`、`ai_picker_stage2_use_vertex_batch`、`vertex_batch_poll_interval_seconds`）> `.env` `VERTEX_BATCH_ENABLED`。
 * `deploy/finmind-ai-pick.service`、`deploy/finmind-rebound-ai.service` 已設 `TimeoutStartSec=infinity` 與 `PYTHONUNBUFFERED=1`；本地 JSONL 暫存於 `finmind_reports/.state/batch/`，依 `local_retention_days` 自動清理。

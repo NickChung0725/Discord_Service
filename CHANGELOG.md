@@ -8,6 +8,9 @@
 ### 🔧 優化與排程時間調整 (Changed)
 * **AI 嚴選選股定時排程由 21:00 調整至 21:30**：
   * 修改 [`deploy/finmind-ai-pick.timer`](/deploy/finmind-ai-pick.timer) 觸發時間為 `21:30`（`OnCalendar=Mon..Fri *-*-* 21:30:00 Asia/Taipei`），預留充足時間讓 19:00 全市場均線與流動性護欄掃描任務（`finmind-scan`，遇 API 延遲或重試時可能耗時 2~2.5 小時）完整產出當日 `alignment_signals.csv` 與 `prices.csv`，避免盤後 AI 嚴選因掃描尚未落盤而提早略過。
+* **型態 A 跌深反彈排程調整至 22:00 並移除舊資料防呆回退（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py) & [`deploy/finmind-rebound-ai.timer`](/deploy/finmind-rebound-ai.timer)）**：
+  * 移除 `run_rebound_pipeline` 在找不到當日 `{target_date}_prices.csv` 時自動回溯歷史候選檔案的防呆機制；若當日價格資料未落盤直接誠實略過，杜絕誤用前一交易日舊資料進行反彈判斷。
+  * 修改 [`deploy/finmind-rebound-ai.timer`](/deploy/finmind-rebound-ai.timer) 觸發時間由 `20:50` 改為 `22:00`（`OnCalendar=Mon..Fri *-*-* 22:00:00 Asia/Taipei`），排於 21:30 AI 嚴選之後，確保在 19:00 全市場掃描必定完成後才執行。
   * 同步更新系統現況手冊 [`README.md`](/README.md) 與系統設計架構文件 [`discord_service_sasd.md`](/discord_service_sasd.md)。
 
 ---

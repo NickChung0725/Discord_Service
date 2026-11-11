@@ -2534,15 +2534,6 @@ async def run_rebound_pipeline(
     daily_dir = output_root / "daily"
     prices_path = daily_dir / f"{target_date.isoformat()}_prices.csv"
     if not prices_path.is_file():
-        candidates = sorted(daily_dir.glob("*_prices.csv"))
-        if candidates:
-            prices_path = candidates[-1]
-            try:
-                date_str = prices_path.stem.split("_")[0]
-                target_date = date.fromisoformat(date_str)
-            except Exception:
-                pass
-    if not prices_path.is_file():
         print(f"[skip] 找不到 {prices_path}（休市或盤後掃描任務未產出）。")
         return 0
 
