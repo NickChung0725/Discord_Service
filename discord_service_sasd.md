@@ -190,7 +190,7 @@ graph TB
 | **13:15** | `taishin-dca-0050.timer` | 0050 每週智慧尋底定投評估 (`taishin_portfolio_service.py eval-dca-0050`) | `📈 【0050 每週智慧尋底定投評估】` |
 | **19:00** | `finmind-scan.timer` | 全市場日K、均線、大盤紅綠燈與融資水位掃描 (`finmind_stock_scanner.py`) | `📊 【台股盤後量化掃描快報】` |
 | **20:50** | `finmind-rebound-ai.timer` | 型態 A 急跌回踩長均線反彈選股 (`alignment_ai_picker.py` rebound mode) | `🎯 【型態 A 反彈 AI 嚴選決策報告】` |
-| **21:00** | `finmind-ai-pick.timer` | 均線多頭順勢選股與 Stage 2 跨股總決策 (`alignment_ai_picker.py` trend mode) | `🎯 【AI 嚴選進場決策報告】` |
+| **21:30** | `finmind-ai-pick.timer` | 均線多頭順勢選股與 Stage 2 跨股總決策 (`alignment_ai_picker.py` trend mode) | `🎯 【AI 嚴選進場決策報告】` |
 | **22:45** | `taishin-memory-sync.timer` | 盤後對帳單同步與建倉記憶歸因 (`taishin_portfolio_service.py sync-memory`) | `🌙 【台新 盤後持股記憶歸因快訊】` |
 
 ```mermaid
@@ -218,11 +218,11 @@ sequenceDiagram
     Core->>Data: 取得 0050 即時報價、均線乖離與大盤紅綠燈
     Core->>DC: 推播定投加碼倍數建議或執行狀態
 
-    Note over Timer,DC: 【盤後量化與 AI 選股階段】19:00 - 21:00
+    Note over Timer,DC: 【盤後量化與 AI 選股階段】19:00 - 21:30
     Timer->>Core: 19:00 觸發全市場掃描 (finmind-scan)
     Core->>Data: 下載全市場日K、法人籌碼，計算 MA17/45/117/189 與大盤紅綠燈
     Core->>Core: 儲存 {date}_market_regime.json 與候選股池
-    Timer->>Core: 20:50 型態A反彈選股 / 21:00 均線順勢選股
+    Timer->>Core: 20:50 型態A反彈選股 / 21:30 均線順勢選股
     Core->>Cache: Stage Guards 過濾後，讀取/回補 12 分頁基本面快取
     Core->>AI: 打包多股 Context 為 JSONL 寫入 BigQuery input 表，呼叫 Vertex AI Batch API
     AI-->>Core: 非同步輪詢完成，依 custom_id 解析雙層財報診斷結果
@@ -266,7 +266,7 @@ flowchart TD
 
 ### 3.2 Vertex AI Batch 離線批次與雙層基本面診斷流程 (v5.3.0 核心)
 
-在 `quant/fundamental_analyzer.py` 與 `services/ai_service.py` 中，單筆即時模式（Discord `/stock_ai` 指令）與排程批次模式（20:50 / 21:00）共用相同的商業邏輯，透過「前後端解耦」實現：
+在 `quant/fundamental_analyzer.py` 與 `services/ai_service.py` 中，單筆即時模式（Discord `/stock_ai` 指令）與排程批次模式（20:50 / 21:30）共用相同的商業邏輯，透過「前後端解耦」實現：
 
 1. **脈絡準備階段 (`prepare_diagnosis_context`)**：
    * 確認個股次產業分類（`SubSectorRules`），載入該產業專屬的觀察指標與免責項（例如：金融業不看毛利率與自由現金流；營建業重看合約負債與完工入帳週期）。
@@ -342,7 +342,7 @@ flowchart TD
 
 ### 4.2 任務二：Stage 2 個股深度基本面與技術面綜合診斷
 
-* **觸發時機**：20:50 反彈選股、21:00 順勢選股（透過 Vertex AI Batch API），以及 Discord `/stock_ai` 單股查詢。
+* **觸發時機**：20:50 反彈選股、21:30 順勢選股（透過 Vertex AI Batch API），以及 Discord `/stock_ai` 單股查詢。
 * **餵給 AI 的完整資料清單 (Context Payload)**：
 
 | 資訊維度 | 餵入 AI Prompt 的具體數據欄位與計算邏輯 | 資料時間跨度 |
@@ -423,7 +423,7 @@ flowchart TD
 ### 5.1 API 與 AI 運算成本效益
 
 1. **Vertex AI Batch API 節省 50% 推論費用**：
-   * 每日 20:50 與 21:00 選股排程改由 BigQuery + Vertex AI Batch 執行，相較於即時 Online API，直接降低 $50\%$ 的 Token 計費成本，且完全消除盤後大量併發請求造成的 `429 Resource Exhausted` 錯誤。
+   * 每日 20:50 與 21:30 選股排程改由 BigQuery + Vertex AI Batch 執行，相較於即時 Online API，直接降低 $50\%$ 的 Token 計費成本，且完全消除盤後大量併發請求造成的 `429 Resource Exhausted` 錯誤。
 2. **兩階段 Pre-filter 與 12 分頁快取攔截 75% 以上無效消耗**：
    * 全市場約 1,800 檔股票經技術面初篩與 `StageGuards` 基本面硬傷過濾後，每日僅約 $10 \sim 25$ 檔高價值標的進入 AI 深度診斷；加上季報與月營收採用 Google Sheets 分頁快取，FinMind API 每日呼叫次數控制在安全配額內。
 
@@ -463,5 +463,5 @@ flowchart TD
 - **規格文件**：Phase 1 (`gemini-code-1793865428763.md`)、Phase 2 (`gemini-code-1793867722705.md`)、Phase 3 (`gemini-code-1794215693400.md`)。
 - **端到端實盤資料流**：
   1. **19:00 盤後掃描 (`scan-all`)**：`RegimeRouter`（加權 + 櫃買 OTC + 外資台指期）產出 `regime_quota` → `finmind_stock_scanner.py` 執行 20 日成交金額中位數護欄（$\ge 5,000$ 萬）與除權息前複權補償 → 盤後自動觸發 `run_signal_audit_backfill()` 回填 `data/signal_audit.db` 之 T+1~T+10 實盤悲觀路徑並同步至 Google Sheets `09_Signal_Audit_Log`。
-  2. **21:00 AI 嚴選 (`analyze-alignment`)**：Event-Driven Cache Bypass（每月 5 日起營收開獎窗口）→ Phase 2 無盲點基本面特徵（三層安全股數、春節豁免營收動能、本業前瞻 EPS × 橫斷面同業中位數 PE、三率語意標籤）→ Phase 3 微結構（除權息前複權 POC/ATR、處置過熱預警、停資券日曆＋週集保大戶底氣＋日融資 K 線效率、同細分產業 `SectorBreadth`）+ 台新庫存相關係數曝險 + 近 5 交易日新聞量價對齊 → Pass 1 紅藍軍審計（Vertex Structured Output `BatchAuditResponse`）→ Python 後置硬攔截與配額調控（`enforce_regime_quotas`）→ 全數留痕 `signal_audit.db`、寫入 `AI_Daily_Picks`（含 9 個確定性審計欄）並同步 `09_Signal_Audit_Log`（每週五盤後自動附加 `Weekly Quantitative Audit Summary` 推播）。
+  2. **21:30 AI 嚴選 (`analyze-alignment`)**：Event-Driven Cache Bypass（每月 5 日起營收開獎窗口）→ Phase 2 無盲點基本面特徵（三層安全股數、春節豁免營收動能、本業前瞻 EPS × 橫斷面同業中位數 PE、三率語意標籤）→ Phase 3 微結構（除權息前複權 POC/ATR、處置過熱預警、停資券日曆＋週集保大戶底氣＋日融資 K 線效率、同細分產業 `SectorBreadth`）+ 台新庫存相關係數曝險 + 近 5 交易日新聞量價對齊 → Pass 1 紅藍軍審計（Vertex Structured Output `BatchAuditResponse`）→ Python 後置硬攔截與配額調控（`enforce_regime_quotas`）→ 全數留痕 `signal_audit.db`、寫入 `AI_Daily_Picks`（含 9 個確定性審計欄）並同步 `09_Signal_Audit_Log`（每週五盤後自動附加 `Weekly Quantitative Audit Summary` 推播）。
   3. **22:45 建倉記憶歸因 (`sync-memory`)**：自動由 `AI_Daily_Picks` 繼承 Python 確定性硬停損、TP1 與 9 個紅藍軍審計欄位寫入 `05_Position_Thesis_Memory`，銜接隔日 08:15 開盤作戰晨報。

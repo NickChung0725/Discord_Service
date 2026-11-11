@@ -4,6 +4,14 @@
 
 ---
 
+## [v5.7.1] - 2026-11-11
+### 🔧 優化與排程時間調整 (Changed)
+* **AI 嚴選選股定時排程由 21:00 調整至 21:30**：
+  * 修改 [`deploy/finmind-ai-pick.timer`](/deploy/finmind-ai-pick.timer) 觸發時間為 `21:30`（`OnCalendar=Mon..Fri *-*-* 21:30:00 Asia/Taipei`），預留充足時間讓 19:00 全市場均線與流動性護欄掃描任務（`finmind-scan`，遇 API 延遲或重試時可能耗時 2~2.5 小時）完整產出當日 `alignment_signals.csv` 與 `prices.csv`，避免盤後 AI 嚴選因掃描尚未落盤而提早略過。
+  * 同步更新系統現況手冊 [`README.md`](/README.md) 與系統設計架構文件 [`discord_service_sasd.md`](/discord_service_sasd.md)。
+
+---
+
 ## [v5.7.0] - 2026-11-09
 ### ✨ 新增功能 (Added) — SASD Phase 3：台股微結構過濾、雙核心大盤路由與無未來函數審計閉環（含 Phase 1~3 全鏈路接線）
 * **台股微結構過濾與除權息補償（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py) & [`finmind_scanner.json`](/finmind_scanner.json)）**：
