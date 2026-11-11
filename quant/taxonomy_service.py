@@ -904,7 +904,15 @@ class TaxonomyService:
         raw_dict: dict[str, Any] = {}
         try:
             meta = asyncio.run(
-                ask_gemini_with_meta(prompt, model=model_name, tag=f"taxonomy_{sid}")
+                ask_gemini_with_meta(
+                    prompt,
+                    model=model_name,
+                    tag=f"taxonomy_{sid}",
+                    task_type="TAXONOMY",
+                    stock_id=sid,
+                    custom_id=f"TAXONOMY_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{sid}",
+                    blocking_bq_log=True,
+                )
             )
             text = re.sub(r"^```(?:json)?|```$", "", str(meta.text or "").strip(), flags=re.MULTILINE).strip()
             start, end = text.find("{"), text.rfind("}")

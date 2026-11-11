@@ -1910,7 +1910,15 @@ class FundamentalAnalyzer:
         )
         if prep["cached"]:
             return prep["report"]
-        meta = await ask_gemini_diagnosis_with_meta(prep["prompt"], tag=f"stock_diag:{stock_id}", master=master, task_type="STAGE1_GROUNDING", stock_id=stock_id, custom_id=f"STAGE1_{datetime.now().strftime('%Y%m%d')}_{stock_id}")
+        meta = await ask_gemini_diagnosis_with_meta(
+            prep["prompt"],
+            tag=f"stock_diag:{stock_id}",
+            master=master,
+            task_type="STAGE1_GROUNDING",
+            stock_id=stock_id,
+            custom_id=f"STAGE1_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stock_id}",
+            blocking_bq_log=True,
+        )
         return await self.finalize_diagnosis_from_ai(
             stock_id, prep, meta, publish_war_room=publish_war_room
         )

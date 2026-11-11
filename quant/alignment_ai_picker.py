@@ -37,6 +37,7 @@ for _sub in (_ROOT, _ROOT / "services", _ROOT / "quant", _ROOT / "taishin"):
 from ai_service import (
     DEFAULT_VERTEX_MODEL,
     ask_vertex_ai_with_meta,
+    flush_bq_archives,
     get_vertex_batch_stage1_model,
     get_vertex_batch_stage2_model,
     get_vertex_stage2_model,
@@ -858,7 +859,15 @@ async def run_portfolio_selection(
         if meta is None:
             raise RuntimeError("Vertex Batch 未回傳 Stage 2 跨股總決策結果")
         return meta
-    meta = await ask_vertex_ai_with_meta(prompt, model=model, tag="portfolio_select")
+    meta = await ask_vertex_ai_with_meta(
+        prompt,
+        model=model,
+        tag="portfolio_select",
+        task_type="STAGE2_PORTFOLIO",
+        stock_id="PORTFOLIO",
+        custom_id=f"STAGE2_PORTFOLIO_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        blocking_bq_log=True,
+    )
     return meta
 
 
@@ -1247,12 +1256,17 @@ async def _audit_batch(
     batch: list[tuple[str, str]], model: str | None
 ) -> tuple[list[StockAuditItem], list[str]]:
     ids = {sid for sid, _ in batch}
+    stock_ids_str = ",".join(sorted(ids))
     try:
         meta = await ask_vertex_ai_with_meta(
             build_audit_prompt([block for _, block in batch]),
             model=model,
             tag="red_blue_audit",
             response_schema=BatchAuditResponse,
+            task_type="RED_BLUE_AUDIT",
+            stock_id=stock_ids_str,
+            custom_id=f"AUDIT_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(sorted(ids))[:30]}",
+            blocking_bq_log=True,
         )
     except Exception as error:  # noqa: BLE001
         print(f"[warn] 紅藍軍審計批次 {sorted(ids)} 呼叫失敗：{type(error).__name__}: {error}")
@@ -2493,6 +2507,7 @@ async def run_pipeline(
         print(f"已推播 AI 嚴選報告（{sent} 則訊息）。")
 
     _cleanup_old_daily_reports(daily_dir, target_date, int(config["local_retention_days"]))
+    flush_bq_archives()
     return 0
 
 
@@ -2805,6 +2820,7 @@ async def run_rebound_pipeline(
             print(f"[rebound] 已推播型態 A 反彈 AI 嚴選報告（{sent_ai} 則訊息）。")
 
     _cleanup_old_daily_reports(daily_dir, target_date, int(config["local_retention_days"]))
+    flush_bq_archives()
     return 0
 
 

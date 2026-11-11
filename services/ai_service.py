@@ -372,6 +372,15 @@ def _generate_with_fallback(prompt: str, model: str | None, fallback_model: str 
                 error=None,
             )
         )
+        _archive_online_call(
+            prompt=prompt,
+            meta=last_meta,
+            elapsed_ms=elapsed_ms,
+            tag="ask_gemini",
+            task_type="GENERAL_QA",
+            stock_id="GENERAL",
+            blocking=False,
+        )
         return value
 
     def log_and_raise(error: BaseException) -> None:
@@ -870,6 +879,15 @@ def _generate_vertex_with_retry(prompt: str, model: str | None = None) -> str:
                 error=None,
             )
         )
+        _archive_online_call(
+            prompt=prompt,
+            meta=last_meta,
+            elapsed_ms=elapsed_ms,
+            tag="ask_vertex_ai",
+            task_type="GENERAL_QA",
+            stock_id="GENERAL",
+            blocking=False,
+        )
         return value
 
     def log_and_raise(error: BaseException) -> None:
@@ -1234,9 +1252,27 @@ def save_to_permanent_logs(bq_client: Any, project_id: str, records: list[dict])
     t_start = time.perf_counter()
     full_table_id = f"{project_id}.{get_bq_perm_dataset()}.{get_bq_perm_table()}"
     try:
-        job_config = bigquery.LoadJobConfig(write_disposition=bigquery.WriteDisposition.WRITE_APPEND)
+        job_config = bigquery.LoadJobConfig(
+            schema=[
+                bigquery.SchemaField("custom_id", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("created_at", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("call_mode", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("task_type", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("stock_id", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("model_name", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("duration_sec", "FLOAT", mode="NULLABLE"),
+                bigquery.SchemaField("prompt_tokens", "INTEGER", mode="NULLABLE"),
+                bigquery.SchemaField("completion_tokens", "INTEGER", mode="NULLABLE"),
+                bigquery.SchemaField("total_tokens", "INTEGER", mode="NULLABLE"),
+                bigquery.SchemaField("prompt_text", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("response_text", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("response_raw", "STRING", mode="NULLABLE"),
+            ],
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        )
         load_job = bq_client.load_table_from_json(records, full_table_id, job_config=job_config)
         load_job.result()
+        logger.info("已成功歸檔 %d 筆 AI 日誌至 BigQuery %s (耗時 %.2fs)", len(records), full_table_id, time.perf_counter() - t_start)
     except Exception as exc:  # noqa: BLE001  (non-blocking telemetry)
         logger.warning("寫入 BigQuery 永久日誌表失敗: %s", exc)
     return time.perf_counter() - t_start
@@ -1312,7 +1348,7 @@ _ARCHIVE_THREADS_LOCK = threading.Lock()
 _ARCHIVE_THREADS: list[threading.Thread] = []
 
 
-def flush_bq_archives(timeout_seconds: float = 10.0) -> None:
+def flush_bq_archives(timeout_seconds: float = 15.0) -> None:
     """Wait for all pending background BigQuery archive threads to complete.
 
     Registered via ``atexit`` to guarantee that short-lived CLI / systemd oneshot
@@ -1320,10 +1356,18 @@ def flush_bq_archives(timeout_seconds: float = 10.0) -> None:
     """
     with _ARCHIVE_THREADS_LOCK:
         active = [t for t in _ARCHIVE_THREADS if t.is_alive()]
+    if not active:
+        return
+    logger.info("正在等待 %d 個 BigQuery 歸檔執行緒完成寫入 (timeout=%.1fs)...", len(active), timeout_seconds)
+    deadline = time.perf_counter() + timeout_seconds
     for t in active:
-        t.join(timeout=timeout_seconds)
+        remain = max(0.1, deadline - time.perf_counter())
+        t.join(timeout=remain)
     with _ARCHIVE_THREADS_LOCK:
-        _ARCHIVE_THREADS[:] = [t for t in _ARCHIVE_THREADS if t.is_alive()]
+        remaining = [t for t in _ARCHIVE_THREADS if t.is_alive()]
+        _ARCHIVE_THREADS[:] = remaining
+    if remaining:
+        logger.warning("仍有 %d 個 BigQuery 歸檔執行緒在超時前未完成", len(remaining))
 
 
 atexit.register(flush_bq_archives)
@@ -1643,7 +1687,14 @@ def register_ai_command(tree: app_commands.CommandTree) -> None:
 
         await interaction.response.defer(thinking=True)
         try:
-            answer = await ask_gemini(prompt.strip())
+            user_id = str(getattr(interaction.user, "id", "UNKNOWN"))
+            now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            answer = await ask_gemini(
+                prompt.strip(),
+                task_type="GENERAL_QA",
+                stock_id="GENERAL",
+                custom_id=f"SLASH_AI_{now_str}_{user_id}",
+            )
         except MissingGeminiApiKeyError:
             await interaction.followup.send(
                 "❌ 尚未設定 `GEMINI_API_KEY`，請管理員在環境變數或 `.env` 中設定 Google AI Studio API Key。"
