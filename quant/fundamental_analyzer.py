@@ -196,6 +196,11 @@ _TRADE_PLAN_KEYS = (
     "invalidation",
 )
 _PRICE_RE = re.compile(r"\d[\d,]*\.?\d*")
+_NON_PRICE_TOKEN_RE = re.compile(
+    r"(?:\b\d+\s*MA\b|[+-]?\d+(?:\.\d+)?\s*%|\b\d+(?:\.\d+)?\s*[日天季月年倍檔xX])",
+    flags=re.IGNORECASE,
+)
+_EXEMPT_TARGET_KEYWORDS = ("超漲", "不設", "重估", "觀望", "N/A", "NA", "無")
 
 
 def _fix_bad_quarters(value: object) -> object:
@@ -210,7 +215,11 @@ def _fix_bad_quarters(value: object) -> object:
 
 
 def _first_price(text: object) -> float | None:
-    match = _PRICE_RE.search(str(text or ""))
+    raw = str(text or "").strip()
+    if not raw or raw.upper().startswith("N/A"):
+        return None
+    cleaned = _NON_PRICE_TOKEN_RE.sub(" ", raw)
+    match = _PRICE_RE.search(cleaned)
     if not match:
         return None
     try:
@@ -219,12 +228,41 @@ def _first_price(text: object) -> float | None:
         return None
 
 
+def check_revenue_staleness(
+    rev_ym: object,
+    *,
+    reference_date: date | None = None,
+    max_stale_days: int = 65,
+) -> tuple[bool, str]:
+    """檢查月營收期別 (YYYY-MM) 是否落後基準日超過 max_stale_days (預設 65 天)。
+
+    回傳 (is_stale, warning_message)。若格式無法解析或未過期則回傳 (False, "")。
+    """
+    ym_str = str(rev_ym or "").strip()
+    match = re.match(r"^(\d{4})[-/](\d{1,2})$", ym_str)
+    if not match:
+        return False, ""
+    year, month = int(match.group(1)), int(match.group(2))
+    if not (1 <= month <= 12):
+        return False, ""
+    # 以該月 28 日近似月底，對比基準日（台股月營收於次月 10 日前公佈，落後 >65 天代表至少缺漏兩個月以上）
+    rev_approx_end = date(year, month, 28)
+    ref = reference_date or datetime.now(TAIPEI_TIMEZONE).date()
+    lag_days = (ref - rev_approx_end).days
+    if lag_days > max_stale_days:
+        return (
+            True,
+            f"⚠️ 資料缺漏/過期（最新月營收停留在 {year:04d}-{month:02d}，落後基準日 {lag_days} 天 > {max_stale_days} 天）",
+        )
+    return False, ""
+
+
 def sanitize_stage1_json(summary_json: dict, latest_close: float | None = None) -> dict:
     """解析 SUMMARY_JSON 後的硬校正，避免小模型違規輸出污染快取。
 
     - 法說無實質內容 → claims="無"、verdict="無資料"。
     - highlights/risks 至少 1 筆、至多 4 筆。
-    - 補齊 trend_tags / trade_plan 結構；目標價不高於最新收盤價時加註警示。
+    - 補齊 trend_tags / trade_plan 結構；目標價不高於最新收盤價時加註警示（惟「🚫 觀望避開」或明確標註「超漲不設目標價/待拉回重估/N/A」者豁免，解除超漲股防呆死鎖）。
     - 期別防呆：2026Q9 → 2026-09。
     """
     summary_json = _fix_bad_quarters(summary_json)  # type: ignore[assignment]
@@ -256,10 +294,14 @@ def sanitize_stage1_json(summary_json: dict, latest_close: float | None = None) 
     plan = dict(plan) if isinstance(plan, dict) else {}
     for key in _TRADE_PLAN_KEYS:
         plan.setdefault(key, "")
-    if latest_close and latest_close > 0:
+    tactical_type = str(plan.get("tactical_type", "")).strip()
+    is_avoid_tactic = "觀望避開" in tactical_type or "觀望" in tactical_type
+    if latest_close and latest_close > 0 and not is_avoid_tactic:
         for key in ("target_price_1", "target_price_2"):
-            price = _first_price(plan.get(key))
-            text = str(plan.get(key, ""))
+            text = str(plan.get(key, "")).strip()
+            if any(kw in text for kw in _EXEMPT_TARGET_KEYWORDS):
+                continue
+            price = _first_price(text)
             if price is not None and price <= latest_close and not text.startswith("⚠️"):
                 plan[key] = f"⚠️目標價未高於最新收盤 {latest_close:,.2f}，視為無效｜{text}"
     summary_json["trade_plan"] = plan
@@ -1300,7 +1342,15 @@ class FundamentalAnalyzer:
         if not relevant:
             return title_block + "\n（近期無公開法說展望：沒有找到相關報導）"
 
+        has_substantive_summary = any(
+            str(it.get("description") or it.get("summary") or "").strip() not in ("", RSS_NO_CONTENT_NOTE, str(it.get("title", "")).strip())
+            for it in relevant
+        )
         lines = [title_block, "以下為媒體對管理層說法的報導摘要；請只引用本區內容，不得自行補充展望。"]
+        if not has_substantive_summary:
+            lines.append(
+                "⚠️ 系統檢核：以下檢索結果均僅有媒體空殼標題、無實質內文數據；請嚴守零腦補原則，於 SUMMARY_JSON 將 guidance.claims 填寫為「無」、verdict 填寫為「無資料」。"
+            )
         for it in relevant:
             meta = f" — {it.get('source', '').strip()} {it.get('pubDate', '').strip()}".rstrip()
             lines.append(f"- {it['title']}{meta}")
@@ -1308,6 +1358,19 @@ class FundamentalAnalyzer:
             if description and description != it["title"]:
                 lines.append(f"  摘要：{description[:200]}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _scale_cols_to_yi(
+        frame: pd.DataFrame, target_cols: list[str] | tuple[str, ...]
+    ) -> pd.DataFrame:
+        """將原始「元」為單位的欄位統一除以 1e8 轉為「億元（小數點後兩位）」，消除 AI 位數誤判並節省 Token。"""
+        if frame.empty:
+            return frame
+        out = frame.copy()
+        for col in target_cols:
+            if col in out.columns:
+                out[col] = (pd.to_numeric(out[col], errors="coerce") / 1e8).round(2)
+        return out
 
     def build_markdown_context(self, stock_id: str, include_outlook: bool = False) -> str:
         df_wide = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
@@ -1326,8 +1389,112 @@ class FundamentalAnalyzer:
         df_div = self.slice_sliding_window(df_div, 5)
         df_chip = self.slice_sliding_window(df_chip, 8)
 
+        # 從 00_Watchlist_Master 取得股名與官方產業分類
+        stock_name = ""
+        official_industry = ""
+        try:
+            watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
+            records = self.cache._get_records_cached(watchlist)  # noqa: SLF001
+            row = next((r for r in records if str(r.get("stock_id", "")).strip() == stock_id), None)
+            if row:
+                stock_name = str(row.get("stock_name", "")).strip()
+                official_industry = str(row.get("industry_category", "")).strip()
+        except Exception:
+            stock_name = ""
+
+        # Stage 0 ➔ Stage 1 交接棒：注入產業定錨、估值屬性 (valuation_regime) 與同業代號
+        tax_header_line = ""
+        try:
+            from taxonomy_service import TaxonomyService, format_stage1_taxonomy_header
+
+            tax_svc = TaxonomyService()
+            tax_rec = tax_svc.get_or_create_sync(
+                stock_id,
+                stock_name=stock_name,
+                official_industry=official_industry,
+                sync_sheet=False,
+            )
+            if not stock_name and tax_rec:
+                stock_name = str(tax_rec.get("stock_name", "")).strip()
+            tax_header_line = format_stage1_taxonomy_header(tax_rec)
+        except Exception:  # noqa: BLE001
+            tax_header_line = ""
+
+        # Python 預先計算估值與技術錨點（避免 Stage 1 AI 自行心算 PE / PB / 殖利率 / 17MA 乖離率）
+        latest_close: float | None = None
+        latest_ma17: float | None = None
+        try:
+            prices_df = self._find_latest_prices_csv_for_stock(stock_id)
+            if not prices_df.empty:
+                p_clean = prices_df.copy()
+                p_clean["date"] = pd.to_datetime(p_clean["date"], errors="coerce")
+                p_clean["close"] = pd.to_numeric(p_clean["close"], errors="coerce")
+                p_clean = (
+                    p_clean.dropna(subset=["date", "close"])
+                    .sort_values("date")
+                    .drop_duplicates(subset=["date"], keep="last")
+                    .reset_index(drop=True)
+                )
+                if not p_clean.empty:
+                    latest_close = float(p_clean.iloc[-1]["close"])
+                    if "MA17" in p_clean.columns:
+                        ma17_series = pd.to_numeric(p_clean["MA17"], errors="coerce")
+                    else:
+                        ma17_series = pd.Series(dtype=float)
+                    if ma17_series.empty or ma17_series.isna().all():
+                        ma17_series = p_clean["close"].rolling(window=17, min_periods=17).mean()
+                    if not ma17_series.empty and not pd.isna(ma17_series.iloc[-1]):
+                        latest_ma17 = float(ma17_series.iloc[-1])
+        except Exception:  # noqa: BLE001
+            pass
+
+        ttm_eps_val: float | None = None
+        if not df_wide.empty and "ttm_eps" in df_wide.columns:
+            ttm_eps_val = _to_float(df_wide.iloc[-1].get("ttm_eps"))
+        pe_str = (
+            f"{latest_close / ttm_eps_val:,.2f}x（收盤 {latest_close:,.2f} / TTM EPS {ttm_eps_val:,.2f}）"
+            if (latest_close and ttm_eps_val and ttm_eps_val > 0)
+            else "N/A（TTM EPS <= 0 或缺漏）"
+        )
+
+        pb_str = "N/A"
+        if not df_bs.empty and latest_close:
+            bs_last = df_bs.iloc[-1]
+            p_eq = _to_float(bs_last.get("parent_equity"))
+            cap_stk = _to_float(bs_last.get("capital_stock"))
+            if p_eq and cap_stk and p_eq > 0 and cap_stk > 0:
+                bps = p_eq / (cap_stk / 10.0)
+                if bps > 0:
+                    pb_str = f"{latest_close / bps:,.2f}x（每股淨值 {bps:,.2f} 元）"
+
+        div_yield_str = "N/A"
+        if not df_div.empty and latest_close and latest_close > 0:
+            cash_div = _to_float(df_div.iloc[-1].get("cash_dividend"))
+            div_yr = str(df_div.iloc[-1].get("div_year", "")).strip()
+            if cash_div is not None and cash_div >= 0:
+                div_yield_str = f"{cash_div / latest_close * 100.0:.2f}%（{div_yr} 年現金股利 {cash_div:.2f} 元）"
+
+        close_str = f"{latest_close:,.2f} 元" if latest_close else "N/A"
+        stop_4pct_str = f"{latest_close * 0.96:,.2f} 元" if latest_close else "N/A"
+        if latest_close and latest_ma17 and latest_ma17 > 0:
+            bias_17ma = (latest_close - latest_ma17) / latest_ma17 * 100.0
+            ma17_anchor_str = (
+                f"{latest_ma17:,.2f} 元（距 17MA 乖離率 {bias_17ma:+.2f}%｜"
+                f"17MA+12% 過熱極值價 {latest_ma17 * 1.12:,.2f} 元）"
+            )
+        else:
+            ma17_anchor_str = "N/A"
+
+        title_name = f"{stock_id} {stock_name}".strip()
         parts: list[str] = []
-        parts.append(f"【標的：{stock_id} — Google Sheets 法人級深度財報與籌碼數據包】")
+        parts.append(f"【標的：{title_name} — Google Sheets 法人級深度財報與籌碼數據包】")
+        if tax_header_line:
+            parts.append(f"【Stage 0 產業定錨】{tax_header_line}")
+        parts.append(
+            f"【Python 預先計算估值與技術錨點（請直接引用，嚴禁自行心算除法）】"
+            f"最新收盤價：{close_str}｜最新 PE：{pe_str}｜PB：{pb_str}｜近一年現金殖利率：{div_yield_str}"
+            f"｜17MA 錨點：{ma17_anchor_str}｜收盤 -4% 硬停損上限價：{stop_4pct_str}"
+        )
 
         # Table 1: IS structure + expense ratio + attribution
         if not df_wide.empty or not df_is.empty:
@@ -1344,11 +1511,11 @@ class FundamentalAnalyzer:
                 "qtr_rev_yoy_pct",
             ]
             show = df_wide[[c for c in cols_wide if c in df_wide.columns]].copy() if not df_wide.empty else pd.DataFrame()
-            parts.append("\n■ 表 1：損益結構、營業費用率與本業/業外歸因 (近 8 季)")
+            parts.append("\n■ 表 1：損益結構、營業費用率與本業/業外歸因 (近 8 季｜營收單位：億元，比率：%)")
             if not show.empty:
                 parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
-        # Table 2: CCC + contract liabilities + financial assets
+        # Table 2: CCC + contract liabilities + financial assets (統一將原始元轉為億元)
         if not df_wide.empty or not df_bs.empty:
             cols = [
                 "year_qtr",
@@ -1364,6 +1531,15 @@ class FundamentalAnalyzer:
                 "fvoci_financial_assets",
                 "ac_financial_assets",
             ]
+            money_cols_t2 = (
+                "inventory",
+                "accounts_receivable",
+                "accounts_payable",
+                "contract_liab_current",
+                "fvpl_financial_assets",
+                "fvoci_financial_assets",
+                "ac_financial_assets",
+            )
 
             base = pd.DataFrame()
             if not df_wide.empty and "year_qtr" in df_wide.columns:
@@ -1374,11 +1550,12 @@ class FundamentalAnalyzer:
                 base = bs_part if base.empty else base.merge(bs_part, on="year_qtr", how="left")
 
             show = base[[c for c in cols if c in base.columns]].copy() if not base.empty else pd.DataFrame()
-            parts.append("\n■ 表 2：營運週轉效率 (CCC)、合約負債與金融資產配置 (近 8 季)")
+            show = self._scale_cols_to_yi(show, money_cols_t2)
+            parts.append("\n■ 表 2：營運週轉效率 (CCC)、合約負債與金融資產配置 (近 8 季｜金額單位：億元，週轉：天)")
             if not show.empty:
                 parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
-        # Table 3: cash flow breakdown
+        # Table 3: cash flow breakdown (統一將原始元轉為億元)
         if not df_cf.empty:
             cols = [
                 "year_qtr",
@@ -1396,10 +1573,11 @@ class FundamentalAnalyzer:
                 "financing_cf",
             ]
             show = df_cf[[c for c in cols if c in df_cf.columns]].copy()
-            parts.append("\n■ 表 3：單季現金流量拆解、營運資金變動與含金量 (近 8 季)")
+            show = self._scale_cols_to_yi(show, cols[1:])
+            parts.append("\n■ 表 3：單季現金流量拆解、營運資金變動與含金量 (近 8 季｜金額單位：億元)")
             parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
-        # Table 4: leverage and solvency
+        # Table 4: leverage and solvency (統一將資產負債表原始元轉為億元，與 total_debt_亿元 / ebitda_亿元 一致)
         if not df_wide.empty or not df_bs.empty:
             cols_bs = [
                 "year_qtr",
@@ -1432,19 +1610,27 @@ class FundamentalAnalyzer:
 
             show_cols = [c for c in (cols_bs + cols_wide[1:]) if c in base.columns]
             show = base[show_cols].copy() if not base.empty else pd.DataFrame()
-            parts.append("\n■ 表 4：財務槓桿、有息負債結構與償債能力 (近 8 季)")
+            show = self._scale_cols_to_yi(show, cols_bs[1:])
+            parts.append("\n■ 表 4：財務槓桿、有息負債結構與償債能力 (近 8 季｜金額單位：億元，比率：%)")
             if not show.empty:
                 parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
-        # Table 5: monthly revenue momentum
+        # Table 5: monthly revenue momentum (統一將原始元轉為億元 + Stale Data Guard 資料新鮮度檢查)
         if not df_rev.empty:
             cols = ["rev_ym", "revenue", "mom_pct", "yoy_pct", "raw_date"]
             show = df_rev[[c for c in cols if c in df_rev.columns]].copy()
-            parts.append("\n■ 表 5：近期月營收動能 (近 12 個月)")
+            show = self._scale_cols_to_yi(show, ("revenue",))
+            latest_rev_ym = show.iloc[-1].get("rev_ym") if "rev_ym" in show.columns else None
+            is_stale, stale_msg = check_revenue_staleness(latest_rev_ym)
+            parts.append("\n■ 表 5：近期月營收動能 (近 12 個月｜金額單位：億元)")
+            if is_stale:
+                parts.append(
+                    f"- {stale_msg}｜請於 Step 1 標註月營收資料過期，並改以【表 1】最新季報 qtr_rev_yoy_pct 作為營收動能主依據。"
+                )
             parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
-        # Table 6: dividend + chip summary
-        parts.append("\n■ 表 6：歷年股利政策與近期外資/投信/自營商法人籌碼動向")
+        # Table 6: dividend + chip summary (含 v5.5.0 融資融券與維持率欄位)
+        parts.append("\n■ 表 6：歷年股利政策與近期外資/投信/自營商法人及信用交易籌碼動向")
         if not df_div.empty:
             cols = [
                 "div_year",
@@ -1474,26 +1660,22 @@ class FundamentalAnalyzer:
                 "dealer_net_buy_20d_lots",
                 "three_inst_net_5d_lots",
                 "three_inst_net_20d_lots",
+                "chip_quadrant_tag",
+                "margin_balance_lots",
+                "margin_utilization_pct",
+                "margin_chg_5d_lots",
+                "margin_chg_20d_lots",
+                "short_margin_ratio_pct",
+                "est_margin_maint_pct",
             ]
             show = df_chip[[c for c in cols if c in df_chip.columns]].copy()
-            parts.append("\n- 【法人籌碼 (最新週)】")
+            parts.append("\n- 【法人與信用籌碼 (近 8 週，含融資使用率/增減與估算維持率)】")
             parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 7: Optional latest prices.csv moving averages (if available locally)
         ma_context = self.build_latest_ma_context(stock_id)
         if ma_context:
             parts.append(ma_context)
-
-        # News injection (using cached Watchlist_Master)
-        stock_name = ""
-        try:
-            watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
-            records = self.cache._get_records_cached(watchlist)  # noqa: SLF001
-            row = next((r for r in records if str(r.get("stock_id", "")).strip() == stock_id), None)
-            if row:
-                stock_name = str(row.get("stock_name", "")).strip()
-        except Exception:
-            stock_name = ""
 
         if stock_name:
             parts.append(self.fetch_free_stock_news_and_search(stock_id, stock_name))
@@ -1599,15 +1781,18 @@ class FundamentalAnalyzer:
             ma17_val = latest.get("MA17")
             ma45_val = latest.get("MA45")
             gap_str = "N/A"
+            bias_17ma_str = "N/A"
             if (
                 ma17_val is not None
-                and ma45_val is not None
                 and not pd.isna(ma17_val)
-                and not pd.isna(ma45_val)
                 and float(ma17_val) > 0
             ):
-                gap_pct = (float(ma17_val) - float(ma45_val)) / float(ma17_val) * 100.0
-                gap_str = f"{gap_pct:.2f}%"
+                ma17_f = float(ma17_val)
+                bias_pct = (close_val - ma17_f) / ma17_f * 100.0
+                bias_17ma_str = f"{bias_pct:+.2f}%（17MA+12%極值 {ma17_f * 1.12:,.2f}）"
+                if ma45_val is not None and not pd.isna(ma45_val):
+                    gap_pct = (ma17_f - float(ma45_val)) / ma17_f * 100.0
+                    gap_str = f"{gap_pct:.2f}%"
 
             ma17_trend = describe_ma17_trend(stock_prices["MA17"])
             vol_metrics = _extract_latest_volume_metrics(stock_prices)
@@ -1647,7 +1832,10 @@ class FundamentalAnalyzer:
                     f"- 最新收盤：{close_val:,.2f}｜MA3：{_fmt_ma('MA3')}｜MA17：{_fmt_ma('MA17')}"
                     f"｜MA45：{_fmt_ma('MA45')}｜MA117：{_fmt_ma('MA117')}｜MA189：{_fmt_ma('MA189')}"
                 ),
-                f"- 17MA與45MA差距：{gap_str}｜17MA近期走勢：{ma17_trend}｜均線訊號：{signal_status}",
+                (
+                    f"- 距17MA乖離率：{bias_17ma_str}｜17MA與45MA差距：{gap_str}"
+                    f"｜17MA近期走勢：{ma17_trend}｜均線訊號：{signal_status}"
+                ),
             ]
             if vol_line:
                 lines.append(vol_line)
@@ -2361,8 +2549,9 @@ class FundamentalAnalyzer:
         rev_df: pd.DataFrame,
         bs_latest: dict,
         close: float | None,
+        div_latest: dict | None = None,
     ) -> list[str]:
-        """SASD v4.0 資料卡 [B] 跨期與估值錨點：PE/PB、毛利率/營益率 QoQ·YoY、近 3 月平均營收 YoY。"""
+        """SASD v4.0 資料卡 [B] 跨期與估值錨點：PE/PB/近一年現金殖利率、毛利率/營益率 QoQ·YoY、近 3 月平均營收 YoY（含 Stale Data Guard）。"""
 
         def _f(value: object, suffix: str = "") -> str:
             number = _to_float(value)
@@ -2399,7 +2588,12 @@ class FundamentalAnalyzer:
             pb_text = f"{close / bps:,.2f} 倍（每股淨值 {bps:,.2f}）"
         else:
             pb_text = "N/A"
-        lines.append(f"  - 估值錨點：本益比 PE {pe_text}｜股價淨值比 PB {pb_text}")
+        div_yield_part = ""
+        if div_latest and close is not None and close > 0:
+            cash_div = _to_float(div_latest.get("cash_dividend"))
+            if cash_div is not None and cash_div >= 0:
+                div_yield_part = f"｜近一年現金殖利率 {cash_div / close * 100.0:.2f}%（現金股利 {cash_div:.2f} 元）"
+        lines.append(f"  - 估值錨點：本益比 PE {pe_text}｜股價淨值比 PB {pb_text}{div_yield_part}")
 
         if latest:
             lines.append(
@@ -2415,19 +2609,26 @@ class FundamentalAnalyzer:
             )
 
         if rev_df is not None and not rev_df.empty and "yoy_pct" in rev_df.columns:
-            yoys = [v for v in (_to_float(x) for x in rev_df["yoy_pct"].tail(3).tolist()) if v is not None]
-            latest_yoy = _to_float(rev_df["yoy_pct"].iloc[-1])
-            if yoys and latest_yoy is not None:
-                avg3 = sum(yoys) / len(yoys)
-                if latest_yoy > avg3 + 5:
-                    trend = "加速成長"
-                elif latest_yoy < avg3 - 5:
-                    trend = "高檔鈍化／動能趨緩"
-                else:
-                    trend = "大致持平"
+            latest_ym = rev_df["rev_ym"].iloc[-1] if "rev_ym" in rev_df.columns else None
+            is_stale, stale_msg = check_revenue_staleness(latest_ym) if latest_ym is not None else (False, "")
+            if is_stale:
                 lines.append(
-                    f"  - 營收動能：近 {len(yoys)} 個月平均 YoY {avg3:,.2f}%｜最新單月 YoY {latest_yoy:,.2f}%（{trend}）"
+                    f"  - 營收動能：{stale_msg}（請優先採信季報 qtr_rev_yoy_pct 與 [C] 區趨勢標籤）"
                 )
+            else:
+                yoys = [v for v in (_to_float(x) for x in rev_df["yoy_pct"].tail(3).tolist()) if v is not None]
+                latest_yoy = _to_float(rev_df["yoy_pct"].iloc[-1])
+                if yoys and latest_yoy is not None:
+                    avg3 = sum(yoys) / len(yoys)
+                    if latest_yoy > avg3 + 5:
+                        trend = "加速成長"
+                    elif latest_yoy < avg3 - 5:
+                        trend = "高檔鈍化／動能趨緩"
+                    else:
+                        trend = "大致持平"
+                    lines.append(
+                        f"  - 營收動能：近 {len(yoys)} 個月平均 YoY {avg3:,.2f}%｜最新單月 YoY {latest_yoy:,.2f}%（{trend}）"
+                    )
         return lines
 
     def build_quant_snapshot(self, stock_id: str, *, close: float | None = None) -> str:
@@ -2470,6 +2671,9 @@ class FundamentalAnalyzer:
         revenue = rev_df.iloc[-1].to_dict() if not rev_df.empty else {}
         chip = _latest("07_Chip_Summary")
         bs_latest = _latest("03_Balance_Sheet")
+        div_latest = _latest("06_Dividend_Policy")
+        is_rev_stale, rev_stale_msg = check_revenue_staleness(revenue.get("rev_ym"))
+        rev_stale_suffix = f"｜{rev_stale_msg}" if is_rev_stale else ""
 
         lines = [
             (
@@ -2489,7 +2693,7 @@ class FundamentalAnalyzer:
             ),
             (
                 f"  - 最新月營收（{revenue.get('rev_ym', 'N/A')}）：MoM {_fmt(revenue.get('mom_pct'), '%')}"
-                f"｜YoY {_fmt(revenue.get('yoy_pct'), '%')}"
+                f"｜YoY {_fmt(revenue.get('yoy_pct'), '%')}{rev_stale_suffix}"
             ),
             (
                 f"  - 法人籌碼（{chip.get('trade_week', 'N/A')}）：外資持股 {_fmt(chip.get('foreign_holding_pct'), '%')}"
@@ -2504,7 +2708,7 @@ class FundamentalAnalyzer:
                 f"估算融資維持率 {_fmt(chip.get('est_margin_maint_pct'), '%')}｜券資比 {_fmt(chip.get('short_margin_ratio_pct'), '%')}"
             ),
         ]
-        lines.extend(self.build_snapshot_trend_lines(wide_df, rev_df, bs_latest, close))
+        lines.extend(self.build_snapshot_trend_lines(wide_df, rev_df, bs_latest, close, div_latest=div_latest))
         try:
             is_df = _history("02_Income_Statement")
             sem_block = self.build_ai_fundamental_prompt_block(

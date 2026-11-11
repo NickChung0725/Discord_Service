@@ -4,6 +4,24 @@
 
 ---
 
+## [v5.7.3] - 2026-11-11
+### ✨ 新增功能與架構升級 (Added & Upgraded) — 三階段漏斗（Stage 0 ➔ Stage 1 ➔ Stage 2）Prompt 與資料流最佳實踐全面升級
+* **【Stage 0 產業定錨】Yahoo SEO 樣板字過濾、互斥六大板塊重構與 `valuation_regime` 估值定價屬性（[`quant/taxonomy_service.py`](/quant/taxonomy_service.py) & [`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：
+  * **過濾無效 SEO 樣板字（GIGO 防護）**：`fetch_yahoo_company_profile()` 新增 `_is_yahoo_boilerplate()` 檢核，優先擷取真實業務與營收比重段落，若僅抓到 `Yahoo股市提供公司基本資料、統一編號...` 等空殼 Meta Description 則自動標註無效，並於 Stage 0 Prompt 授權 AI 依台股知識庫進行實質價值鏈判定。
+  * **重構互斥六大 `sector_group` 並新增 `valuation_regime`**：將 `sector_group` 升級為 `["半導體", "AI與電子硬體組裝", "電子零組件", "生技醫療與綠能重電", "傳產製造與原物料", "金融、航運與內需服務"]`（向下相容舊版名稱自動映射），並於 `08_Stock_Taxonomy` 新增 `valuation_regime`（`景氣循環股` / `穩健價值與高息股` / `成長型科技與利基股` / `高本益比/題材研發股`）。
+* **【Stage 0 ➔ Stage 1 交接棒與數據供給】表頭預先算妥估值錨點、表 2~5 統一轉為「億元」、補齊表 6 融資維持率欄位與 Stale Data Guard（[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)）**：
+  * **消除「零捏造原則」與「要求 AI 算 PE/殖利率」之結構矛盾**：於 `build_markdown_context()` 頂部直接注入 `【Stage 0 產業定錨】`（含 `sector_group`、`sub_industry`、`valuation_regime`、`peers`）與 `【Python 預先計算估值與技術錨點】`（含最新收盤、`PE`、`PB`、`近一年現金殖利率`、`17MA 乖離率`、`17MA+12% 極值價`、`收盤 -4% 硬停損上限價`），徹底免除 LLM 心算除法風險。
+  * **表 2～表 5 金額單位全面統一為「億元（小數點後兩位）」**：新增 `_scale_cols_to_yi()` 將資產負債表、現金流量表與月營收表中高達 10 位數之「元」欄位除以 `1e8`，消除表內單位混搭與位數幻覺並節省約 25% Prompt Tokens。
+  * **修復表 6 漏列 v5.5.0 信用籌碼欄位之盲區**：於 `build_markdown_context()` 表 6 補齊 `chip_quadrant_tag`、`margin_balance_lots`、`margin_utilization_pct`、`margin_chg_5d_lots`、`margin_chg_20d_lots`、`short_margin_ratio_pct` 與 `est_margin_maint_pct` 共 7 個融資融券與維持率欄位。
+  * **月營收資料新鮮度守門員（`check_revenue_staleness`）**：自動檢查 `rev_ym` 是否落後系統基準日逾 65 天（如停留在 `2024-11`），於 Stage 1 表 5 與 Stage 2 資料卡 `[B]` 自動標註 `⚠️ 資料缺漏/過期`，指示 AI 改以最新季報 `qtr_rev_yoy_pct` 為準。
+  * **解除超漲股目標價防呆死鎖（`sanitize_stage1_json` & `_first_price`）**：當個股因正乖離 `> +12%` 判定為 `"🚫 觀望避開"` 或填寫 `"超漲不設目標價（待拉回 17MA 重估）"` / `"N/A"` 時，豁免 `target_price <= latest_close` 警告，且剔除 `"17MA"` 等非價格字串誤判。
+* **【Stage 1 ➔ Stage 2 門檻統一與投資長決策升級】（[`quant/fundamental_config.py`](/quant/fundamental_config.py) & [`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
+  * **統一全鏈路硬傷與量比門檻**：全階段統一 `日量 < 300 張`（流動性陷阱）、`量比 > 4.0x`（天量過熱，同步更新 `_is_overheated_candidate`）與戰術分類枚舉值（`🎯 短中期波段 (5~20日) | ⚡ 短線動能價差 | 🏦 長線價值抱單 | 🚫 觀望避開`）。
+  * **補齊量比連續區間與跨區資料衝突裁決鐵則**：新增 `【零、跨區資料衝突裁決鐵則（Data Integrity Rule）】`（明確定義 `[B]` vs `[C]` 衝突時之優先級），將量比規則無縫覆蓋 `< 0.75x`、`0.75x ~ 3.0x`、`3.0x ~ 4.0x` 與 `> 4.0x` 四個連續區間，並顯式授權大盤紅燈或無合格標的時輸出空陣列 `"top_picks": []`（消除 LLM 強行湊數傾向）。
+  * **資料卡 `[A]` 與 `[B]` 擴充**：`[A]` 區顯示 `⚖️ 估值屬性：{valuation_regime}`，`[B]` 區估值錨點補齊 `近一年現金殖利率`。
+
+---
+
 ## [v5.7.2] - 2026-11-11
 ### 🔧 優化與錯誤修正 (Fixed & Changed) — 全系統 AI 呼叫 BigQuery 日誌寫入保障與短命 CLI 防護
 * **全系統 AI 呼叫（Online 與 Batch）全面接入 BigQuery 永久日誌歸檔與 Schema 嚴格鎖定（[`services/ai_service.py`](/services/ai_service.py)）**：

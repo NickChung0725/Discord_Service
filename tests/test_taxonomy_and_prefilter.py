@@ -23,6 +23,9 @@ from finmind_stock_scanner import (
 )
 from taxonomy_service import (
     VALID_COMPONENT_NATURES,
+    VALID_VALUATION_REGIMES,
+    _is_yahoo_boilerplate,
+    format_stage1_taxonomy_header,
     format_taxonomy_badge,
     passes_dual_track_liquidity,
     sanitize_taxonomy_record,
@@ -153,9 +156,17 @@ class TaxonomyAndPrefilterTests(unittest.TestCase):
         )
         self.assertEqual(record["peers"], '["2492 華新科"]')
         self.assertIn(record["component_nature"], VALID_COMPONENT_NATURES)
-        self.assertEqual(record["sector_group"], "電子硬體與零組件")
+        self.assertEqual(record["sector_group"], "電子零組件")
+        self.assertIn(record["valuation_regime"], VALID_VALUATION_REGIMES)
         self.assertEqual(record["updated_at"], "2026-10-29")
         self.assertIn("2492 華新科", format_taxonomy_badge(record))
+        self.assertIn("估值屬性：", format_stage1_taxonomy_header(record))
+
+    def test_yahoo_seo_boilerplate_is_detected_and_filtered(self) -> None:
+        seo_meta = "東洋(4105.TWO)，Yahoo股市提供公司基本資料、統一編號、股務相關基本資料..."
+        real_biz = "台灣東洋藥品主要從事癌症用藥、重症抗感染藥物、微脂體與特殊學名藥之研發製造與銷售。"
+        self.assertTrue(_is_yahoo_boilerplate(seo_meta))
+        self.assertFalse(_is_yahoo_boilerplate(real_biz))
 
     def test_stage2_sub_industry_cap_allows_different_sub_industries(self) -> None:
         def row(sid: str, sub: str) -> dict:

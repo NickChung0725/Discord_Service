@@ -30,11 +30,18 @@ FOUR_DIGIT_RE = re.compile(r"^\d{4}$")
 
 VALID_SECTOR_GROUPS = (
     "半導體",
-    "電子硬體與零組件",
-    "軟體、網通與資安",
+    "AI與電子硬體組裝",
+    "電子零組件",
+    "生技醫療與綠能重電",
     "傳產製造與原物料",
-    "生技醫療與綠能",
     "金融、航運與內需服務",
+)
+
+VALID_VALUATION_REGIMES = (
+    "景氣循環股",
+    "穩健價值與高息股",
+    "成長型科技與利基股",
+    "高本益比/題材研發股",
 )
 
 VALID_COMPONENT_NATURES = (
@@ -46,8 +53,8 @@ VALID_COMPONENT_NATURES = (
 )
 
 VALID_SUPPLY_CHAIN_ROLES = (
-    "上游(IP/材料/晶圓/原物料)",
-    "中游(製造/封測/零組件/加工)",
+    "上游(IP/材料/原物料/研發)",
+    "中游(製造/封測/零組件/製劑加工)",
     "下游(品牌/系統組裝/通路/終端服務)",
     "垂直整合(IDM/一條龍)",
 )
@@ -379,8 +386,25 @@ def passes_dual_track_liquidity(
 # --------------------------------------------------------------------------- #
 # Part 2: Yahoo 台股業務簡介抓取 + Gemini Lite 細分產業與同業知識庫
 # --------------------------------------------------------------------------- #
+_YAHOO_BOILERPLATE_PATTERNS = (
+    "提供公司基本資料",
+    "股務相關基本資料",
+    "Yahoo奇摩股市",
+    "Yahoo股市",
+    "即時股價",
+    "技術線圖",
+)
+
+
+def _is_yahoo_boilerplate(text: str) -> bool:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return True
+    return any(pat in cleaned for pat in _YAHOO_BOILERPLATE_PATTERNS)
+
+
 def fetch_yahoo_company_profile(stock_id: str, timeout: int = 8) -> str:
-    """從 Yahoo 奇摩股市抓取公司『主要經營業務』簡述（250字內），作為 Gemini Lite 的 RAG 依據。"""
+    """從 Yahoo 奇摩股市抓取公司『主要經營業務』簡述（250字內），自動過濾無效 SEO 預設樣板字。"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     for suffix in (".TW", ".TWO"):
         url = f"https://tw.stock.yahoo.com/quote/{stock_id}{suffix}/profile"
@@ -389,18 +413,21 @@ def fetch_yahoo_company_profile(stock_id: str, timeout: int = 8) -> str:
             if resp.status_code != 200:
                 continue
             text = html.unescape(resp.text)
-            # 嘗試擷取 meta description 或「主要經營業務」段落
-            meta_match = re.search(
-                r'<meta\s+name="description"\s+content="([^"]+)"', text
-            )
             desc_parts: list[str] = []
-            if meta_match:
-                desc_parts.append(meta_match.group(1).strip())
             biz_match = re.search(
                 r"主要經營業務[</\w\s\"=-]*?>([^<]{10,300})<", text
             )
             if biz_match:
-                desc_parts.append(biz_match.group(1).strip())
+                biz_str = biz_match.group(1).strip()
+                if not _is_yahoo_boilerplate(biz_str):
+                    desc_parts.append(biz_str)
+            meta_match = re.search(
+                r'<meta\s+name="description"\s+content="([^"]+)"', text
+            )
+            if meta_match:
+                meta_str = meta_match.group(1).strip()
+                if not _is_yahoo_boilerplate(meta_str):
+                    desc_parts.append(meta_str)
             combined = "｜".join(desc_parts).strip()
             if combined:
                 return combined[:250]
@@ -409,27 +436,110 @@ def fetch_yahoo_company_profile(stock_id: str, timeout: int = 8) -> str:
     return ""
 
 
+def infer_valuation_regime(
+    sector_group: str = "",
+    sub_industry: str = "",
+    official_industry: str = "",
+) -> str:
+    """根據產業與次產業名稱自動推導估值體系屬性（供舊快取無縫相容與 AI 輸出防呆）。"""
+    text = f"{sector_group} {sub_industry} {official_industry}".strip()
+    if any(
+        k in text
+        for k in (
+            "航運",
+            "貨櫃",
+            "散裝",
+            "航空",
+            "鋼鐵",
+            "塑化",
+            "塑膠",
+            "造紙",
+            "水泥",
+            "面板",
+            "營建",
+            "建材",
+            "標準型記憶體",
+            "DRAM",
+            "玻璃",
+            "橡膠",
+        )
+    ):
+        return "景氣循環股"
+    if any(k in text for k in ("IP", "矽智財", "新藥", "資安", "高階IC")):
+        return "高本益比/題材研發股"
+    if any(
+        k in text
+        for k in (
+            "半導體",
+            "IC",
+            "晶圓",
+            "封測",
+            "AI",
+            "伺服器",
+            "先進封裝",
+            "散熱",
+            "高速傳輸",
+            "重電",
+            "特用化學",
+            "PCB",
+            "載板",
+            "綠能",
+            "儲能",
+            "醫材",
+            "被動元件",
+            "連接器",
+            "電源",
+            "網通",
+            "光電",
+            "電子零組件",
+            "AI與電子硬體組裝",
+        )
+    ):
+        return "成長型科技與利基股"
+    return "穩健價值與高息股"
+
+
 def build_taxonomy_prompt(
     stock_id: str,
     stock_name: str,
     official_industry: str,
     business_summary: str = "",
 ) -> str:
-    biz_line = f"\n- 公開主要業務與產品摘要：{business_summary}" if business_summary else ""
-    return f"""你是一位精通台灣上市櫃供應鏈的資深產業研究員。請針對台股「{stock_id} {stock_name}」進行細分產業與同業競爭對手定義。
-- 證交所官方分類：{official_industry}{biz_line}
+    clean_biz = "" if _is_yahoo_boilerplate(business_summary) else business_summary.strip()
+    biz_display = clean_biz if clean_biz else "（無公開摘要或為入口網站預設字串，請直接調用內建知識庫）"
+    return f"""你是一位精通台灣上市櫃供應鏈與產業鏈結的資深產業研究員。請針對台股「{stock_id} {stock_name}」進行細分產業與直接競爭對手定義。
 
-請嚴格輸出單一 JSON 物件（不要加上 Markdown 語法），必須包含以下欄位：
+【系統提供之參考背景】
+- 證交所/櫃買中心官方分類：{official_industry}
+- 業務與產品描述摘要：{biz_display}
+（注意：若上方描述摘要為入口網站預設字串如「Yahoo奇摩股市提供公司基本資料...」或內容空泛，請忽略該摘要，直接調用你內建的台灣上市櫃公司知識庫進行精確定義。）
+
+【分類與判準鐵則】
+1. sector_group（六大板塊，供後續投資組合分散風控使用，請嚴格擇一）：
+   - "半導體"（IC設計、晶圓代工、封測、半導體設備與材料）
+   - "AI與電子硬體組裝"（伺服器、PC/NB、網通設備、系統整合、光電面板）
+   - "電子零組件"（PCB、被動元件、散熱、機殼、連接器、電源供應器、記憶體模組）
+   - "生技醫療與綠能重電"（製藥、醫材、再生能源、重電設備、儲能、環保工程）
+   - "傳產製造與原物料"（塑化、鋼鐵、造紙、紡織、化工、水泥、汽車零組件、機械工具機、營建建材）
+   - "金融、航運與內需服務"（金控銀行、保險、貨櫃/散裝/航空運輸、電信、百貨零售、觀光餐飲、軟體資訊服務）
+2. valuation_regime（估值體系屬性，決定後續目標價本益比乘數上限，請嚴格擇一）：
+   - "景氣循環股"（航運、鋼鐵、塑化、造紙、水泥、面板、標準型記憶體、營建，合理 PE 8~10x）
+   - "穩健價值與高息股"（金融、電信、成熟傳產、通路、成熟電子代工，合理 PE 10~15x）
+   - "成長型科技與利基股"（AI伺服器、先進封裝設備、高速傳輸、散熱、重電、特用化學，合理 PE 16~25x）
+   - "高本益比/題材研發股"（IP矽智財、新藥研發、高階IC設計、資安軟體，適用高 PE 或 PSR/PBR 估值）
+3. peers（同業競爭對手）：必須為台灣上市櫃「真實存在且業務高度重疊」的 2~4 家最直接競爭同業（格式：4碼代號+空白+股名）。嚴禁湊數填入上下游關係或無關之大型權值股。
+
+請嚴格輸出單一合法 JSON 物件（不要加上 Markdown 程式碼區塊語法，不要任何前後導言）：
 {{
-  "sector_group": "請從 {list(VALID_SECTOR_GROUPS)} 擇一",
-  "sub_industry": "具體細分次產業名稱（15字內，例如：被動元件-MLCC與晶片電阻、IC設計-電源管理IC、PCB-ABF載板、貨櫃航運、重電設備與變壓器）",
-  "component_nature": "請嚴格從 {list(VALID_COMPONENT_NATURES)} 擇一。判準：IC/二極體/MOSFET/雷射等需外部電源主動控制訊號者選『主動元件』；MLCC電容/電阻/電感/石英元件等選『被動元件』；PCB/散熱/機殼/連接器/電源供應器選『機構與模組周邊』；整機/伺服器/設備廠選『系統與終端設備』；傳產/航運/金融/生技/純軟體等非電子硬體選『非電子/不適用』",
-  "supply_chain_role": "請從 {list(VALID_SUPPLY_CHAIN_ROLES)} 擇一",
+  "sector_group": "從上方六大板塊嚴格擇一",
+  "sub_industry": "具體細分次產業名稱（15字內，如：學名藥與癌症特殊劑型、被動元件-MLCC、航空客貨運）",
+  "valuation_regime": "從上方四大估值體系嚴格擇一",
+  "component_nature": "從 {list(VALID_COMPONENT_NATURES)} 擇一",
+  "supply_chain_role": "從 {list(VALID_SUPPLY_CHAIN_ROLES)} 擇一",
   "core_products": "主力產品或核心業務（以頓號分隔，35字內）",
   "theme_tags": ["核心題材標籤1", "核心題材標籤2"],
-  "peers": ["同業4碼代號1 同業股名1", "同業4碼代號2 同業股名2", "同業4碼代號3 同業股名3"]
-}}
-注意：peers 必須為台灣上市櫃真實存在的 2~4 家最直接競爭同業（4碼數字代號+空白+股名）。"""
+  "peers": ["同業4碼代號1 同業股名1", "同業4碼代號2 同業股名2"]
+}}"""
 
 
 def sanitize_taxonomy_record(
@@ -443,36 +553,65 @@ def sanitize_taxonomy_record(
 ) -> dict[str, Any]:
     """對 AI 回傳的分類結果執行 Enum 防呆與真實台股代號防幻覺清洗。"""
     today_iso = (as_of or datetime.now(TAIPEI_TZ).date()).isoformat()
+    sub_industry = str(raw_data.get("sub_industry", "")).strip() or official_industry
+    combined_ind = f"{official_industry} {sub_industry}".strip()
 
     sector_group = str(raw_data.get("sector_group", "")).strip()
+    # 相容舊版板塊名稱映射
+    if sector_group == "生技醫療與綠能":
+        sector_group = "生技醫療與綠能重電"
+    elif sector_group == "電子硬體與零組件":
+        if any(
+            k in combined_ind
+            for k in ("零組件", "被動", "PCB", "載板", "散熱", "機殼", "連接器", "電源", "記憶體模組")
+        ):
+            sector_group = "電子零組件"
+        else:
+            sector_group = "AI與電子硬體組裝"
+    elif sector_group == "軟體、網通與資安":
+        sector_group = "AI與電子硬體組裝" if "網通" in combined_ind else "金融、航運與內需服務"
+
     if sector_group not in VALID_SECTOR_GROUPS:
-        if "半導體" in official_industry:
+        if "半導體" in combined_ind:
             sector_group = "半導體"
-        elif any(k in official_industry for k in ("電子", "電腦", "光電", "通信")):
-            sector_group = "電子硬體與零組件"
-        elif any(k in official_industry for k in ("軟體", "資訊", "數位")):
-            sector_group = "軟體、網通與資安"
-        elif any(k in official_industry for k in ("生技", "綠能", "環保")):
-            sector_group = "生技醫療與綠能"
-        elif any(k in official_industry for k in ("金融", "航運", "貿易", "居家", "觀光")):
+        elif any(
+            k in combined_ind
+            for k in ("零組件", "被動", "PCB", "載板", "散熱", "機殼", "連接器", "電源", "記憶體模組")
+        ):
+            sector_group = "電子零組件"
+        elif any(k in combined_ind for k in ("電子", "電腦", "光電", "通信", "網通", "伺服器")):
+            sector_group = "AI與電子硬體組裝"
+        elif any(k in combined_ind for k in ("生技", "醫療", "製藥", "醫材", "綠能", "重電", "環保", "儲能")):
+            sector_group = "生技醫療與綠能重電"
+        elif any(
+            k in combined_ind
+            for k in ("金融", "銀行", "保險", "航運", "貿易", "居家", "觀光", "百貨", "餐飲", "電信", "軟體", "資訊", "數位")
+        ):
             sector_group = "金融、航運與內需服務"
         else:
             sector_group = "傳產製造與原物料"
 
+    valuation_regime = str(raw_data.get("valuation_regime", "")).strip()
+    if valuation_regime not in VALID_VALUATION_REGIMES:
+        valuation_regime = infer_valuation_regime(sector_group, sub_industry, official_industry)
+
     component_nature = str(raw_data.get("component_nature", "")).strip()
     if component_nature not in VALID_COMPONENT_NATURES:
-        if "半導體" in official_industry:
+        if "半導體" in combined_ind:
             component_nature = "主動元件"
-        elif any(k in official_industry for k in ("電子", "電腦", "光電", "通信")):
+        elif any(k in combined_ind for k in ("電子", "電腦", "光電", "通信", "零組件")):
             component_nature = "機構與模組周邊"
         else:
             component_nature = "非電子/不適用"
 
     supply_chain_role = str(raw_data.get("supply_chain_role", "")).strip()
+    if supply_chain_role == "上游(IP/材料/晶圓/原物料)":
+        supply_chain_role = "上游(IP/材料/原物料/研發)"
+    elif supply_chain_role == "中游(製造/封測/零組件/加工)":
+        supply_chain_role = "中游(製造/封測/零組件/製劑加工)"
     if supply_chain_role not in VALID_SUPPLY_CHAIN_ROLES:
-        supply_chain_role = "中游(製造/封測/零組件/加工)"
+        supply_chain_role = "中游(製造/封測/零組件/製劑加工)"
 
-    sub_industry = str(raw_data.get("sub_industry", "")).strip() or official_industry
     core_products = str(raw_data.get("core_products", "")).strip()[:60]
 
     raw_tags = raw_data.get("theme_tags")
@@ -509,6 +648,7 @@ def sanitize_taxonomy_record(
         "official_industry": official_industry,
         "sector_group": sector_group,
         "sub_industry": sub_industry,
+        "valuation_regime": valuation_regime,
         "component_nature": component_nature,
         "supply_chain_role": supply_chain_role,
         "core_products": core_products,
@@ -542,6 +682,33 @@ def format_taxonomy_badge(rec: Mapping[str, Any] | None) -> str:
     return f"🏷️ 細分產業：{nature_tag}{sub_ind}{prod_part} ｜ 🔗 相似同業：{peers_str}"
 
 
+def format_stage1_taxonomy_header(rec: Mapping[str, Any] | None) -> str:
+    """產生注入 Stage 1 表頭的產業定錨、估值屬性與同業對標字串（Stage 0 ➔ Stage 1 交接棒）。"""
+    if not rec:
+        return ""
+    sector_group = str(rec.get("sector_group", "")).strip() or "未分類"
+    sub_ind = str(rec.get("sub_industry", "")).strip() or str(rec.get("official_industry", "")).strip() or "未分類"
+    val_regime = str(rec.get("valuation_regime", "")).strip()
+    if val_regime not in VALID_VALUATION_REGIMES:
+        val_regime = infer_valuation_regime(
+            sector_group,
+            sub_ind,
+            str(rec.get("official_industry", "")).strip(),
+        )
+    peers_raw = rec.get("peers", "[]")
+    if isinstance(peers_raw, str):
+        try:
+            peers_list = json.loads(peers_raw)
+        except Exception:  # noqa: BLE001
+            peers_list = []
+    elif isinstance(peers_raw, list):
+        peers_list = peers_raw
+    else:
+        peers_list = []
+    peers_str = "、".join(str(p) for p in peers_list[:4]) if peers_list else "無直接對標"
+    return f"產業定錨：{sector_group} 〉{sub_ind}｜估值屬性：{val_regime}｜同業：{peers_str}"
+
+
 DEFAULT_SECTOR_BENCHMARK_PE: float = 20.0
 MIN_VALID_SECTOR_PE_SAMPLES: int = 4
 MAX_VALID_PE_THRESHOLD: float = 120.0
@@ -565,13 +732,13 @@ def _infer_broad_sector_group(sector_name: str) -> str:
     text = str(sector_name or "").strip()
     if any(k in text for k in ("半導體", "IC", "晶圓", "封測", "IP")):
         return "半導體"
-    if any(k in text for k in ("軟體", "網通", "資安", "資訊", "通信")):
-        return "軟體、網通與資安"
-    if any(k in text for k in ("電子", "電腦", "伺服器", "光電", "PCB", "載板", "被動元件", "散熱", "機殼", "連接器", "電源")):
-        return "電子硬體與零組件"
-    if any(k in text for k in ("生技", "醫療", "綠能", "環保")):
-        return "生技醫療與綠能"
-    if any(k in text for k in ("金融", "航運", "貿易", "觀光", "內需")):
+    if any(k in text for k in ("零組件", "PCB", "載板", "被動元件", "MLCC", "散熱", "機殼", "連接器", "電源", "記憶體模組")):
+        return "電子零組件"
+    if any(k in text for k in ("電子", "電腦", "伺服器", "光電", "網通", "通信")):
+        return "AI與電子硬體組裝"
+    if any(k in text for k in ("生技", "醫療", "製藥", "醫材", "綠能", "重電", "環保", "儲能")):
+        return "生技醫療與綠能重電"
+    if any(k in text for k in ("金融", "銀行", "保險", "航運", "貿易", "觀光", "餐飲", "百貨", "電信", "軟體", "資安", "資訊", "內需")):
         return "金融、航運與內需服務"
     return "傳產製造與原物料"
 
@@ -842,7 +1009,14 @@ class TaxonomyService:
 
     def get_cached(self, stock_id: str) -> dict[str, Any] | None:
         self.load()
-        return self._records.get(str(stock_id).strip())
+        rec = self._records.get(str(stock_id).strip())
+        if rec and not str(rec.get("valuation_regime", "")).strip():
+            rec["valuation_regime"] = infer_valuation_regime(
+                str(rec.get("sector_group", "")),
+                str(rec.get("sub_industry", "")),
+                str(rec.get("official_industry", "")),
+            )
+        return rec
 
     def compute_sector_median_pe(
         self,
@@ -893,33 +1067,40 @@ class TaxonomyService:
         today = as_of or datetime.now(TAIPEI_TZ).date()
         existing = self._records.get(sid)
         if existing and self._is_fresh(existing, today):
+            if not str(existing.get("valuation_regime", "")).strip():
+                existing["valuation_regime"] = infer_valuation_regime(
+                    str(existing.get("sector_group", "")),
+                    str(existing.get("sub_industry", "")),
+                    str(existing.get("official_industry", "")),
+                )
             return existing
 
         s_name = stock_name or (existing or {}).get("stock_name", "") or (valid_stock_map or {}).get(sid, sid)
         off_ind = official_industry or (existing or {}).get("official_industry", "其他")
-        biz_desc = fetch_yahoo_company_profile(sid)
-        prompt = build_taxonomy_prompt(sid, s_name, off_ind, biz_desc)
-
-        model_name = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest").strip() or "gemini-flash-lite-latest"
         raw_dict: dict[str, Any] = {}
-        try:
-            meta = asyncio.run(
-                ask_gemini_with_meta(
-                    prompt,
-                    model=model_name,
-                    tag=f"taxonomy_{sid}",
-                    task_type="TAXONOMY",
-                    stock_id=sid,
-                    custom_id=f"TAXONOMY_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{sid}",
-                    blocking_bq_log=True,
+        if os.getenv("GEMINI_API_KEY", "").strip():
+            biz_desc = fetch_yahoo_company_profile(sid)
+            prompt = build_taxonomy_prompt(sid, s_name, off_ind, biz_desc)
+
+            model_name = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest").strip() or "gemini-flash-lite-latest"
+            try:
+                meta = asyncio.run(
+                    ask_gemini_with_meta(
+                        prompt,
+                        model=model_name,
+                        tag=f"taxonomy_{sid}",
+                        task_type="TAXONOMY",
+                        stock_id=sid,
+                        custom_id=f"TAXONOMY_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{sid}",
+                        blocking_bq_log=True,
+                    )
                 )
-            )
-            text = re.sub(r"^```(?:json)?|```$", "", str(meta.text or "").strip(), flags=re.MULTILINE).strip()
-            start, end = text.find("{"), text.rfind("}")
-            if start >= 0 and end > start:
-                raw_dict = json.loads(text[start : end + 1])
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Gemini taxonomy generation failed for %s: %s", sid, exc)
+                text = re.sub(r"^```(?:json)?|```$", "", str(meta.text or "").strip(), flags=re.MULTILINE).strip()
+                start, end = text.find("{"), text.rfind("}")
+                if start >= 0 and end > start:
+                    raw_dict = json.loads(text[start : end + 1])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Gemini taxonomy generation failed for %s: %s", sid, exc)
 
         stock_map = dict(valid_stock_map) if valid_stock_map else {}
         if not stock_map:

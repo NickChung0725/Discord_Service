@@ -10,6 +10,7 @@ from fundamental_analyzer import (
     FundamentalAnalyzer,
     RSS_NO_CONTENT_NOTE,
     build_hard_warnings,
+    check_revenue_staleness,
     filter_and_clean_rss,
     sanitize_stage1_json,
 )
@@ -64,6 +65,20 @@ class SanitizerTests(unittest.TestCase):
         self.assertTrue(fixed["trade_plan"]["target_price_1"].startswith("⚠️"))
         self.assertEqual(fixed["trade_plan"]["target_price_2"], "120 元")
 
+    def test_exempts_overheated_or_avoid_tactical_targets_from_deadlock_warning(self) -> None:
+        # 當個股超漲 (如收盤 125 元、17MA 乖離 > +12%) 判定為「🚫 觀望避開」或填寫「超漲不設目標價（待拉回 17MA 重估）」時，
+        # 不得誤將 "17MA" 解析為 17 元或強迫報出高於 125 元的目標價而觸發 ⚠️ 警告死鎖。
+        data = {
+            "trade_plan": {
+                "tactical_type": "🚫 觀望避開",
+                "target_price_1": "超漲不設目標價（待拉回 17MA 95.66 元重估）",
+                "target_price_2": "N/A（待拉回支撐確認後重估）",
+            }
+        }
+        fixed = sanitize_stage1_json(data, 125.0)
+        self.assertFalse(fixed["trade_plan"]["target_price_1"].startswith("⚠️"))
+        self.assertFalse(fixed["trade_plan"]["target_price_2"].startswith("⚠️"))
+
     def test_hard_warnings(self) -> None:
         self.assertEqual(build_hard_warnings({"vol_lots": 500, "op_margin_pct": 5.0}), [])
         self.assertEqual(len(build_hard_warnings({"vol_lots": 100, "op_margin_pct": -1.0, "contract_liab": None})), 2)
@@ -81,19 +96,146 @@ class SnapshotTrendTests(unittest.TestCase):
         )
         rev = pd.DataFrame({"yoy_pct": [10.0, 20.0, 60.0]})
         lines = FundamentalAnalyzer.build_snapshot_trend_lines(
-            wide, rev, {"parent_equity": 1000.0, "capital_stock": 100.0}, 100.0
+            wide,
+            rev,
+            {"parent_equity": 1000.0, "capital_stock": 100.0},
+            100.0,
+            div_latest={"cash_dividend": 4.5},
         )
         text = "\n".join(lines)
         self.assertIn("PE 10.00 倍", text)
         self.assertIn("PB 1.00 倍", text)  # BPS = 1000 / (100 / 10) = 100
+        self.assertIn("近一年現金殖利率 4.50%", text)
         self.assertIn("毛利率 42.42%（QoQ +3.10%, YoY +1.85%）", text)
         self.assertIn("加速成長", text)
+
+    def test_stale_revenue_guard_flags_outdated_monthly_revenue(self) -> None:
+        from datetime import date
+
+        is_stale, msg = check_revenue_staleness("2024-11", reference_date=date(2026, 10, 25))
+        self.assertTrue(is_stale)
+        self.assertIn("⚠️ 資料缺漏/過期", msg)
+
+        wide = pd.DataFrame([{"year_qtr": "2026Q2", "gross_margin_pct": 30.0, "op_margin_pct": 10.0, "ttm_eps": 5.0}])
+        rev_stale = pd.DataFrame(
+            [{"rev_ym": "2024-11", "yoy_pct": -52.0}, {"rev_ym": "2024-11", "yoy_pct": -52.0}]
+        )
+        text = "\n".join(FundamentalAnalyzer.build_snapshot_trend_lines(wide, rev_stale, {}, 100.0))
+        self.assertIn("⚠️ 資料缺漏/過期", text)
+        self.assertNotIn("高檔鈍化／動能趨緩", text)
 
     def test_pe_na_when_ttm_eps_non_positive(self) -> None:
         wide = pd.DataFrame([{"year_qtr": "2026Q2", "ttm_eps": -1.0}])
         text = "\n".join(FundamentalAnalyzer.build_snapshot_trend_lines(wide, pd.DataFrame(), {}, 50.0))
         self.assertIn("PE N/A", text)
         self.assertIn("PB N/A", text)
+
+    def test_build_markdown_context_injects_stage0_header_scales_units_and_includes_margin_cols(self) -> None:
+        from unittest.mock import Mock
+
+        cache = Mock()
+        cache._get_worksheet.side_effect = lambda name: name  # noqa: SLF001
+        cache._get_records_cached.return_value = [  # noqa: SLF001
+            {"stock_id": "2618", "stock_name": "長榮航", "industry_category": "航運業"}
+        ]
+        sheets = {
+            "05_AI_Metrics_Wide": pd.DataFrame(
+                [
+                    {
+                        "year_qtr": "2026Q2",
+                        "rev_亿元": 550.0,
+                        "gross_margin_pct": 22.5,
+                        "op_expense_pct": 8.0,
+                        "op_margin_pct": 14.5,
+                        "non_op_share_pct": 3.2,
+                        "parent_net_margin_pct": 12.1,
+                        "eps": 1.25,
+                        "ttm_eps": 4.74,
+                        "qtr_rev_yoy_pct": 12.0,
+                        "dio_days": 15.0,
+                        "dso_days": 20.0,
+                        "dpo_days": 25.0,
+                        "ccc_days": 10.0,
+                        "total_debt_亿元": 800.0,
+                        "net_debt_ratio_pct": -35.81,
+                        "current_ratio_pct": 120.0,
+                        "quick_ratio_pct": 110.0,
+                        "interest_coverage": 15.0,
+                        "parent_roe_pct": 18.0,
+                        "ocf_to_ni_pct": 140.0,
+                        "ebitda_亿元": 120.0,
+                    }
+                ]
+            ),
+            "02_Income_Statement": pd.DataFrame(),
+            "03_Balance_Sheet": pd.DataFrame(
+                [
+                    {
+                        "year_qtr": "2026Q2",
+                        "inventory": 75_302_959_000.0,  # 753.03 億
+                        "accounts_receivable": 12_000_000_000.0,  # 120.00 億
+                        "accounts_payable": 10_000_000_000.0,
+                        "contract_liab_current": 50_000_000_000.0,
+                        "cash_and_equiv": 115_800_000_000.0,  # 1158.00 億
+                        "short_term_debt": 5_000_000_000.0,
+                        "bonds_payable": 0.0,
+                        "long_term_debt": 75_000_000_000.0,
+                        "total_liabilities": 180_000_000_000.0,
+                        "total_equity": 138_000_000_000.0,
+                        "parent_equity": 138_000_000_000.0,
+                        "capital_stock": 54_000_000_000.0,
+                    }
+                ]
+            ),
+            "04_Cash_Flow": pd.DataFrame(
+                [
+                    {
+                        "year_qtr": "2026Q2",
+                        "operating_cf": 15_000_000_000.0,  # 150.00 億
+                        "capex": 5_223_000_000.0,  # 52.23 億
+                        "free_cf": 9_777_000_000.0,  # 97.77 億
+                    }
+                ]
+            ),
+            "01_Monthly_Revenue": pd.DataFrame(
+                [{"rev_ym": "2024-11", "revenue": 18_500_000_000.0, "mom_pct": 1.2, "yoy_pct": 8.5, "raw_date": "2024-11-10"}]
+            ),
+            "06_Dividend_Policy": pd.DataFrame(
+                [{"div_year": "2025", "cash_dividend": 2.0, "stock_dividend": 0.0, "total_dividend": 2.0, "payout_ratio_pct": 42.0}]
+            ),
+            "07_Chip_Summary": pd.DataFrame(
+                [
+                    {
+                        "trade_week": "2026W43",
+                        "raw_date": "2026-10-25",
+                        "foreign_holding_pct": 28.5,
+                        "three_inst_net_5d_lots": 39000,
+                        "chip_quadrant_tag": "🟢 資減法人買（籌碼沉澱最優）",
+                        "margin_balance_lots": 42000,
+                        "margin_utilization_pct": 12.5,
+                        "margin_chg_5d_lots": -1500,
+                        "margin_chg_20d_lots": -3200,
+                        "short_margin_ratio_pct": 8.4,
+                        "est_margin_maint_pct": 168.5,
+                    }
+                ]
+            ),
+        }
+        cache._read_stock_rows.side_effect = lambda ws, sid: sheets.get(ws, pd.DataFrame())  # noqa: SLF001
+
+        analyzer = FundamentalAnalyzer(cache)
+        analyzer.fetch_free_stock_news_and_search = Mock(return_value="")  # type: ignore[method-assign]
+        ctx = analyzer.build_markdown_context("2618", include_outlook=False)
+
+        self.assertIn("【Stage 0 產業定錨】", ctx)
+        self.assertIn("【Python 預先計算估值與技術錨點", ctx)
+        self.assertIn("753.03", ctx)  # 75,302,959,000 元 -> 753.03 億
+        self.assertNotIn("75302959000", ctx)
+        self.assertIn("97.77", ctx)  # free_cf 9,777,000,000 元 -> 97.77 億
+        self.assertIn("185.00", ctx)  # 月營收 18,500,000,000 元 -> 185.00 億
+        self.assertIn("⚠️ 資料缺漏/過期", ctx)  # 2024-11 月營收過期警示
+        self.assertIn("chip_quadrant_tag", ctx)
+        self.assertIn("est_margin_maint_pct", ctx)
 
 
 class Phase3RegimeAndAuditTests(unittest.TestCase):

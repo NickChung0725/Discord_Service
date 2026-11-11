@@ -201,6 +201,8 @@ def enrich_with_taxonomy(
     else:
         result["sub_industry"] = ""
     result["component_nature"] = ""
+    result["sector_group"] = ""
+    result["valuation_regime"] = ""
     result["taxonomy_badge"] = ""
     if result.empty:
         return result
@@ -245,6 +247,8 @@ def enrich_with_taxonomy(
                 result.at[idx, "sub_industry"] = (
                     str(rec.get("sub_industry") or result.at[idx, "sub_industry"]).strip()
                 )
+                result.at[idx, "sector_group"] = str(rec.get("sector_group", "")).strip()
+                result.at[idx, "valuation_regime"] = str(rec.get("valuation_regime", "")).strip()
                 result.at[idx, "component_nature"] = str(rec.get("component_nature", "")).strip()
                 result.at[idx, "taxonomy_badge"] = format_taxonomy_badge(rec)
     except Exception as error:  # noqa: BLE001
@@ -342,8 +346,10 @@ def build_dossier(index: int, row: Mapping[str, object], snapshot: str, summary:
 
     tech_lines.append(f"  - 量能結構：{_fmt_volume_line(row)}")
     tax_badge = str(row.get("taxonomy_badge", "") or "").strip()
+    val_regime = str(row.get("valuation_regime", "") or "").strip()
     if tax_badge:
-        tech_lines.insert(0, f"  - {tax_badge}")
+        regime_suffix = f" ｜ ⚖️ 估值屬性：{val_regime}" if val_regime else ""
+        tech_lines.insert(0, f"  - {tax_badge}{regime_suffix}")
     tech_lines.append(
         f"  - 法人測幅參考錨點：17MA={_num(ma17_val)}｜17MA正乖離極值(+12%)={ma17_plus_12}"
         f"｜45MA防守={_num(ma45_val)}｜收盤-4%停損={stop_minus_4}"
@@ -666,8 +672,8 @@ def _volume_ratio_from_row(row: Mapping[str, object]) -> float | None:
 def _is_overheated_candidate(row: Mapping[str, object]) -> bool:
     """Stage 2 前置 Python 排雷：天量過熱或已超漲逼近 17MA+12%。
 
-    規則：
-    - 量比 > 4.5x（天量過熱）
+    規則（與 Stage 1 & Stage 2 Prompt 統一門檻）：
+    - 量比 > 4.0x（天量過熱）
     - 或 收盤價 > 17MA * 1.12（短線超漲）
 
     缺資料者不判定（避免誤殺）。
@@ -677,7 +683,7 @@ def _is_overheated_candidate(row: Mapping[str, object]) -> bool:
     close_val = _parse_optional_num(row.get("close"))
     ma17_val = _parse_optional_num(row.get("MA17"))
 
-    if ratio is not None and ratio > 4.5:
+    if ratio is not None and ratio > 4.0:
         return True
     if close_val is not None and ma17_val is not None and ma17_val > 0 and close_val > ma17_val * 1.12:
         return True
