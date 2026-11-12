@@ -4,6 +4,18 @@
 
 ---
 
+## [v5.7.5] - 2026-11-12
+### 🔧 優化與錯誤修正 (Fixed & Changed) — 修復 Stage 0 Yahoo 業務摘要抓取與 Stage 1 新聞改用 Yahoo 個股 RSS 實質摘要
+* **修復 Stage 0 `fetch_yahoo_company_profile()` 永遠回傳空字串之 Regex 缺陷（[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)）**：
+  * Yahoo 股市個股 `/profile` 頁面「主要經營業務」實際為多層 `<span>` 接含括號 class 的 `<div>`（如 `<span>主要經營業務</span></span><div class="Py(8px)...">...</div>`），舊版 Regex `主要經營業務[</\w\s\"=-]*?>([^<]{10,300})<` 因字元集未包含 `>`、`(`、`)` 導致全面失效、全市場皆退回內建知識庫。
+  * 新增 `_extract_yahoo_business_summary()` 解析結構化 `<div>` 內容並清洗換行空白（保留舊版結構相容 fallback），同步於 [`tests/test_taxonomy_and_prefilter.py`](/tests/test_taxonomy_and_prefilter.py) 補齊單元測試。
+* **升級 Stage 1 `fetch_free_stock_news_and_search()` 改以 Yahoo 股市個股 RSS 為主源並附帶實質內文摘要（[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)）**：
+  * 原 Google News RSS 的 `description` 僅重複「標題 + 媒體名稱」、未依發布時間排序且未過濾 `cmoney.tw/forum` 論壇貼文，加上 AI 端未啟用網頁瀏覽工具，導致模型僅能憑單一舊論壇標題推測因果。
+  * 新增 `_fetch_yahoo_stock_rss()`（`https://tw.stock.yahoo.com/rss?s=<stock_id>`），優先取近 30 天（無則放寬至 180 天）依發布時間由新到舊排序之官方新聞與 MOPS 重大訊息公告，並附上實質內文 `摘要：`（最多 200 字）及距今天數 `(N 天前)`。
+  * Yahoo RSS 失敗或無結果時才退回 Google News RSS（優先 `when:30d`）；強化 `filter_and_clean_rss()` 剔除 `cmoney.tw/forum` 論壇連結與「標題 + 來源」空殼摘要，並於無摘要時明確標註 `（僅標題，無內文摘要，嚴禁單憑標題推論因果）`。同步於 [`tests/test_stage_guards.py`](/tests/test_stage_guards.py) 補齊單元測試。
+
+---
+
 ## [v5.7.4] - 2026-11-12
 ### 🔧 優化與錯誤修正 (Fixed & Changed) — 修復 BigQuery 永久日誌表 Schema 型別衝突與超時截斷
 * **修復 `save_to_permanent_logs()` BigQuery LoadJob Schema 不相容導致全系統日誌寫入失敗（[`services/ai_service.py`](/services/ai_service.py)）**：

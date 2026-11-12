@@ -36,6 +36,53 @@ class RssFilterTests(unittest.TestCase):
         items = [{"title": f"新聞{i}", "description": f"內容不相同的說明文字 {i} 號", "pubDate": ""} for i in range(9)]
         self.assertEqual(len(filter_and_clean_rss(items, now=self.NOW)), 5)
 
+    def test_drops_forum_links_and_sorts_newest_first(self) -> None:
+        items = [
+            {"title": "舊聞", "link": "https://news.example.com/1", "description": "不同內容舊聞", "pubDate": "Mon, 19 Oct 2026 00:00:00 GMT"},
+            {"title": "論壇文", "link": "https://www.cmoney.tw/forum/article/123", "description": "論壇內文", "pubDate": "Wed, 28 Oct 2026 00:00:00 GMT"},
+            {"title": "最新公告", "link": "https://tw.stock.yahoo.com/news/2", "description": "不同內容最新公告", "pubDate": "Tue, 27 Oct 2026 00:00:00 GMT"},
+        ]
+        cleaned = filter_and_clean_rss(items, now=self.NOW, sort_by_date=True)
+        self.assertEqual([c["title"] for c in cleaned], ["最新公告", "舊聞"])
+
+    def test_fetch_news_prefers_yahoo_rss_with_summary_and_falls_back_to_google(self) -> None:
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from unittest.mock import Mock, patch
+
+        with TemporaryDirectory() as tmpdir:
+            analyzer = FundamentalAnalyzer(cache=Mock(), reports_dir=Path(tmpdir))
+            yahoo_items = [
+                {
+                    "title": "【公告】達運光電董事長辭任",
+                    "link": "https://tw.stock.yahoo.com/news/1",
+                    "pubDate": "Thu, 22 Oct 2026 10:00:00 GMT",
+                    "source": "Yahoo股市",
+                    "description": "日 期：2026年10月22日公司名稱：達運光電(8045)主 旨：達運光電董事長辭任",
+                }
+            ]
+            with patch.object(analyzer, "_fetch_yahoo_stock_rss", return_value=yahoo_items):
+                out = analyzer.fetch_free_stock_news_and_search("8045", "達運光電")
+            self.assertIn("Yahoo股市個股 RSS", out)
+            self.assertIn("摘要：日 期：2026年10月22日", out)
+
+            google_items = [
+                {
+                    "title": "低軌衛星概念股",
+                    "link": "https://news.google.com/rss/articles/abc",
+                    "pubDate": "Mon, 26 Oct 2026 00:00:00 GMT",
+                    "source": "某媒體",
+                    "description": "低軌衛星概念股 某媒體",
+                }
+            ]
+            with (
+                patch.object(analyzer, "_fetch_yahoo_stock_rss", side_effect=RuntimeError("boom")),
+                patch.object(analyzer, "_fetch_google_news_rss", return_value=google_items),
+            ):
+                out_fb = analyzer.fetch_free_stock_news_and_search("8045", "達運光電")
+            self.assertIn("Google News RSS", out_fb)
+            self.assertIn("僅標題，無內文摘要", out_fb)
+
 
 class SanitizerTests(unittest.TestCase):
     def test_forces_no_data_when_claims_empty_and_fixes_bad_quarter(self) -> None:

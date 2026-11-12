@@ -79,18 +79,36 @@ HARD_MIN_VOLUME_LOTS = 300
 HARD_MIN_CONTRACT_LIAB_YI = 1.0
 
 
-def _rss_item_too_old(item: dict, *, now: datetime | None = None) -> bool:
-    raw = str(item.get("pubDate", "") or "").strip()
-    if not raw:
-        return False
+def _parse_rss_pubdate(raw: str) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
     try:
-        published = parsedate_to_datetime(raw)
+        published = parsedate_to_datetime(text)
     except (TypeError, ValueError):
-        return False
+        return None
     if published.tzinfo is None:
         published = published.replace(tzinfo=timezone.utc)
+    return published
+
+
+def _format_rss_age(raw: str, *, now: datetime | None = None) -> str:
+    published = _parse_rss_pubdate(raw)
+    if published is None:
+        return ""
     reference = now or datetime.now(timezone.utc)
-    return (reference - published) > timedelta(days=RSS_MAX_AGE_DAYS)
+    days = max(0, (reference - published).days)
+    return f"{days} 天前"
+
+
+def _rss_item_too_old(
+    item: dict, *, now: datetime | None = None, max_age_days: int = RSS_MAX_AGE_DAYS
+) -> bool:
+    published = _parse_rss_pubdate(str(item.get("pubDate", "") or ""))
+    if published is None:
+        return False
+    reference = now or datetime.now(timezone.utc)
+    return (reference - published) > timedelta(days=max_age_days)
 
 
 def filter_and_clean_rss(
@@ -98,39 +116,52 @@ def filter_and_clean_rss(
     is_guidance: bool = False,
     *,
     now: datetime | None = None,
+    max_age_days: int = RSS_MAX_AGE_DAYS,
+    sort_by_date: bool = False,
 ) -> list[dict]:
-    """清洗 RSS 新聞，回傳最多 5 筆。
+    """清洗 RSS 新聞，回傳最多 5 筆（sort_by_date=True 時依發布時間由新到舊排序）。
 
-    1. 剔除 CMoney 盤中自動生成的看圖說故事廢文與討論區連結（NOISE_TITLE_PATTERNS）。
-    2. 剔除發布時間超過 180 天之過期舊聞。
+    1. 剔除 CMoney 盤中自動生成的看圖說故事廢文與討論區連結（NOISE_TITLE_PATTERNS / cmoney.tw/forum）。
+    2. 剔除發布時間超過 max_age_days（預設 180 天）之過期舊聞。
     3. 摘要為空、或與標題重複度 > 85%（如富果空殼摘要）時，強制標註無內文，防止 AI 腦補。
        （is_guidance=True 時，摘要為空或與標題完全相同亦視為空殼。）
     摘要欄位優先使用 `summary`，其次為 RSS 解析出的 `description`。
     """
-    valid_items: list[dict] = []
-    for original in news_items:
+    valid_items: list[tuple[float, int, dict]] = []
+    for idx, original in enumerate(news_items):
         item = dict(original)
         title = str(item.get("title", "") or "")
+        link = str(item.get("link", "") or "").lower()
         if any(pat in title for pat in NOISE_TITLE_PATTERNS):
             continue
-        if _rss_item_too_old(item, now=now):
+        if "cmoney.tw/forum" in link:
+            continue
+        if _rss_item_too_old(item, now=now, max_age_days=max_age_days):
             continue
 
         key = "summary" if "summary" in item else "description"
         summary = str(item.get(key, "") or "")
+        source_clean = str(item.get("source", "") or "").strip()
+        summary_wo_source = summary.strip()
+        if source_clean and summary_wo_source.endswith(source_clean):
+            summary_wo_source = summary_wo_source[: -len(source_clean)].rstrip(" -—–|")
         is_shell = False
-        if is_guidance and (not summary.strip() or summary.strip() == title.strip()):
+        if is_guidance and (not summary_wo_source or summary_wo_source == title.strip()):
             is_shell = True
         elif (
-            summary.strip()
-            and difflib.SequenceMatcher(None, title.strip(), summary.strip()).ratio()
+            summary_wo_source
+            and difflib.SequenceMatcher(None, title.strip(), summary_wo_source).ratio()
             > RSS_TITLE_SUMMARY_DUP_RATIO
         ):
             is_shell = True
         if is_shell:
             item[key] = RSS_NO_CONTENT_NOTE
-        valid_items.append(item)
-    return valid_items[:5]
+        published = _parse_rss_pubdate(str(item.get("pubDate", "") or ""))
+        sort_ts = published.timestamp() if published is not None else float("-inf")
+        valid_items.append((sort_ts, -idx, item))
+    if sort_by_date:
+        valid_items.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return [entry[2] for entry in valid_items[:5]]
 
 
 def build_hard_warnings(metrics: dict) -> list[str]:
@@ -1301,23 +1332,89 @@ class FundamentalAnalyzer:
                 break
         return items
 
+    def _fetch_yahoo_stock_rss(self, stock_id: str) -> list[dict[str, str]]:
+        """從 Yahoo 奇摩股市個股 RSS 取得最新新聞與 MOPS 重大訊息公告（含內文摘要）。"""
+        url = "https://tw.stock.yahoo.com/rss"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(
+            url,
+            params={"s": stock_id},
+            headers=headers,
+            timeout=self.news_timeout_seconds,
+        )
+        response.raise_for_status()
+
+        root = ET.fromstring(response.text)
+        items: list[dict[str, str]] = []
+        for item in root.findall("./channel/item"):
+            title = (item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            pub_date = (item.findtext("pubDate") or "").strip()
+            description = html.unescape(re.sub(r"<[^>]+>", " ", item.findtext("description") or ""))
+            description = re.sub(r"\s+", " ", description).strip()
+            if not title or not link:
+                continue
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "pubDate": pub_date,
+                    "source": "Yahoo股市",
+                    "description": description,
+                }
+            )
+            if len(items) >= self.news_max_items:
+                break
+        return items
+
     def fetch_free_stock_news_and_search(self, stock_id: str, stock_name: str) -> str:
-        query = f"{stock_id} {stock_name} 台股".strip()
+        raw_items: list[dict[str, str]] = []
+        source_label = "Yahoo股市個股 RSS"
         try:
-            items = self._fetch_google_news_rss(query)
+            raw_items = self._fetch_yahoo_stock_rss(stock_id)
         except Exception:
-            return "（本次新聞抓取失敗）"
-        items = filter_and_clean_rss(items)
+            raw_items = []
+
+        items = (
+            filter_and_clean_rss(raw_items, is_guidance=True, max_age_days=30, sort_by_date=True)
+            if raw_items
+            else []
+        )
+        if not items and raw_items:
+            items = filter_and_clean_rss(raw_items, is_guidance=True, sort_by_date=True)
+
+        if not items:
+            source_label = "Google News RSS"
+            query_recent = f"{stock_id} {stock_name} 台股 when:30d".strip()
+            try:
+                raw_items = self._fetch_google_news_rss(query_recent)
+            except Exception:
+                raw_items = []
+            items = filter_and_clean_rss(raw_items, is_guidance=True, sort_by_date=True) if raw_items else []
+            if not items:
+                query_fallback = f"{stock_id} {stock_name} 台股".strip()
+                try:
+                    raw_items = self._fetch_google_news_rss(query_fallback)
+                except Exception:
+                    return "（本次新聞抓取失敗）"
+                items = filter_and_clean_rss(raw_items, is_guidance=True, sort_by_date=True)
 
         if not items:
             return "（本次沒有抓到相關新聞）"
 
-        lines = ["\n■ 即時新聞 (Google News RSS)"]
+        lines = [f"\n■ 即時新聞與重大訊息 ({source_label})"]
         for it in items:
-            meta = ""
-            if it.get("source") or it.get("pubDate"):
-                meta = f" — {it.get('source', '').strip()} {it.get('pubDate', '').strip()}".strip()
+            age_str = _format_rss_age(it.get("pubDate", ""))
+            meta_parts = [p for p in (it.get("source", "").strip(), it.get("pubDate", "").strip()) if p]
+            if age_str:
+                meta_parts.append(f"({age_str})")
+            meta = f" — {' '.join(meta_parts)}" if meta_parts else ""
             lines.append(f"- [{it['title']}]({it['link']}){meta}")
+            desc = (it.get("description") or "").strip()
+            if desc and desc != RSS_NO_CONTENT_NOTE and desc != it["title"]:
+                lines.append(f"  摘要：{desc[:200]}")
+            else:
+                lines.append("  摘要：（僅標題，無內文摘要，嚴禁單憑標題推論因果）")
         return "\n".join(lines)
 
     _OUTLOOK_KEYWORDS = ("法說", "展望", "訂單", "產能", "資本支出", "毛利率", "營運", "財測", "指引", "能見度")
@@ -1644,7 +1741,7 @@ class FundamentalAnalyzer:
                 "payment_date",
             ]
             show = df_div[[c for c in cols if c in df_div.columns]].copy()
-            parts.append("\n- 【股利政策 (近 5 年)】")
+            parts.append("\n【股利政策 (近 5 年)】")
             parts.append(show.to_markdown(index=False, floatfmt=".2f"))
         if not df_chip.empty:
             cols = [

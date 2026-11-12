@@ -403,6 +403,29 @@ def _is_yahoo_boilerplate(text: str) -> bool:
     return any(pat in cleaned for pat in _YAHOO_BOILERPLATE_PATTERNS)
 
 
+def _extract_yahoo_business_summary(page_html: str) -> str:
+    """從 Yahoo 奇摩股市 profile 頁面 HTML 解析『主要經營業務』欄位內容。"""
+    match = re.search(
+        r"主要經營業務</span>.*?<div[^>]*>(.*?)</div>",
+        page_html,
+        flags=re.S,
+    )
+    if match:
+        raw = re.sub(r"<[^>]+>", " ", match.group(1))
+        raw = raw.replace("\\r\\n", "\n").replace("\\n", "\n")
+        lines = [line.strip() for line in re.split(r"[\r\n]+", raw) if line.strip()]
+        cleaned = re.sub(r"\s+", " ", " ".join(lines)).strip()
+        if cleaned and not _is_yahoo_boilerplate(cleaned):
+            return cleaned
+    # 相容舊版或簡化 HTML 結構的 fallback
+    legacy = re.search(r"主要經營業務[</\w\s\"=-]*?>([^<]{10,300})<", page_html)
+    if legacy:
+        biz_str = legacy.group(1).strip()
+        if not _is_yahoo_boilerplate(biz_str):
+            return biz_str
+    return ""
+
+
 def fetch_yahoo_company_profile(stock_id: str, timeout: int = 8) -> str:
     """從 Yahoo 奇摩股市抓取公司『主要經營業務』簡述（250字內），自動過濾無效 SEO 預設樣板字。"""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -414,13 +437,9 @@ def fetch_yahoo_company_profile(stock_id: str, timeout: int = 8) -> str:
                 continue
             text = html.unescape(resp.text)
             desc_parts: list[str] = []
-            biz_match = re.search(
-                r"主要經營業務[</\w\s\"=-]*?>([^<]{10,300})<", text
-            )
-            if biz_match:
-                biz_str = biz_match.group(1).strip()
-                if not _is_yahoo_boilerplate(biz_str):
-                    desc_parts.append(biz_str)
+            biz_str = _extract_yahoo_business_summary(text)
+            if biz_str:
+                desc_parts.append(biz_str)
             meta_match = re.search(
                 r'<meta\s+name="description"\s+content="([^"]+)"', text
             )

@@ -24,7 +24,9 @@ from finmind_stock_scanner import (
 from taxonomy_service import (
     VALID_COMPONENT_NATURES,
     VALID_VALUATION_REGIMES,
+    _extract_yahoo_business_summary,
     _is_yahoo_boilerplate,
+    fetch_yahoo_company_profile,
     format_stage1_taxonomy_header,
     format_taxonomy_badge,
     passes_dual_track_liquidity,
@@ -167,6 +169,20 @@ class TaxonomyAndPrefilterTests(unittest.TestCase):
         real_biz = "台灣東洋藥品主要從事癌症用藥、重症抗感染藥物、微脂體與特殊學名藥之研發製造與銷售。"
         self.assertTrue(_is_yahoo_boilerplate(seo_meta))
         self.assertFalse(_is_yahoo_boilerplate(real_biz))
+
+    def test_extract_yahoo_business_summary_parses_nested_div_and_filters_seo_meta(self) -> None:
+        sample_html = (
+            '<meta name="description" content="達運光電(8045.TW)，Yahoo股市提供公司基本資料..."/>'
+            '<span class="Fz(14px)"><span>主要經營業務</span></span>'
+            '<div class="Py(8px) Pstart(12px) Bxz(bb)">有線電視頭端,光收發訊機\r\n寬頻網路系統規劃</div>'
+        )
+        extracted = _extract_yahoo_business_summary(sample_html)
+        self.assertEqual(extracted, "有線電視頭端,光收發訊機 寬頻網路系統規劃")
+
+        fake_resp = Mock(status_code=200, text=sample_html)
+        with patch("taxonomy_service.requests.get", return_value=fake_resp):
+            profile = fetch_yahoo_company_profile("8045")
+        self.assertEqual(profile, "有線電視頭端,光收發訊機 寬頻網路系統規劃")
 
     def test_stage2_sub_industry_cap_allows_different_sub_industries(self) -> None:
         def row(sid: str, sub: str) -> dict:
