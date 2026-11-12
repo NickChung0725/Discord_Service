@@ -812,11 +812,20 @@ def load_local_technical_context(
                 for k in ("taiex", "otc", "futures"):
                     if k in live_dual and k not in market_regime:
                         market_regime[k] = live_dual[k]
-                if not market_regime.get("light") or market_regime.get("summary") == "無本地大盤紅綠燈快取":
-                    if quota.get("regime_label"):
-                        market_regime["light"] = str(quota["regime_label"])
-                    if quota.get("reason"):
-                        market_regime["summary"] = str(quota["reason"])
+                tag = str(quota.get("regime_summary_tag") or "").strip()
+                fut = live_dual.get("futures") if isinstance(live_dual.get("futures"), Mapping) else {}
+                fut_txt = ""
+                if fut and (fut.get("foreign_total_net_short") or fut.get("foreign_net_short_change")):
+                    fut_txt = (
+                        f"｜外資台指期淨空單 {fut.get('foreign_total_net_short', 0):,.0f} 口 "
+                        f"(單日 {fut.get('foreign_net_short_change', 0):+,.0f} 口)"
+                    )
+                if tag:
+                    cur_sum = str(market_regime.get("summary") or "")
+                    if cur_sum in ("", "無本地大盤紅綠燈快取"):
+                        market_regime["summary"] = f"{tag}{fut_txt}"
+                    elif tag not in cur_sum:
+                        market_regime["summary"] = f"{cur_sum}｜🧭 雙核心路由：{tag}{fut_txt}"
         except Exception as reg_err:  # noqa: BLE001
             logger.debug("Dual-index RegimeRouter fallback skipped: %s", reg_err)
 

@@ -1046,6 +1046,7 @@ def enforce_regime_quotas(
     demoted: list[dict] = []
     rb_count = 0
     sb_count = 0
+    red_exempt_used = False
     for pick in decision.get("top_picks", []):
         sid = str(pick.get("stock_id", ""))
         rec = audit_records.get(sid) or pick.get("audit") or {}
@@ -1055,7 +1056,13 @@ def enforce_regime_quotas(
             not tactic and ("突破" in sig_text or "站上" in sig_text) and "回踩" not in sig_text
         )
         if is_rb:
+            pick_score = float(_parse_optional_num(pick.get("score")) or 0.0)
             if rb_count < max_rb:
+                rb_count += 1
+                kept.append(pick)
+            elif max_rb == 0 and not red_exempt_used and pick_score >= 85.0:
+                # SASD v5.9.1: 對齊 Stage 2 授權，紅燈時豁免保留 1 檔高分抗跌真龍頭 (score >= 85)
+                red_exempt_used = True
                 rb_count += 1
                 kept.append(pick)
             else:

@@ -8,7 +8,7 @@
 ### ✨ 新增功能 & 🔧 架構升級 — 全鏈路武器掛載、瑤姐主動式 AI 授權與防衝突補丁
 * **解除 `_enforce_post_audit_guards()` 死板硬攔截，改為風險標註授權 CIO 決策（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
   * `_enforce_post_audit_guards()` 不再將低風報比、處置過熱、大盤紅燈或產業廣度偏低之候選股強制覆寫為 `REJECT_TRAP`，改為將量化風險觀察附加至 `conflict_resolution_reasoning` 與 `bear_case_flaws` 供 Stage 2 CIO 綜合裁量（僅保留 `PORTFOLIO_SWAP_ONLY` 與處置股改採 `STYLE_B_PULLBACK_LIMIT`）。
-  * `AUDITOR_SYSTEM_PROMPT` 同步調整第 3、5 條鐵律（低風報比改採 `STYLE_B_PULLBACK_LIMIT`、換股優於現股改採 `PORTFOLIO_SWAP_ONLY`），避免 Pass 1 與 Pass 2 邏輯衝突；`apply_audit_to_decision()` 補齊 TP1/TP2 防倒掛機制（若原 `target_price_2 <= py_tp1` 自動順延 `+8%`）。
+  * `AUDITOR_SYSTEM_PROMPT` 同步調整第 3、5 條鐵律（低風報比改採 `STYLE_B_PULLBACK_LIMIT`、換股優於現股改採 `PORTFOLIO_SWAP_ONLY`），避免 Pass 1 與 Pass 2 邏輯衝突；`apply_audit_to_decision()` 補齊 TP1/TP2 防倒掛機制（若原 `target_price_2 <= py_tp1` 自動順延 `+8%`）；`enforce_regime_quotas()` 於紅燈 `max_rb == 0` 時豁免保留 1 檔 `score >= 85` 之高分突破龍頭。
   * `build_audit_record()` 與 `run_audit_stage()` 新增 `Microstructure_Summary`（籌碼微結構與融資效率）與 `Recent_News_Reactions`（近 3 則新聞與量價反應標籤）；`run_rebound_pipeline()` 維持輕量 `analyzer.build_quant_snapshot()` 注入而不誤調 `17MA` 順勢點位審計。
 * **升級 Stage 2 選股總裁決 Prompt（[`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：
   * `PROMPT_TEMPLATES["portfolio_selection"]` 全面導入瑤姐 CIO/CRO 主動式視角：授權綜合權衡紅藍軍報告、本業前瞻 EPS / 同業 PE 比值 / QTD Run-Rate、集保 400/1000 張大戶與新聞利多出貨訊號，不再因單一量化瑕疵錯殺長線主流強勢股。

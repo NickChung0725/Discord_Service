@@ -679,6 +679,21 @@ class RedBlueAuditPhase1Test(unittest.TestCase):
         self.assertIn("1188.00", pick["target_price_2"])
         self.assertIn("990.00", pick["stop_loss_price"])
 
+    def test_enforce_regime_quotas_exempts_one_high_score_breakout_in_red_market(self) -> None:
+        from quant.alignment_ai_picker import enforce_regime_quotas
+
+        decision = {
+            "top_picks": [
+                {"stock_id": "2330", "score": 88, "rank": 1, "audit": {"Execution_Tactic": "BREAKOUT_0915_VWAP_OR_1315_CLOSE"}},
+                {"stock_id": "2317", "score": 82, "rank": 2, "audit": {"Execution_Tactic": "BREAKOUT_0915_VWAP_OR_1315_CLOSE"}},
+            ],
+            "watchlist": [],
+        }
+        red_quota = {"regime_state": "RED_DEFENSIVE", "max_right_breakout_picks": 0, "max_style_b_pullback_picks": 1}
+        enforced = enforce_regime_quotas(decision, {}, red_quota)
+        self.assertEqual([p["stock_id"] for p in enforced["top_picks"]], ["2330"])
+        self.assertEqual([w["stock_id"] for w in enforced["watchlist"]], ["2317"])
+
     def test_swap_only_exposure_overrides_tactic_and_record_banner(self) -> None:
         exposure = SimpleNamespace(
             exposure_status="SECTOR_OR_CORR_FULL_SWAP_ONLY",
