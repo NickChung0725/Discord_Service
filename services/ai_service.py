@@ -21,6 +21,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 import time
 from typing import Any
@@ -1254,9 +1255,9 @@ def save_to_permanent_logs(bq_client: Any, project_id: str, records: list[dict])
     try:
         job_config = bigquery.LoadJobConfig(
             schema=[
-                bigquery.SchemaField("custom_id", "STRING", mode="REQUIRED"),
-                bigquery.SchemaField("created_at", "STRING", mode="REQUIRED"),
-                bigquery.SchemaField("call_mode", "STRING", mode="REQUIRED"),
+                bigquery.SchemaField("custom_id", "STRING", mode="NULLABLE"),
+                bigquery.SchemaField("created_at", "TIMESTAMP", mode="NULLABLE"),
+                bigquery.SchemaField("call_mode", "STRING", mode="NULLABLE"),
                 bigquery.SchemaField("task_type", "STRING", mode="NULLABLE"),
                 bigquery.SchemaField("stock_id", "STRING", mode="NULLABLE"),
                 bigquery.SchemaField("model_name", "STRING", mode="NULLABLE"),
@@ -1275,6 +1276,7 @@ def save_to_permanent_logs(bq_client: Any, project_id: str, records: list[dict])
         logger.info("已成功歸檔 %d 筆 AI 日誌至 BigQuery %s (耗時 %.2fs)", len(records), full_table_id, time.perf_counter() - t_start)
     except Exception as exc:  # noqa: BLE001  (non-blocking telemetry)
         logger.warning("寫入 BigQuery 永久日誌表失敗: %s", exc)
+        print(f"[warn] 寫入 BigQuery 永久日誌表失敗: {exc}", file=sys.stderr, flush=True)
     return time.perf_counter() - t_start
 
 
@@ -1348,7 +1350,7 @@ _ARCHIVE_THREADS_LOCK = threading.Lock()
 _ARCHIVE_THREADS: list[threading.Thread] = []
 
 
-def flush_bq_archives(timeout_seconds: float = 15.0) -> None:
+def flush_bq_archives(timeout_seconds: float = 45.0) -> None:
     """Wait for all pending background BigQuery archive threads to complete.
 
     Registered via ``atexit`` to guarantee that short-lived CLI / systemd oneshot

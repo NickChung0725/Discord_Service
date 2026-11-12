@@ -40,10 +40,12 @@ class BigQueryAiLoggingGuaranteeTests(unittest.TestCase):
         job_config = kwargs.get("job_config")
         self.assertIsNotNone(job_config)
         self.assertEqual(len(job_config.schema), 13)
-        schema_names = [field.name for field in job_config.schema]
-        self.assertIn("custom_id", schema_names)
-        self.assertIn("task_type", schema_names)
-        self.assertIn("stock_id", schema_names)
+        schema_by_name = {field.name: field for field in job_config.schema}
+        self.assertIn("custom_id", schema_by_name)
+        self.assertIn("task_type", schema_by_name)
+        self.assertIn("stock_id", schema_by_name)
+        self.assertEqual(schema_by_name["created_at"].field_type, "TIMESTAMP")
+        self.assertTrue(all(field.mode == "NULLABLE" for field in job_config.schema))
 
     def test_ask_gemini_generates_and_archives(self) -> None:
         fake_meta = ai_service.AIResponse(

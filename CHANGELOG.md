@@ -4,6 +4,19 @@
 
 ---
 
+## [v5.7.4] - 2026-11-12
+### 🔧 優化與錯誤修正 (Fixed & Changed) — 修復 BigQuery 永久日誌表 Schema 型別衝突與超時截斷
+* **修復 `save_to_permanent_logs()` BigQuery LoadJob Schema 不相容導致全系統日誌寫入失敗（[`services/ai_service.py`](/services/ai_service.py)）**：
+  * `discord_service.ai_prompt_logs` 線上實際分區表為 `created_at: TIMESTAMP` 且全 13 個欄位皆為 `NULLABLE`；先前的 `v5.7.2` LoadJobConfig 將 `created_at` 寫死為 `STRING` 並將部分欄位設為 `REQUIRED`，導致 BigQuery 拒絕所有 Batch 與 Online 寫入（`400 Provided Schema does not match Table ... Field created_at has changed type from TIMESTAMP to STRING`）。現已精準對齊為 `TIMESTAMP` 與全欄位 `NULLABLE`。
+  * 失敗時除了 `logger.warning()` 外同步輸出至 `sys.stderr`，避免 `logging.ERROR` 等級的 CLI 行程靜默吞掉 BigQuery 錯誤訊息。
+  * 將 `flush_bq_archives()` 預設逾時由 `15.0s` 放寬至 `45.0s`，避免單次 BigQuery Load Job 與 OAuth 交握耗時接近 15 秒時被提早放棄。
+* **新增 BigQuery AI 日誌全路徑整合自檢腳本（[`scripts/check_bq_ai_log_flow.py`](/scripts/check_bq_ai_log_flow.py)）**：
+  * 自動複製正式表結構（含時間分區設定）建立暫存 Sandbox 測試表，可免汙染正式資料實測直接寫入、Online 同步寫入、背景執行緒 + `flush_bq_archives()` 以及 Vertex AI Batch 全鏈路寫入。
+* **強化單元測試（[`tests/test_bq_ai_logging.py`](/tests/test_bq_ai_logging.py)）**：
+  * `test_save_to_permanent_logs_enforces_schema` 新增驗證 `created_at` 型別必為 `TIMESTAMP` 且所有欄位為 `NULLABLE`。
+
+---
+
 ## [v5.7.3] - 2026-11-11
 ### ✨ 新增功能與架構升級 (Added & Upgraded) — 三階段漏斗（Stage 0 ➔ Stage 1 ➔ Stage 2）Prompt 與資料流最佳實踐全面升級
 * **【Stage 0 產業定錨】Yahoo SEO 樣板字過濾、互斥六大板塊重構與 `valuation_regime` 估值定價屬性（[`quant/taxonomy_service.py`](/quant/taxonomy_service.py) & [`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：
