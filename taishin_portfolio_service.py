@@ -3914,6 +3914,30 @@ def sync_memory(
         sheet_mgr.overwrite_tab(MEMORY_SHEET_NAME, updated_memory)
         sheet_mgr.overwrite_tab(HOLDINGS_SHEET_NAME, projected_holdings)
 
+    # Auto-refresh public fundamental / chip cache for tracked swarm positions (never interrupts sync_memory)
+    tracked_open_sids = sorted(
+        {
+            clean_leading_zero_code(m.get("stock_no", ""))
+            for m in updated_memory
+            if str(m.get("status", "")).strip().upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+        }
+        - {""}
+    )
+    if tracked_open_sids and not dry_run:
+        try:
+            try:
+                from quant.fundamental_cache import FundamentalCacheManager as _FundCache
+            except ImportError:
+                from fundamental_cache import FundamentalCacheManager as _FundCache  # type: ignore[no-redef]
+            fund_cache = _FundCache()
+            for sno in tracked_open_sids:
+                try:
+                    fund_cache.check_and_sync_stock(sno)
+                except Exception as stock_err:  # noqa: BLE001
+                    logger.warning("Fundamental cache refresh failed for tracked stock %s: %s", sno, stock_err)
+        except Exception as err:  # noqa: BLE001
+            logger.warning("Fundamental cache auto-refresh skipped for tracked positions: %s", err)
+
     messages = format_memory_sync_discord_report(as_of=today, events=events)
     if force_discord and not messages:
         active_cnt = sum(

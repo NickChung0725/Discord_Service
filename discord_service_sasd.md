@@ -404,6 +404,8 @@ flowchart TD
 * **要求 AI 產出的內容**：
   * **Thesis 存續性判定**：「進場理由強化」、「理由維持不變」或「進場理由已遭破壞（Thesis Broken）」。
   * 若進場理由已遭破壞（即使尚未觸及價格停損 $SL$），提前發出主觀歸因預警，防止基本面或籌碼面轉空卻死守技術停損位。
+* **追蹤股公用快取自動保鮮**：
+  * 於 `reconcile_position_memory(...)` 寫入 `05_Position_Thesis_Memory` 後，針對所有 `OPEN` / `TP1_PARTIAL_TAKEN` 追蹤股（非 `--dry-run` 時）呼叫 `FundamentalCacheManager.check_and_sync_stock(sno)` 自動同步最新季報、月營收與籌碼快取，確保隔日 08:15 `morning-brief` 取得最新實測數據；單檔失敗僅記錄警告，不影響排程完成。
 
 ---
 
