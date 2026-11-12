@@ -774,7 +774,7 @@ def load_local_technical_context(
     reports_dir: Path | None = None,
     as_of: date | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
-    """Load per-stock MA3/17/45/117/189 and market regime from `finmind_reports/daily`."""
+    """Load per-stock MA3/17/45/117/189, microstructure (ATR14, 60d POC, RSI14, bias), and market regime."""
     root = reports_dir or Path(os.getenv("FINMIND_REPORTS_DIR") or "finmind_reports")
     daily_dir = root / "daily"
     if not daily_dir.is_dir():
@@ -805,20 +805,104 @@ def load_local_technical_context(
             if not df.empty and "stock_id" in df.columns and "close" in df.columns:
                 df["stock_id"] = df["stock_id"].astype(str).str.strip()
                 df["close"] = pd.to_numeric(df["close"], errors="coerce")
+                high_col = "max" if "max" in df.columns else ("high" if "high" in df.columns else None)
+                low_col = "min" if "min" in df.columns else ("low" if "low" in df.columns else None)
+                vol_col = (
+                    "Trading_Volume"
+                    if "Trading_Volume" in df.columns
+                    else ("volume" if "volume" in df.columns else None)
+                )
+                if high_col:
+                    df[high_col] = pd.to_numeric(df[high_col], errors="coerce")
+                if low_col:
+                    df[low_col] = pd.to_numeric(df[low_col], errors="coerce")
+                if vol_col:
+                    df[vol_col] = pd.to_numeric(df[vol_col], errors="coerce")
+
+                daily_ret_map: dict[str, float] = {}
                 for sid, group in df.groupby("stock_id"):
                     g = group.sort_values("date").dropna(subset=["close"])
                     if g.empty:
                         continue
                     closes = g["close"]
                     latest_close = float(closes.iloc[-1])
+                    prev_close = float(closes.iloc[-2]) if len(closes) >= 2 else latest_close
+                    daily_ret = ((latest_close - prev_close) / prev_close * 100.0) if prev_close > 0 else 0.0
+                    daily_ret_map[str(sid)] = daily_ret
+
+                    ma3 = round(float(closes.tail(3).mean()), 2)
+                    ma17 = round(float(closes.tail(17).mean()), 2)
+                    ma45 = round(float(closes.tail(45).mean()), 2)
+                    ma117 = round(float(closes.tail(117).mean()), 2)
+                    ma189 = round(float(closes.tail(189).mean()), 2)
+
+                    bias_17 = round(((latest_close - ma17) / ma17 * 100.0), 2) if ma17 > 0 else 0.0
+                    bias_189 = round(((latest_close - ma189) / ma189 * 100.0), 2) if ma189 > 0 else 0.0
+
+                    highs = g[high_col].fillna(closes) if high_col else closes
+                    lows = g[low_col].fillna(closes) if low_col else closes
+                    prev_high = round(float(highs.iloc[-1]), 2)
+                    prev_low = round(float(lows.iloc[-1]), 2)
+
+                    # ATR(14) calculation
+                    prev_closes = closes.shift(1).fillna(closes)
+                    tr1 = (highs - lows).abs()
+                    tr2 = (highs - prev_closes).abs()
+                    tr3 = (lows - prev_closes).abs()
+                    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                    atr14 = round(float(tr.tail(14).mean()), 2) if not tr.empty else round(latest_close * 0.025, 2)
+
+                    # 60-day Volume POC (weighted average price of top-5 highest volume bars in last 60 days)
+                    vol_poc_60d = round(latest_close, 2)
+                    if vol_col:
+                        g60 = g.tail(60).copy()
+                        g60_valid = g60[g60[vol_col] > 0]
+                        if not g60_valid.empty:
+                            top_vol = g60_valid.nlargest(min(5, len(g60_valid)), vol_col)
+                            v_sum = float(top_vol[vol_col].sum())
+                            if v_sum > 0:
+                                vol_poc_60d = round(
+                                    float((top_vol["close"] * top_vol[vol_col]).sum() / v_sum),
+                                    2,
+                                )
+
+                    # RSI(14) calculation
+                    delta = closes.diff()
+                    gain = delta.clip(lower=0.0)
+                    loss = -delta.clip(upper=0.0)
+                    avg_gain = float(gain.rolling(window=14, min_periods=1).mean().iloc[-1])
+                    avg_loss = float(loss.rolling(window=14, min_periods=1).mean().iloc[-1])
+                    if avg_loss == 0:
+                        rsi_14 = 100.0 if avg_gain > 0 else 50.0
+                    else:
+                        rs = avg_gain / avg_loss
+                        rsi_14 = 100.0 - (100.0 / (1.0 + rs))
+
                     tech_map[str(sid)] = {
                         "close": round(latest_close, 2),
-                        "ma3": round(float(closes.tail(3).mean()), 2),
-                        "ma17": round(float(closes.tail(17).mean()), 2),
-                        "ma45": round(float(closes.tail(45).mean()), 2),
-                        "ma117": round(float(closes.tail(117).mean()), 2),
-                        "ma189": round(float(closes.tail(189).mean()), 2),
+                        "ma3": ma3,
+                        "ma17": ma17,
+                        "ma45": ma45,
+                        "ma117": ma117,
+                        "ma189": ma189,
+                        "bias_ma17_pct": bias_17,
+                        "bias_ma189_pct": bias_189,
+                        "prev_high": prev_high,
+                        "prev_low": prev_low,
+                        "atr14": atr14,
+                        "vol_poc_60d": vol_poc_60d,
+                        "rsi_14": round(float(rsi_14), 1),
+                        "daily_return_pct": round(daily_ret, 2),
+                        "daily_return_pr": 50.0,
                     }
+
+                # Compute market-wide daily return percentile (PR 0~99)
+                if len(daily_ret_map) >= 2:
+                    s_rets = pd.Series(daily_ret_map)
+                    ranks = (s_rets.rank(pct=True) * 100.0).round(0)
+                    for sid, pr_val in ranks.items():
+                        if sid in tech_map and not pd.isna(pr_val):
+                            tech_map[sid]["daily_return_pr"] = float(pr_val)
         except Exception as err:  # noqa: BLE001
             logger.warning("Failed to read local prices.csv for technical enrichment: %s", err)
 
@@ -862,6 +946,226 @@ def load_public_watchlist_cache(stock_ids: set[str]) -> dict[str, dict[str, str]
     except Exception as err:  # noqa: BLE001
         logger.warning("Failed to read public 00_Watchlist_Master cache: %s", err)
         return {}
+
+
+def load_public_deep_fundamental_context(stock_ids: set[str]) -> dict[str, dict[str, Any]]:
+    """Read latest fundamental, valuation, chip margin maintenance, and taxonomy records for tracked stocks.
+
+    Strictly read-only against `GSHEET_SPREADSHEET_ID`. Gracefully degrades to `{}` if any tab or credential
+    is unavailable so `morning-brief` never crashes.
+    """
+    clean_ids = {clean_leading_zero_code(s) for s in stock_ids if clean_leading_zero_code(s)}
+    if not clean_ids:
+        return {}
+
+    public_sheet_id = (os.getenv("GSHEET_SPREADSHEET_ID") or "").strip()
+    creds_path = (os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or "certs/sheetbot.json").strip()
+    if creds_path and Path(creds_path).is_file():
+        pass
+    elif Path("certs/sheetbot.json").is_file():
+        creds_path = "certs/sheetbot.json"
+    elif Path("sheetbot.json").is_file():
+        creds_path = "sheetbot.json"
+
+    if not public_sheet_id or not Path(creds_path).is_file():
+        return {}
+
+    result: dict[str, dict[str, Any]] = {sid: {} for sid in clean_ids}
+    try:
+        gc = gspread.service_account(filename=creds_path)
+        sp = gc.open_by_key(public_sheet_id)
+
+        def _read_latest_by_stock(tab_candidates: tuple[str, ...], date_keys: tuple[str, ...]) -> dict[str, list[dict[str, Any]]]:
+            ws = None
+            for tname in tab_candidates:
+                try:
+                    ws = sp.worksheet(tname)
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+            if ws is None:
+                return {}
+            try:
+                rows = ws.get_all_values()
+            except Exception:  # noqa: BLE001
+                return {}
+            if not rows or len(rows) < 2:
+                return {}
+            hdrs = [str(h).strip() for h in rows[0]]
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for raw in rows[1:]:
+                padded = list(raw) + [""] * max(0, len(hdrs) - len(raw))
+                rec = {hdrs[i]: padded[i] for i in range(len(hdrs)) if hdrs[i]}
+                sid = clean_leading_zero_code(rec.get("stock_id") or rec.get("stock_no") or "")
+                if sid in clean_ids:
+                    grouped.setdefault(sid, []).append(rec)
+            for sid, items in grouped.items():
+                items.sort(
+                    key=lambda r: next((str(r.get(dk, "")) for dk in date_keys if r.get(dk)), ""),
+                )
+            return grouped
+
+        # 1. Income Statement (01_Income_Statement)
+        inc_map = _read_latest_by_stock(("01_Income_Statement",), ("year_quarter", "date", "quarter"))
+        for sid, items in inc_map.items():
+            last = items[-1]
+            prev = items[-2] if len(items) >= 2 else {}
+            q_label = str(_pick_first(last, "year_quarter", "date", "quarter", default="最新季")).strip()
+            rev = _to_float(_pick_first(last, "revenue", "Revenue", default=0.0))
+            gp = _to_float(_pick_first(last, "gross_profit", "GrossProfit", default=0.0))
+            op = _to_float(_pick_first(last, "operating_income", "OperatingIncome", default=0.0))
+            gm = _to_float(_pick_first(last, "gross_margin_pct", "gross_margin", default=0.0))
+            if gm == 0.0 and rev > 0 and gp != 0.0:
+                gm = round(gp / rev * 100.0, 2)
+            opm = _to_float(_pick_first(last, "operating_margin_pct", "operating_margin", default=0.0))
+            if opm == 0.0 and rev > 0 and op != 0.0:
+                opm = round(op / rev * 100.0, 2)
+            eps = _to_float(_pick_first(last, "eps", "EPS", default=0.0))
+
+            prev_gm = _to_float(_pick_first(prev, "gross_margin_pct", "gross_margin", default=0.0))
+            if prev_gm == 0.0 and _to_float(prev.get("revenue"), 0.0) > 0:
+                prev_gm = round(_to_float(prev.get("gross_profit"), 0.0) / _to_float(prev.get("revenue"), 1.0) * 100.0, 2)
+            gm_qoq = round(gm - prev_gm, 2) if prev else 0.0
+            result[sid]["income"] = {
+                "period": q_label,
+                "eps": round(eps, 2),
+                "gross_margin_pct": round(gm, 2),
+                "operating_margin_pct": round(opm, 2),
+                "gm_qoq_pp": gm_qoq,
+            }
+
+        # 2. Balance Sheet & Wide Metrics (02_Balance_Sheet / 05_AI_Metrics_Wide)
+        bs_map = _read_latest_by_stock(("02_Balance_Sheet",), ("year_quarter", "date", "quarter"))
+        for sid, items in bs_map.items():
+            last = items[-1]
+            q_label = str(_pick_first(last, "year_quarter", "date", "quarter", default="最新季")).strip()
+            inv_raw = _to_float(_pick_first(last, "inventory", "inventories", "Inventory", default=0.0))
+            inv_yi = round(inv_raw / 1e8, 2) if abs(inv_raw) >= 1e5 else round(inv_raw, 2)
+            cl_raw = _to_float(_pick_first(last, "contract_liabilities", "ContractLiabilities", default=0.0))
+            cl_yi = round(cl_raw / 1e8, 2) if abs(cl_raw) >= 1e5 else round(cl_raw, 2)
+            dio = _pick_first(last, "dio_days", "dio", "DIO", default="")
+            dso = _pick_first(last, "dso_days", "dso", "DSO", default="")
+            result[sid]["balance"] = {
+                "period": q_label,
+                "inventory_yi": inv_yi,
+                "contract_liabilities_yi": cl_yi,
+                "dio_days": dio,
+                "dso_days": dso,
+            }
+
+        # Supplement DIO / DSO / PE / PB / FCF from 05_AI_Metrics_Wide or 05_Valuation_PER_PBR if present
+        wide_map = _read_latest_by_stock(
+            ("05_AI_Metrics_Wide", "05_Valuation_PER_PBR"),
+            ("year_quarter", "date", "updated_at"),
+        )
+        for sid, items in wide_map.items():
+            last = items[-1]
+            bal = result[sid].setdefault("balance", {})
+            if not bal.get("dio_days"):
+                bal["dio_days"] = _pick_first(last, "dio_days", "dio", "DIO", default="")
+            if not bal.get("dso_days"):
+                bal["dso_days"] = _pick_first(last, "dso_days", "dso", "DSO", default="")
+            result[sid]["valuation"] = {
+                "pe": _pick_first(last, "pe", "per", "PER", "pe_ratio", default=""),
+                "pb": _pick_first(last, "pb", "pbr", "PBR", "pb_ratio", default=""),
+                "dividend_yield": _pick_first(last, "dividend_yield", "yield_pct", "cash_yield_pct", default=""),
+                "roe_pct": _pick_first(last, "roe_pct", "roe", "ROE", default=""),
+            }
+
+        # 3. Cash Flow (03_Cash_Flow)
+        cf_map = _read_latest_by_stock(("03_Cash_Flow",), ("year_quarter", "date", "quarter"))
+        for sid, items in cf_map.items():
+            last = items[-1]
+            ocf_raw = _to_float(_pick_first(last, "operating_cash_flow", "ocf", "OCF", default=0.0))
+            fcf_raw = _to_float(_pick_first(last, "free_cash_flow", "fcf", "FCF", default=0.0))
+            ocf_yi = round(ocf_raw / 1e8, 2) if abs(ocf_raw) >= 1e5 else round(ocf_raw, 2)
+            fcf_yi = round(fcf_raw / 1e8, 2) if abs(fcf_raw) >= 1e5 else round(fcf_raw, 2)
+            result[sid]["cashflow"] = {
+                "ocf_yi": ocf_yi,
+                "fcf_yi": fcf_yi,
+            }
+
+        # 4. Monthly Revenue (04_Monthly_Revenue)
+        rev_map = _read_latest_by_stock(("04_Monthly_Revenue",), ("rev_ym", "year_month", "date"))
+        for sid, items in rev_map.items():
+            last = items[-1]
+            ym = str(_pick_first(last, "rev_ym", "year_month", "date", default="")).strip()
+            mom = _to_float(_pick_first(last, "mom_pct", "mom", "MoM", default=0.0))
+            yoy = _to_float(_pick_first(last, "yoy_pct", "yoy", "YoY", default=0.0))
+            cum_yoy = _to_float(_pick_first(last, "cumulative_yoy_pct", "cum_yoy_pct", default=0.0))
+            result[sid]["revenue"] = {
+                "rev_ym": ym,
+                "mom_pct": round(mom, 2),
+                "yoy_pct": round(yoy, 2),
+                "cum_yoy_pct": round(cum_yoy, 2),
+            }
+
+        # 5. Chip & Margin Maintenance (07_Chip_Summary)
+        chip_map = _read_latest_by_stock(("07_Chip_Summary",), ("max_chip_date", "date", "updated_at"))
+        for sid, items in chip_map.items():
+            last = items[-1]
+            result[sid]["chip"] = {
+                "foreign_5d_lots": _pick_first(last, "foreign_5d_net_lots", "foreign_5d_lots", "foreign_5d", default="0"),
+                "trust_5d_lots": _pick_first(last, "trust_5d_net_lots", "trust_5d_lots", "it_5d", default="0"),
+                "margin_chg_5d_lots": _pick_first(last, "margin_chg_5d_lots", "margin_5d_chg", default="0"),
+                "est_margin_maint_pct": _pick_first(last, "est_margin_maint_pct", default=""),
+                "chip_quadrant_tag": _pick_first(last, "chip_quadrant_tag", default=""),
+            }
+
+        # 6. Taxonomy (08_Stock_Taxonomy)
+        tax_map = _read_latest_by_stock(("08_Stock_Taxonomy",), ("updated_at", "stock_id"))
+        for sid, items in tax_map.items():
+            last = items[-1]
+            result[sid]["taxonomy"] = {
+                "sector_group": str(_pick_first(last, "sector_group", default="")).strip(),
+                "sub_industry": str(_pick_first(last, "sub_industry", "industry_category", default="")).strip(),
+                "valuation_regime": str(_pick_first(last, "valuation_regime", default="")).strip(),
+                "peers": str(_pick_first(last, "peers", default="")).strip(),
+            }
+    except Exception as err:  # noqa: BLE001
+        logger.warning("Failed to load deep fundamental context from public GSheet: %s", err)
+
+    return result
+
+
+def build_fresh_top_picks_block(picks_bundle: Mapping[str, Any] | None, max_picks: int = 3) -> str:
+    """Format the latest scan_date TOP_PICK candidates from `picks_bundle` as an opportunity-cost reference."""
+    if not picks_bundle:
+        return "- 暫無昨晚最新 AI 嚴選清單快取（以既有部位控管為主）。"
+
+    ai_picks = list(picks_bundle.get("ai_daily_picks") or [])
+    if not ai_picks:
+        return "- 暫無昨晚最新 AI 嚴選紀錄（若大盤紅燈空手觀望則無推薦）。"
+
+    valid_dates = [str(r.get("scan_date") or "").strip() for r in ai_picks if str(r.get("scan_date") or "").strip()]
+    if not valid_dates:
+        return "- 暫無昨晚最新 AI 嚴選紀錄。"
+
+    latest_date = max(valid_dates)
+    top_rows = [
+        r
+        for r in ai_picks
+        if str(r.get("scan_date") or "").strip() == latest_date
+        and str(r.get("category") or r.get("pick_category") or "").strip().upper() == "TOP_PICK"
+    ][:max_picks]
+
+    if not top_rows:
+        return f"- 最新掃描日 ({latest_date}) 無 TOP_PICK 入選（Zero-Pick Veto 空手防禦中，暫不建議換股追買）。"
+
+    lines: list[str] = [f"- 最新嚴選基準日：`{latest_date}`（若手中破線股動能落後，可趁反彈減碼換入以下領頭羊）："]
+    for idx, row in enumerate(top_rows, start=1):
+        sid = clean_leading_zero_code(row.get("stock_id") or row.get("stock_no") or "")
+        sname = str(row.get("stock_name") or "").strip()
+        tactic = str(row.get("tactical_type") or "波段嚴選").strip()
+        tp1 = _pick_first(row, "TP1_Target_Or_POC", "target_price_1", default="N/A")
+        sl = _pick_first(row, "Hard_Stop_Loss", "stop_loss_price", default="N/A")
+        rr = _pick_first(row, "Deterministic_RR", default="")
+        rr_str = f"｜風報比 `{rr}`" if rr not in ("", None) else ""
+        thesis = str(_pick_first(row, "entry_thesis", "bull_thesis", default="基本面與籌碼共振突破")).strip()
+        lines.append(
+            f"  {idx}. **`{sid} {sname}`**（{tactic}｜🎯 TP1 `{tp1}` / 🛡️ SL `{sl}`{rr_str}）：{thesis[:85]}"
+        )
+    return "\n".join(lines)
 
 
 def build_portfolio_holdings_rows(
@@ -2867,8 +3171,9 @@ def parse_morning_battle_ai_response(raw_text: str) -> dict[str, Any]:
 def build_tracked_position_gatekeeper_signals(
     mem: Mapping[str, Any],
     hold_agg: Mapping[str, Any],
+    tech_info: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run deterministic Python checks (TP1/TP2 reach, stop breach, Style B share math, ratchet floor)."""
+    """Run deterministic Python checks (TP1/TP2 reach, stop breach, Style B share math, ratchet & left-side floor)."""
     qty = _to_int(hold_agg.get("qty", mem.get("current_qty", 0)))
     avg_cost = _to_float(hold_agg.get("avg_cost_price"), _to_float(mem.get("avg_cost_price"), 0.0))
     cur_price = _to_float(hold_agg.get("current_price"), avg_cost)
@@ -2882,6 +3187,22 @@ def build_tracked_position_gatekeeper_signals(
     prev_stop = _to_float(mem.get("trailing_stop"), init_sl)
     status = str(mem.get("status", "OPEN")).strip().upper()
 
+    t_info = tech_info or {}
+    bias_ma17_pct = _to_float(
+        t_info.get("bias_ma17_pct"),
+        round(((cur_price - ma17) / ma17 * 100.0), 2) if ma17 > 0 else 0.0,
+    )
+    bias_ma189_pct = _to_float(
+        t_info.get("bias_ma189_pct"),
+        round(((cur_price - ma189) / ma189 * 100.0), 2) if ma189 > 0 else 0.0,
+    )
+    prev_high = _to_float(t_info.get("prev_high"), cur_price)
+    prev_low = _to_float(t_info.get("prev_low"), cur_price)
+    atr14 = _to_float(t_info.get("atr14"), round(cur_price * 0.025, 2))
+    vol_poc_60d = _to_float(t_info.get("vol_poc_60d"), cur_price)
+    rsi_14 = _to_float(t_info.get("rsi_14"), 50.0)
+    daily_return_pr = _to_float(t_info.get("daily_return_pr"), 50.0)
+
     ratchet_floor = compute_ratchet_trailing_stop(
         prev_trailing_stop=prev_stop,
         initial_sl=init_sl,
@@ -2892,6 +3213,17 @@ def build_tracked_position_gatekeeper_signals(
         status=status,
     )
     trim_plan = compute_style_b_trim_plan(qty)
+
+    # Calculate left-side structural support floor for deeply oversold / breakdown positions
+    base_low = min(prev_low, cur_price) if prev_low > 0 else cur_price
+    atr_buffer = atr14 * 0.8 if atr14 > 0 else cur_price * 0.02
+    poc_candidate = vol_poc_60d if (0 < vol_poc_60d <= cur_price) else base_low
+    left_side_structural_floor = round(
+        max(cur_price * 0.90, min(base_low * 0.985, poc_candidate, base_low - atr_buffer * 0.5)),
+        2,
+    )
+    if left_side_structural_floor <= 0 and cur_price > 0:
+        left_side_structural_floor = round(cur_price * 0.96, 2)
 
     tp2_reached = tp2 > 0 and cur_price >= tp2 * 0.995
     tp1_reached = tp1 > 0 and cur_price >= tp1 * 0.99
@@ -2905,7 +3237,11 @@ def build_tracked_position_gatekeeper_signals(
     elif status == "TP1_PARTIAL_TAKEN":
         flags.append(f"✅【已完成 TP1 賣半鎖利，目前剩餘部位主攻 TP2 ({tp2})】")
     if stop_breached:
-        flags.append(f"🚨【收盤價 {cur_price} 已觸及/跌破棘輪防守價 {ratchet_floor}】")
+        flags.append(
+            f"⚡【收盤價 {cur_price} 低於右側防守參考價 {ratchet_floor} "
+            f"(17MA乖離 {bias_ma17_pct:+.1f}% / 189MA乖離 {bias_ma189_pct:+.1f}%) "
+            f"➔ 請啟動瑤姐四維度審判：裁決屬『錯殺低接/價值防守』或『邏輯毀滅停損』】"
+        )
 
     dist_tp1_pct = round(((tp1 - cur_price) / cur_price * 100.0), 2) if (tp1 > 0 and cur_price > 0) else 0.0
     dist_tp2_pct = round(((tp2 - cur_price) / cur_price * 100.0), 2) if (tp2 > 0 and cur_price > 0) else 0.0
@@ -2921,7 +3257,16 @@ def build_tracked_position_gatekeeper_signals(
         "ma45": ma45,
         "ma117": ma117,
         "ma189": ma189,
+        "bias_ma17_pct": bias_ma17_pct,
+        "bias_ma189_pct": bias_ma189_pct,
+        "prev_high": prev_high,
+        "prev_low": prev_low,
+        "atr14": atr14,
+        "vol_poc_60d": vol_poc_60d,
+        "rsi_14": rsi_14,
+        "daily_return_pr": daily_return_pr,
         "ratchet_stop_floor": ratchet_floor,
+        "left_side_structural_floor": left_side_structural_floor,
         "trim_plan": trim_plan,
         "tp1_reached": tp1_reached,
         "tp2_reached": tp2_reached,
@@ -2940,8 +3285,11 @@ async def run_morning_battle_ai_review(
     market_regime: Mapping[str, Any],
     macro_context: Mapping[str, Any],
     eval_date: date,
+    tech_map: Mapping[str, Mapping[str, Any]] | None = None,
+    deep_fund_map: Mapping[str, Mapping[str, Any]] | None = None,
+    fresh_top_picks_block: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str, str]:
-    """Call `VERTEX_STAGE2_MODEL` once across all active tracked memory cards and clamp stops."""
+    """Call `VERTEX_STAGE2_MODEL` once across all active tracked memory cards with deep fundamental & chip dossier."""
     if not active_memories:
         return active_memories, {}, "", ""
 
@@ -2952,7 +3300,8 @@ async def run_morning_battle_ai_review(
         sno = clean_leading_zero_code(mem.get("stock_no", ""))
         pid = str(mem.get("position_id", f"{mem.get('opened_date')}_{sno}"))
         hold = agg_holdings.get(sno, {})
-        gk = build_tracked_position_gatekeeper_signals(mem, hold)
+        t_info = (tech_map or {}).get(sno, {})
+        gk = build_tracked_position_gatekeeper_signals(mem, hold, tech_info=t_info)
         gatekeeper_by_pid[pid] = gk
 
         pub = public_cache.get(sno, {})
@@ -2962,26 +3311,99 @@ async def run_morning_battle_ai_review(
         user_note = str(mem.get("user_note") or "").strip()
         note_line = f"\n   - 投資人自訂備註：{user_note}" if user_note else ""
 
+        # Assemble deep fundamental, valuation, inventory/DIO, and margin maintenance lines
+        deep = (deep_fund_map or {}).get(sno, {})
+        tax = deep.get("taxonomy") or {}
+        inc = deep.get("income") or {}
+        bal = deep.get("balance") or {}
+        cf = deep.get("cashflow") or {}
+        rev = deep.get("revenue") or {}
+        val = deep.get("valuation") or {}
+        chip = deep.get("chip") or {}
+
+        tax_str = ""
+        if tax.get("sector_group") or tax.get("sub_industry"):
+            tax_str = (
+                f"\n   - 產業定位與估值屬性：`{tax.get('sector_group', '')} > {tax.get('sub_industry', '')}`"
+                f"（估值屬性：`{tax.get('valuation_regime', '標準估值')}`｜當日強弱同業PR=`PR{gk['daily_return_pr']:.0f}`）"
+            )
+
+        deep_lines: list[str] = []
+        if inc:
+            deep_lines.append(
+                f"📊 最新季報 ({inc.get('period')})：單季 EPS=`{inc.get('eps')}` 元｜"
+                f"毛利率=`{inc.get('gross_margin_pct')}%` (QoQ `{inc.get('gm_qoq_pp'):+.2f}`pp)｜"
+                f"營益率=`{inc.get('operating_margin_pct')}%`"
+            )
+        if bal:
+            dio_txt = f"｜DIO=`{bal.get('dio_days')}` 天" if bal.get("dio_days") not in ("", None) else ""
+            dso_txt = f"｜DSO=`{bal.get('dso_days')}` 天" if bal.get("dso_days") not in ("", None) else ""
+            deep_lines.append(
+                f"📦 營運資金實測（核對失效紅線）：最新存貨=`{bal.get('inventory_yi')}` 億元｜"
+                f"合約負債(在手訂單)=`{bal.get('contract_liabilities_yi')}` 億元{dio_txt}{dso_txt}"
+            )
+        if cf:
+            deep_lines.append(
+                f"💵 現金流含金量：最新單季 OCF=`{cf.get('ocf_yi')}` 億元｜單季 FCF=`{cf.get('fcf_yi')}` 億元"
+            )
+        if rev and rev.get("rev_ym"):
+            deep_lines.append(
+                f"📈 最新月營收 ({rev.get('rev_ym')})：MoM=`{rev.get('mom_pct'):+.2f}%`｜"
+                f"YoY=`{rev.get('yoy_pct'):+.2f}%`｜累計 YoY=`{rev.get('cum_yoy_pct'):+.2f}%`"
+            )
+        if val and any(val.get(k) not in ("", None) for k in ("pe", "pb", "dividend_yield")):
+            deep_lines.append(
+                f"⚖️ 估值與殖利率護城河：PE=`{val.get('pe') or 'N/A'}`｜PB=`{val.get('pb') or 'N/A'}`｜"
+                f"近一年現金殖利率=`{val.get('dividend_yield') or 'N/A'}%`"
+            )
+        if chip:
+            maint_str = f"`{chip.get('est_margin_maint_pct')}%`" if chip.get("est_margin_maint_pct") not in ("", None) else "`N/A`"
+            quad_str = chip.get("chip_quadrant_tag") or "未分類"
+            deep_lines.append(
+                f"籌碼與融資維持率：外資近5日=`{chip.get('foreign_5d_lots')}` 張｜"
+                f"投信近5日=`{chip.get('trust_5d_lots')}` 張｜融資近5日增減=`{chip.get('margin_chg_5d_lots')}` 張｜"
+                f"估算融資維持率={maint_str}｜資法人對作標籤=`{quad_str}`"
+            )
+
+        deep_block_str = ""
+        if deep_lines:
+            deep_block_str = "\n   - 最新深度財報、估值護城河與籌碼微結構實測（供穿透審判與核對失效紅線）：\n     * " + "\n     * ".join(deep_lines)
+
+        weight_hint = "（輕倉具加碼彈性）" if gk["weight_pct"] < 10.0 else ("（重倉需控管風險）" if gk["weight_pct"] >= 25.0 else "")
+
         dossier_blocks.append(
             f"### {idx}. `{sno} {mem.get('stock_name', '')}`（position_id: `{pid}`｜狀態：`{mem.get('status')}`）\n"
-            f"   - 系統硬規則旗標：{flag_str}\n"
+            f"   - 系統狀態觀測旗標：{flag_str}\n"
             f"   - 持倉成本與部位：現有 `{gk['qty']:,}` 股（峰值 `{mem.get('peak_qty')}` 股）｜"
             f"買入均價 `{gk['avg_cost_price']}` 元｜昨收 `{gk['current_price']}` 元｜"
-            f"未實現 `{gk['unrealized_pnl']:+,}` 元 (`{gk['return_pct']:+.2f}%`)｜佔總持倉權重 `{gk['weight_pct']:.1f}%`\n"
+            f"未實現 `{gk['unrealized_pnl']:+,}` 元 (`{gk['return_pct']:+.2f}%`)｜**佔總持倉權重 `{gk['weight_pct']:.1f}%`{weight_hint}**"
+            f"{tax_str}\n"
             f"   - 釘死建倉錨點（來源 `{mem.get('entry_source')}` {mem.get('source_scan_date')} #{mem.get('source_rank')}｜{mem.get('tactical_type')}）：\n"
             f"     * 初始 TP1：`{mem.get('initial_tp1')}` 元（距離 `{gk['dist_tp1_pct']:+.2f}%`）｜"
             f"初始 TP2：`{mem.get('initial_tp2')}` 元（距離 `{gk['dist_tp2_pct']:+.2f}%`）\n"
-            f"     * 初始停損 SL：`{mem.get('initial_sl')}` 元 ｜ **目前棘輪防守底線 (`ratchet_stop_floor`)：`{gk['ratchet_stop_floor']}` 元**\n"
+            f"     * 初始停損 SL：`{mem.get('initial_sl')}` 元 ｜ **目前右側棘輪防守參考 (`ratchet_stop_floor`)：`{gk['ratchet_stop_floor']}` 元** ｜ "
+            f"**左側結構支撐參考 (`left_side_structural_floor`)：`{gk['left_side_structural_floor']}` 元**\n"
             f"     * 風格 B 預設減碼算盤：{gk['trim_plan']['instruction_hint']}\n"
             f"   - 當時買進劇本：{mem.get('entry_thesis')}\n"
             f"   - 當時設定失效紅線：{mem.get('invalidation_rule')}\n"
-            f"   - 最新技術與財報快取：17MA=`{gk['ma17']}` / 45MA=`{gk['ma45']}` / 117MA=`{gk['ma117']}` / 189MA=`{gk['ma189']}` ｜ 財報結論：{fund_line}"
+            f"   - 最新技術與微結構快取：17MA=`{gk['ma17']}` (乖離 `{gk['bias_ma17_pct']:+.1f}%`) / 45MA=`{gk['ma45']}` / "
+            f"117MA=`{gk['ma117']}` / 189MA=`{gk['ma189']}` (乖離 `{gk['bias_ma189_pct']:+.1f}%`) ｜ "
+            f"RSI(14)=`{gk['rsi_14']}` ｜ 昨高=`{gk['prev_high']}` / 昨低=`{gk['prev_low']}` ｜ "
+            f"ATR(14)=`{gk['atr14']}` ｜ 60日大量POC=`{gk['vol_poc_60d']}` ｜ 財報結論：{fund_line}"
+            f"{deep_block_str}"
             f"{note_line}"
         )
+
+    resolved_picks_block = (
+        fresh_top_picks_block.strip()
+        if fresh_top_picks_block and fresh_top_picks_block.strip()
+        else "- 暫無昨晚最新 AI 嚴選清單快取（以既有部位控管為主）。"
+    )
 
     prompt = TAISHIN_MORNING_BATTLE_PROMPT.format(
         market_regime_summary=str(market_regime.get("summary") or market_regime.get("light") or "🟡黃燈"),
         macro_context_block=str(macro_context.get("prompt_block") or "無國際盤快取"),
+        fresh_top_picks_block=resolved_picks_block,
         tracked_holdings_dossier="\n\n".join(dossier_blocks),
     )
 
@@ -3009,29 +3431,43 @@ async def run_morning_battle_ai_review(
     enriched_memories: list[dict[str, Any]] = []
     now_iso = _now_iso_in_taipei()
 
+    left_side_tags = {"🎯 逢低加碼", "🛡️ 破線轉價值防守"}
+
     for mem in active_memories:
         m = dict(mem)
         sno = clean_leading_zero_code(m.get("stock_no", ""))
         pid = str(m.get("position_id", f"{m.get('opened_date')}_{sno}"))
         gk = gatekeeper_by_pid[pid]
         floor = gk["ratchet_stop_floor"]
+        left_floor = gk["left_side_structural_floor"]
         cur_px = gk["current_price"]
         matched_ai = by_pid.get(pid) or by_sno.get(sno)
 
         if matched_ai:
             tag = normalize_ai_action_tag(matched_ai.get("ai_action_tag"))
+            thesis_intact = bool(matched_ai.get("thesis_intact", True))
             # Guardrail: if already took TP1 partial profit, do not repeat "分批停利" unless TP2 reached
             if m.get("status") == "TP1_PARTIAL_TAKEN" and tag == "💰 分批停利":
                 tag = "🏆 達標收割" if gk["tp2_reached"] else "🟢 順勢續抱"
 
-            rec_stop = _to_float(matched_ai.get("recommended_trailing_stop"), floor)
-            # Ratchet clamp: never allow trailing stop below ratchet_stop_floor, nor absurdly above current_price when holding
-            if rec_stop < floor:
-                final_stop = floor
-            elif cur_px > 0 and rec_stop >= cur_px and not gk["stop_breached"]:
-                final_stop = floor
+            rec_stop = _to_float(matched_ai.get("recommended_trailing_stop"), 0.0)
+
+            # Dual-Track Stop Anchoring:
+            # Track 1 (Left-Side Value / Dip-Buying on breakdown when thesis is intact):
+            # Allow re-anchoring stop to left_side_structural_floor or AI's reasonable left-side support below current_price
+            if gk["stop_breached"] and thesis_intact and tag in left_side_tags:
+                if cur_px > 0 and (cur_px * 0.85) <= rec_stop <= (cur_px * 0.998):
+                    final_stop = round(rec_stop, 2)
+                else:
+                    final_stop = left_floor if left_floor > 0 else floor
             else:
-                final_stop = round(rec_stop, 2)
+                # Track 2 (Standard Right-Side Ratchet Clamp: never allow below ratchet_stop_floor)
+                if rec_stop < floor:
+                    final_stop = floor
+                elif cur_px > 0 and rec_stop >= cur_px and not gk["stop_breached"]:
+                    final_stop = floor
+                else:
+                    final_stop = round(rec_stop, 2)
 
             order_inst = matched_ai.get("order_instruction") or ""
             rationale = matched_ai.get("pm_rationale") or ""
@@ -3436,8 +3872,11 @@ def run_morning_brief(
     ai_called = False
 
     if run_ai and active_memories:
-        print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，呼叫 VERTEX_STAGE2_MODEL 產出開盤作戰指令...")
+        print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，載入深度財報/籌碼微結構並呼叫 VERTEX_STAGE2_MODEL...")
         try:
+            tracked_sids = {clean_leading_zero_code(m.get("stock_no", "")) for m in active_memories} - {""}
+            deep_fund_map = load_public_deep_fundamental_context(tracked_sids)
+            fresh_top_picks_block = build_fresh_top_picks_block(picks_bundle)
             reviewed_active, decisions_by_sno, battle_headline, model_version = asyncio.run(
                 run_morning_battle_ai_review(
                     active_memories,
@@ -3446,6 +3885,9 @@ def run_morning_brief(
                     market_regime=core["market_regime"],
                     macro_context=macro_context,
                     eval_date=today,
+                    tech_map=core["tech_map"],
+                    deep_fund_map=deep_fund_map,
+                    fresh_top_picks_block=fresh_top_picks_block,
                 )
             )
             ai_called = True

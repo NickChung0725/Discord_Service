@@ -4,6 +4,20 @@
 
 ---
 
+## [v5.8.0] - 2026-11-12
+### ✨ 新增功能與架構升級 (Added & Upgraded) — 00981A 主動式基金經理人智慧雙軌決策引擎 (`morning-brief`)
+* **升級 `TAISHIN_MORNING_BATTLE_PROMPT` 與操作標籤系統（[`taishin/taishin_config.py`](/taishin/taishin_config.py)）**：
+  * 導入 00981A 主動式基金經理人（瑤姐）四維度穿透式審判架構，區分「系統性錯殺逢低加碼／左側價值防守」與「基本面實質惡化停損／趁彈換股」。
+  * 於 `AI_ACTION_TAG_MAP` 新增 `🛡️ 破線轉價值防守`（同義詞：`價值防守`、`暫緩停損`、`左側防守`）與 `🔄 趁彈減碼換股`（同義詞：`減碼換股`、`汰弱留強`、`換股操作`），並擴充 `🎯 逢低加碼` 同義詞（`左側低接`、`錯殺低接`）。
+* **強化盤前技術微結構、深度財報與機會成本上下文供給（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * 升級 `load_local_technical_context()`：直接於記憶體計算 `bias_ma17_pct`、`bias_ma189_pct`、`prev_high`、`prev_low`、`atr14`、`vol_poc_60d`、`rsi_14` 與全市場當日漲跌幅同業百分位 `daily_return_pr`。
+  * 新增 `load_public_deep_fundamental_context()` 與 `build_fresh_top_picks_block()`：唯讀串接公用 Google Sheet（`01_Income_Statement`、`02_Balance_Sheet`、`03_Cash_Flow`、`04_Monthly_Revenue`、`05_AI_Metrics_Wide`/`05_Valuation_PER_PBR`、`07_Chip_Summary`、`08_Stock_Taxonomy`）以及昨晚最新 `TOP_PICK` 清單作為換股機會成本對照。
+  * 升級 `build_tracked_position_gatekeeper_signals()`、`run_morning_battle_ai_review()` 與 `run_morning_brief()`：新增 `left_side_structural_floor` 左側結構防線計算與雙軌停損定錨（Dual-Track Stop Anchoring），當跌破右側防線但 `thesis_intact=True` 且動作為 `🎯 逢低加碼` 或 `🛡️ 破線轉價值防守` 時，允許將 `trailing_stop` 重定錨至左側結構防線；右側順勢續抱則維持棘輪只升不降保護。
+* **擴充單元測試（[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)）**：
+  * 新增 `test_yao_style_morning_battle_left_side_stop_reanchoring`，驗證新標籤正規化、深層財報/微結構/Top Picks Prompt 組裝與左側停損重定錨行為。
+
+---
+
 ## [v5.7.5] - 2026-11-12
 ### 🔧 優化與錯誤修正 (Fixed & Changed) — 修復 Stage 0 Yahoo 業務摘要抓取與 Stage 1 新聞改用 Yahoo 個股 RSS 實質摘要
 * **修復 Stage 0 `fetch_yahoo_company_profile()` 永遠回傳空字串之 Regex 缺陷（[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)）**：

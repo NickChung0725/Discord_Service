@@ -986,6 +986,134 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(ctx["tracked_positions"][0]["initial_tp1"], 1120.0)
         self.assertEqual(ctx["tracked_positions"][0]["live_metrics"]["trim_plan"]["trim_qty"], 500)
 
+    def test_yao_style_morning_battle_left_side_stop_reanchoring(self) -> None:
+        """Verify Yao-style dual-track stop anchoring: breakdown with intact thesis allows left-side structural floor."""
+        import asyncio
+        from types import SimpleNamespace
+        import taishin_portfolio_service as svc
+        from taishin_config import normalize_ai_action_tag
+
+        self.assertEqual(normalize_ai_action_tag("🛡️ 破線轉價值防守"), "🛡️ 破線轉價值防守")
+        self.assertEqual(normalize_ai_action_tag("價值防守"), "🛡️ 破線轉價值防守")
+        self.assertEqual(normalize_ai_action_tag("🔄 趁彈減碼換股"), "🔄 趁彈減碼換股")
+        self.assertEqual(normalize_ai_action_tag("汰弱留強"), "🔄 趁彈減碼換股")
+
+        active_memories = [
+            {
+                "position_id": "2026-10-22_3034",
+                "stock_no": "3034",
+                "stock_name": "聯詠",
+                "status": "OPEN",
+                "entry_source": "AI_DAILY_TOP_PICK",
+                "source_scan_date": "2026-10-22",
+                "source_rank": "1",
+                "tactical_type": "🎯 短中期波段持有 (5~20日)",
+                "opened_date": "2026-10-22",
+                "initial_qty": 100,
+                "peak_qty": 100,
+                "current_qty": 100,
+                "avg_cost_price": 582.82,
+                "initial_tp1": 641.1,
+                "initial_tp2": 692.39,
+                "initial_sl": 542.63,
+                "trailing_stop": 542.63,
+                "entry_thesis": "2026Q2 EPS 10.4元、毛利率42.42%、單季FCF 48.11億元",
+                "invalidation_rule": "存貨升至 133.10 億元，DIO 增至 66.8 天",
+            }
+        ]
+        agg_holdings = {
+            "3034": {
+                "stock_no": "3034",
+                "stock_name": "聯詠",
+                "qty": 100,
+                "avg_cost_price": 582.82,
+                "current_price": 471.0,
+                "return_pct": -19.19,
+                "unrealized_pnl": -11182,
+                "weight_pct": 1.9,
+                "ma17": 561.59,
+                "ma45": 549.51,
+                "ma117": 526.64,
+                "ma189": 524.09,
+            }
+        }
+        tech_map = {
+            "3034": {
+                "close": 471.0,
+                "ma17": 561.59,
+                "ma45": 549.51,
+                "ma117": 526.64,
+                "ma189": 524.09,
+                "bias_ma17_pct": -16.1,
+                "bias_ma189_pct": -10.1,
+                "prev_high": 480.0,
+                "prev_low": 468.0,
+                "atr14": 12.0,
+                "vol_poc_60d": 465.0,
+                "rsi_14": 24.5,
+                "daily_return_pr": 68.0,
+            }
+        }
+        deep_fund_map = {
+            "3034": {
+                "income": {"period": "2026Q2", "eps": 10.4, "gross_margin_pct": 42.42, "operating_margin_pct": 26.1, "gm_qoq_pp": 1.2},
+                "balance": {"period": "2026Q2", "inventory_yi": 125.0, "contract_liabilities_yi": 15.2, "dio_days": "62.1", "dso_days": "45.0"},
+                "cashflow": {"ocf_yi": 55.0, "fcf_yi": 48.11},
+                "valuation": {"pe": "11.2", "pb": "3.4", "dividend_yield": "6.8"},
+                "chip": {"foreign_5d_lots": "+850", "trust_5d_lots": "+320", "margin_chg_5d_lots": "-1200", "est_margin_maint_pct": "131.5", "chip_quadrant_tag": "🟢 法人買＋融資減"},
+            }
+        }
+
+        fake_ai_json = """```json
+        {
+          "morning_battle_headline": "大盤殺融資564億後迎費半暴漲6.85%報復性強彈！嚴禁開盤砍殺基本面頂尖之錯殺股。",
+          "positions": [
+            {
+              "position_id": "2026-10-22_3034",
+              "stock_no": "3034",
+              "ai_action_tag": "🎯 逢低加碼",
+              "recommended_trailing_stop": 460.0,
+              "thesis_intact": true,
+              "order_instruction": "早盤開高勿追，待拉回測試475元守穩昨低時，掛盤中零股加碼50股攤平。",
+              "pm_rationale": "雖跌破右側防守價，但17MA負乖離達-16.1%屬系統性錯殺，Q2 FCF 48億且存貨未惡化，權重僅1.9%具低接空間。"
+            }
+          ]
+        }
+        ```"""
+
+        captured_prompts = []
+
+        async def _fake_ask_vertex(prompt, **kwargs):
+            captured_prompts.append(prompt)
+            return SimpleNamespace(text=fake_ai_json, model_version="gemini-4-argon")
+
+        with patch.object(svc, "ask_vertex_ai_with_meta", side_effect=_fake_ask_vertex):
+            enriched, decisions, headline, model_ver = asyncio.run(
+                svc.run_morning_battle_ai_review(
+                    active_memories,
+                    agg_holdings=agg_holdings,
+                    public_cache={},
+                    market_regime={"light": "🔴紅燈", "summary": "大盤融資斷頭宣洩"},
+                    macro_context={"prompt_block": "費半 +6.85%"},
+                    eval_date=date(2026, 11, 10),
+                    tech_map=tech_map,
+                    deep_fund_map=deep_fund_map,
+                    fresh_top_picks_block="- 候選 #1 `2330 台積電`",
+                )
+            )
+
+        self.assertEqual(len(captured_prompts), 1)
+        sent_prompt = captured_prompts[0]
+        self.assertIn("17MA乖離 -16.1%", sent_prompt)
+        self.assertIn("估算融資維持率=`131.5%`", sent_prompt)
+        self.assertIn("最新存貨=`125.0` 億元", sent_prompt)
+        self.assertIn("2330 台積電", sent_prompt)
+
+        self.assertEqual(enriched[0]["last_ai_action"], "🎯 逢低加碼")
+        # Verify stop was allowed to re-anchor to 460.0 instead of being clamped back to 542.63
+        self.assertEqual(enriched[0]["trailing_stop"], 460.0)
+        self.assertEqual(decisions["3034"]["trailing_stop"], 460.0)
+
 
 if __name__ == "__main__":
     unittest.main()
