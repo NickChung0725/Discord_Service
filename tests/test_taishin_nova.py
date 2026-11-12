@@ -1120,10 +1120,10 @@ class TestTaishinNova(unittest.TestCase):
 
         fake_tabs = {
             "05_AI_Metrics_Wide": [
-                ["pk_key", "stock_id", "raw_date", "year_qtr", "gross_margin_pct", "op_margin_pct", "eps", "ttm_eps", "dio_days", "dso_days", "contract_liab_亿元", "ocf_亿元", "fcf_亿元"],
-                ["3034_2026Q1", "3034", "2026-03-31", "2026Q1", "39.06", "20.10", "8.5", "35.0", "64.0", "59.0", "12.0", "40.0", "35.0"],
-                ["3034_2026Q2", "3034", "2026-06-30", "2026Q2", "42.42", "22.56", "10.4", "40.0", "66.8", "61.0", "15.2", "55.0", "48.11"],
-                ["9999_2026Q2", "9999", "2026-06-30", "2026Q2", "30.0", "10.0", "1.0", "", "", "", "", "", ""],
+                ["pk_key", "stock_id", "raw_date", "year_qtr", "gross_margin_pct", "op_margin_pct", "eps", "ttm_eps", "dio_days", "dso_days", "contract_liab_亿元", "ocf_亿元", "fcf_亿元", "inventories"],
+                ["3034_2026Q1", "3034", "2026-03-31", "2026Q1", "39.06", "20.10", "8.5", "35.0", "64.0", "59.0", "12.0", "40.0", "35.0", "12000"],
+                ["3034_2026Q2", "3034", "2026-06-30", "2026Q2", "42.42", "22.56", "10.4", "40.0", "66.8", "61.0", "15.2", "55.0", "48.11", "13310"],
+                ["9999_2026Q2", "9999", "2026-06-30", "2026Q2", "30.0", "10.0", "1.0", "", "", "", "", "", "", ""],
             ],
             "03_Balance_Sheet": [
                 ["pk_key", "stock_id", "raw_date", "year_qtr", "inventory", "contract_liab_current", "parent_equity", "capital_stock"],
@@ -1176,7 +1176,7 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(d3034["income"]["period"], "2026Q2")
         self.assertEqual(d3034["income"]["eps"], 10.4)
         self.assertEqual(d3034["income"]["gm_qoq_pp"], 3.36)
-        self.assertEqual(d3034["balance"]["inventory_yi"], 125.0)
+        self.assertEqual(d3034["balance"]["inventory_yi"], 133.1)
         self.assertEqual(d3034["balance"]["contract_liabilities_yi"], 15.2)
         self.assertEqual(d3034["cashflow"]["ocf_yi"], 55.0)
         self.assertEqual(d3034["cashflow"]["fcf_yi"], 48.11)

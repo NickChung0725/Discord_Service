@@ -1031,7 +1031,11 @@ def load_public_deep_fundamental_context(
                 return "N/A"
             if already_yi:
                 return round(num, 2)
-            return round(num / 1e8, 2) if abs(num) >= 1e5 else round(num, 2)
+            if abs(num) >= 1e6:      # 原始單位為「元」（如 4948000000 -> 49.48 億）
+                return round(num / 1e8, 2)
+            if abs(num) >= 1e2:      # 原始單位為「百萬元」（如 13310 -> 133.10 億）
+                return round(num / 1e2, 2)
+            return round(num, 2)     # 原始單位已為「億元」（如 5.93 -> 5.93 億）
 
         def _pick_yi(row: Mapping[str, Any], *yi_keys: str, raw_keys: tuple[str, ...] = ()) -> float | str:
             for k in yi_keys:
