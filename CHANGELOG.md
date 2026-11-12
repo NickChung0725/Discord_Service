@@ -9,8 +9,11 @@
 * **新增 `sync_memory()` 追蹤中波段持股公用基本面／籌碼快取自動保鮮（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
   * 於 `reconcile_position_memory(...)` 寫入 `MEMORY_SHEET_NAME` 後、`format_memory_sync_discord_report(...)` 前，針對 `status` 為 `OPEN` 或 `TP1_PARTIAL_TAKEN` 的去重追蹤股（且 `not dry_run`），安全呼叫 `FundamentalCacheManager().check_and_sync_stock(sno)` 逐檔保鮮公用基本面與籌碼快取；單檔異常或限流僅記錄 `logger.warning(...)`，確保不中斷盤後記憶同步排程。
 * **校準 `load_public_deep_fundamental_context()` 分頁欄位映射、百萬元單位換算與缺值顯示（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
-  * 對齊 `quant/fundamental_config.py` `SHEET_SCHEMAS`：`05_AI_Metrics_Wide` 改以 `year_qtr` 排序並讀取 `contract_liab_亿元`、`ocf_亿元`、`fcf_亿元`；補上 `03_Balance_Sheet`（`inventory`、`contract_liab_current`、`parent_equity`、`capital_stock`）、`04_Cash_Flow`、`01_Monthly_Revenue` 與 `06_Dividend_Policy` 串接；`07_Chip_Summary` 對齊 `foreign_net_buy_5d_lots`、`trust_net_buy_5d_lots` 與 `raw_date`/`trade_week` 排序。
+  * 對齊 `quant/fundamental_config.py` `SHEET_SCHEMAS`：`05_AI_Metrics_Wide` 改以 `year_qtr` 排序並讀取 `contract_liab_亿元`、`ocf_亿元`、`fcf_亿元`；補上 `03_Balance_Sheet`（`inventory`、`contract_liab_current`、`parent_equity`、`capital_stock`）、`04_Cash_Flow`、`01_Monthly_Revenue` 與 `06_Dividend_Policy` 串接；`07_Chip_Summary` 對齊 `foreign_net_buy_5d_lots`、`trust_net_buy_5d_lots`、`three_inst_net_5d_lots` 與 `raw_date`/`as_of_date` 排序。
   * `_opt_yi()` 補齊「百萬元（`1e2 <= abs(num) < 1e6`）」除以 `1e2` 換算邏輯，避免如 `13310` 百萬元誤判為 `13310.0` 億元；同時支援依持股現價即時計算 `PE`、`PB` 與現金殖利率，並將缺值統一顯示為 `N/A`（避免 `0.0 億元` 誤導 AI）。
+* **新增反彈第一反壓錨點 (`rebound_resistance_target`) 與防接刀護欄（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py) & [`taishin/taishin_config.py`](/taishin/taishin_config.py)）**：
+  * `build_tracked_position_gatekeeper_signals()` 新增 `rebound_resistance_target`（取高於現價之 `189MA`、`60日POC`、`avg_cost` 最小值，無則退回 `TP1`）並注入 Morning Battle Dossier，鎖死 `TP1/TP2` 不漂移。
+  * 於 `TAISHIN_MORNING_BATTLE_PROMPT` 情境 A/B 明確加入「防接刀鐵則」（外資大賣＋散戶融資增且維持率未洗淨時降級為 `🛡️ 破線轉價值防守` 觀察 `rebound_resistance_target`）。
 * **擴充單元測試（[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)）**：
   * 新增 `test_load_public_deep_fundamental_context_matches_sheet_schemas_and_na_handling`，驗證 `SHEET_SCHEMAS` 欄位對齊、百萬元轉億元換算、PE/PB/殖利率計算與 `N/A` 缺值處理。
 

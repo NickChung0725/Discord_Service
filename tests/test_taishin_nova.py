@@ -1107,6 +1107,7 @@ class TestTaishinNova(unittest.TestCase):
         self.assertIn("17MA乖離 -16.1%", sent_prompt)
         self.assertIn("估算融資維持率=`131.5%`", sent_prompt)
         self.assertIn("最新存貨=`125.0` 億元", sent_prompt)
+        self.assertIn("rebound_resistance_target", sent_prompt)
         self.assertIn("2330 台積電", sent_prompt)
 
         self.assertEqual(enriched[0]["last_ai_action"], "🎯 逢低加碼")
@@ -1186,9 +1187,10 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(d3034["valuation"]["pe"], round(471.0 / 40.0, 2))
         self.assertEqual(d3034["valuation"]["pb"], 4.71)
         self.assertEqual(d3034["valuation"]["dividend_yield"], round(32.0 / 471.0 * 100.0, 2))
-        self.assertEqual(d3034["chip"]["foreign_5d_lots"], "+850")
-        self.assertEqual(d3034["chip"]["trust_5d_lots"], "+320")
-        self.assertEqual(d3034["chip"]["est_margin_maint_pct"], "131.5")
+        self.assertEqual(d3034["chip"]["foreign_5d_lots"], "+850.0")
+        self.assertEqual(d3034["chip"]["trust_5d_lots"], "+320.0")
+        self.assertEqual(d3034["chip"]["three_inst_5d_lots"], "+1170.0")
+        self.assertEqual(d3034["chip"]["est_margin_maint_pct"], "131.5%")
 
         # Missing values must degrade to N/A rather than misleading 0.0
         d9999 = deep["9999"]
@@ -1196,7 +1198,7 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(d9999["balance"]["contract_liabilities_yi"], "N/A")
         self.assertEqual(d9999["cashflow"]["ocf_yi"], "N/A")
         self.assertEqual(d9999["cashflow"]["fcf_yi"], "N/A")
-        self.assertEqual(d9999["chip"]["foreign_5d_lots"], "N/A")
+        self.assertEqual(d9999["chip"]["margin_chg_5d_lots"], "N/A")
         self.assertEqual(d9999["chip"]["est_margin_maint_pct"], "N/A")
 
 

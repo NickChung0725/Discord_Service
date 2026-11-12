@@ -1198,23 +1198,22 @@ def load_public_deep_fundamental_context(
             }
 
         # 3. Chip & Margin Maintenance (`07_Chip_Summary`)
-        chip_map = _read_latest_by_stock(
-            ("07_Chip_Summary",),
-            ("raw_date", "trade_week", "as_of_date", "updated_at"),
-        )
+        chip_map = _read_latest_by_stock(("07_Chip_Summary",), ("raw_date", "as_of_date", "updated_at"))
         for sid, items in chip_map.items():
             last = items[-1]
-            f5_raw = _pick_first(last, "foreign_net_buy_5d_lots", "foreign_net_5d_lots", "foreign_5d_net_lots", default=None)
-            it5_raw = _pick_first(last, "trust_net_buy_5d_lots", "it_net_5d_lots", "trust_net_5d_lots", "trust_5d_net_lots", default=None)
-            m5_raw = _pick_first(last, "margin_chg_5d_lots", default=None)
+            f5 = _to_float(_pick_first(last, "foreign_net_buy_5d_lots", "foreign_net_5d_lots", default=0.0))
+            it5 = _to_float(_pick_first(last, "trust_net_buy_5d_lots", "it_net_5d_lots", default=0.0))
+            inst5 = _to_float(_pick_first(last, "three_inst_net_5d_lots", default=f5 + it5))
+            m5_raw = _pick_first(last, "margin_chg_5d_lots", default="")
+            m5_str = f"{_to_float(m5_raw):+.0f}" if m5_raw not in ("", None) else "N/A"
             maint_raw = _pick_first(last, "est_margin_maint_pct", default="")
-            maint_num = _opt_float(maint_raw)
-            maint_str = f"{maint_num:.1f}" if maint_num is not None else "N/A"
-            quad_tag = str(_pick_first(last, "chip_quadrant_tag", "inst_Flow_Tag", default="未分類")).strip() or "未分類"
+            maint_str = f"{_to_float(maint_raw):.1f}%" if maint_raw not in ("", None) else "N/A"
+            quad_tag = str(_pick_first(last, "chip_quadrant_tag", default="未分類")).strip() or "未分類"
             result[sid]["chip"] = {
-                "foreign_5d_lots": f"{_to_int(f5_raw):+d}" if _opt_float(f5_raw) is not None else "N/A",
-                "trust_5d_lots": f"{_to_int(it5_raw):+d}" if _opt_float(it5_raw) is not None else "N/A",
-                "margin_chg_5d_lots": f"{_to_int(m5_raw):+d}" if _opt_float(m5_raw) is not None else "N/A",
+                "foreign_5d_lots": f"{f5:+.1f}",
+                "trust_5d_lots": f"{it5:+.1f}",
+                "three_inst_5d_lots": f"{inst5:+.1f}",
+                "margin_chg_5d_lots": m5_str,
                 "est_margin_maint_pct": maint_str,
                 "chip_quadrant_tag": quad_tag,
             }
@@ -3332,6 +3331,10 @@ def build_tracked_position_gatekeeper_signals(
     if left_side_structural_floor <= 0 and cur_price > 0:
         left_side_structural_floor = round(cur_price * 0.96, 2)
 
+    # Calculate left-side rebound resistance target (for staged trimming on oversold bounce without altering TP1/TP2)
+    overhead_candidates = [v for v in (ma189, vol_poc_60d, avg_cost) if v > cur_price > 0]
+    rebound_resistance_target = round(min(overhead_candidates), 2) if overhead_candidates else round(tp1, 2)
+
     tp2_reached = tp2 > 0 and cur_price >= tp2 * 0.995
     tp1_reached = tp1 > 0 and cur_price >= tp1 * 0.99
     stop_breached = ratchet_floor > 0 and cur_price > 0 and cur_price <= ratchet_floor
@@ -3374,6 +3377,7 @@ def build_tracked_position_gatekeeper_signals(
         "daily_return_pr": daily_return_pr,
         "ratchet_stop_floor": ratchet_floor,
         "left_side_structural_floor": left_side_structural_floor,
+        "rebound_resistance_target": rebound_resistance_target,
         "trim_plan": trim_plan,
         "tp1_reached": tp1_reached,
         "tp2_reached": tp2_reached,
@@ -3479,22 +3483,15 @@ async def run_morning_battle_ai_review(
                 f"近一年現金殖利率=`{dy_str}`"
             )
         if chip:
-            maint_str = (
-                f"`{chip.get('est_margin_maint_pct')}%`"
-                if chip.get("est_margin_maint_pct") not in ("", None, "N/A")
-                else "`N/A`"
-            )
+            maint_val = str(chip.get("est_margin_maint_pct") or "N/A")
+            maint_str = f"`{maint_val}`" if (maint_val == "N/A" or maint_val.endswith("%")) else f"`{maint_val}%`"
             quad_str = chip.get("chip_quadrant_tag") or "未分類"
-            f5_v = chip.get("foreign_5d_lots")
-            f5_str = f"`{f5_v}` 張" if f5_v not in ("", None, "N/A") else "`N/A`"
-            it5_v = chip.get("trust_5d_lots")
-            it5_str = f"`{it5_v}` 張" if it5_v not in ("", None, "N/A") else "`N/A`"
-            m5_v = chip.get("margin_chg_5d_lots")
-            m5_str = f"`{m5_v}` 張" if m5_v not in ("", None, "N/A") else "`N/A`"
+            inst5_v = chip.get("three_inst_5d_lots")
+            inst5_txt = f"｜三大法人近5日=`{inst5_v}` 張" if inst5_v not in ("", None) else ""
             deep_lines.append(
-                f"籌碼與融資維持率：外資近5日={f5_str}｜"
-                f"投信近5日={it5_str}｜融資近5日增減={m5_str}｜"
-                f"估算融資維持率={maint_str}｜資法人對作標籤=`{quad_str}`"
+                f"籌碼與融資維持率：外資近5日=`{chip.get('foreign_5d_lots')}` 張｜"
+                f"投信近5日=`{chip.get('trust_5d_lots')}` 張{inst5_txt}｜"
+                f"融資近5日增減=`{chip.get('margin_chg_5d_lots')}` 張｜估算融資維持率={maint_str}｜資法人對作標籤=`{quad_str}`"
             )
 
         deep_block_str = ""
@@ -3514,7 +3511,8 @@ async def run_morning_battle_ai_review(
             f"     * 初始 TP1：`{mem.get('initial_tp1')}` 元（距離 `{gk['dist_tp1_pct']:+.2f}%`）｜"
             f"初始 TP2：`{mem.get('initial_tp2')}` 元（距離 `{gk['dist_tp2_pct']:+.2f}%`）\n"
             f"     * 初始停損 SL：`{mem.get('initial_sl')}` 元 ｜ **目前右側棘輪防守參考 (`ratchet_stop_floor`)：`{gk['ratchet_stop_floor']}` 元** ｜ "
-            f"**左側結構支撐參考 (`left_side_structural_floor`)：`{gk['left_side_structural_floor']}` 元**\n"
+            f"**左側結構支撐參考 (`left_side_structural_floor`)：`{gk['left_side_structural_floor']}` 元** ｜ "
+            f"**反彈第一反壓/調節參考 (`rebound_resistance_target`)：`{gk['rebound_resistance_target']}` 元**\n"
             f"     * 風格 B 預設減碼算盤：{gk['trim_plan']['instruction_hint']}\n"
             f"   - 當時買進劇本：{mem.get('entry_thesis')}\n"
             f"   - 當時設定失效紅線：{mem.get('invalidation_rule')}\n"
