@@ -1116,62 +1116,123 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(decisions["3034"]["trailing_stop"], 460.0)
 
     def test_load_public_deep_fundamental_context_matches_sheet_schemas_and_na_handling(self) -> None:
-        """Verify load_public_deep_fundamental_context reads real SHEET_SCHEMAS tabs/columns and formats N/A cleanly."""
+        """Verify v5.9.0 load_public_deep_fundamental_context integrates FundamentalCacheManager, Phase 2, and N/A handling."""
+        from types import SimpleNamespace
+        import pandas as pd
         import taishin_portfolio_service as svc
 
-        fake_tabs = {
-            "05_AI_Metrics_Wide": [
-                ["pk_key", "stock_id", "raw_date", "year_qtr", "gross_margin_pct", "op_margin_pct", "eps", "ttm_eps", "dio_days", "dso_days", "contract_liab_亿元", "ocf_亿元", "fcf_亿元", "inventories"],
-                ["3034_2026Q1", "3034", "2026-03-31", "2026Q1", "39.06", "20.10", "8.5", "35.0", "64.0", "59.0", "12.0", "40.0", "35.0", "12000"],
-                ["3034_2026Q2", "3034", "2026-06-30", "2026Q2", "42.42", "22.56", "10.4", "40.0", "66.8", "61.0", "15.2", "55.0", "48.11", "13310"],
-                ["9999_2026Q2", "9999", "2026-06-30", "2026Q2", "30.0", "10.0", "1.0", "", "", "", "", "", "", ""],
-            ],
-            "03_Balance_Sheet": [
-                ["pk_key", "stock_id", "raw_date", "year_qtr", "inventory", "contract_liab_current", "parent_equity", "capital_stock"],
-                ["3034_2026Q2", "3034", "2026-06-30", "2026Q2", "12500000000", "1520000000", "60850000000", "6085000000"],
-                ["9999_2026Q2", "9999", "2026-06-30", "2026Q2", "", "", "", ""],
-            ],
-            "01_Monthly_Revenue": [
-                ["pk_key", "stock_id", "raw_date", "rev_ym", "mom_pct", "yoy_pct"],
-                ["3034_2026-10", "3034", "2026-10-31", "2026-10", "3.45", "12.80"],
-            ],
-            "06_Dividend_Policy": [
-                ["pk_key", "stock_id", "raw_date", "div_year", "cash_dividend"],
-                ["3034_2025", "3034", "2026-06-01", "2025", "32.0"],
-            ],
-            "07_Chip_Summary": [
-                ["pk_key", "stock_id", "raw_date", "trade_week", "foreign_net_buy_5d_lots", "trust_net_buy_5d_lots", "margin_chg_5d_lots", "est_margin_maint_pct", "chip_quadrant_tag"],
-                ["3034_2026-11-11", "3034", "2026-11-11", "2026-W46", "850", "320", "-120", "131.5", "🟢 法人買＋融資減"],
-                ["9999_2026-11-11", "9999", "2026-11-11", "2026-W46", "", "", "", "", ""],
-            ],
-            "08_Stock_Taxonomy": [
-                ["stock_id", "sector_group", "sub_industry", "valuation_regime", "peers", "updated_at"],
-                ["3034", "半導體", "驅動IC設計", "穩健價值與高息股", "[\"3545\", \"8016\"]", "2026-10-01"],
-            ],
+        fake_tabs: dict[str, pd.DataFrame] = {
+            "05_AI_Metrics_Wide": pd.DataFrame([
+                {
+                    "pk_key": "3034_2026Q1", "stock_id": "3034", "raw_date": "2026-03-31", "year_qtr": "2026Q1",
+                    "gross_margin_pct": 39.06, "op_margin_pct": 20.10, "eps": 8.5, "ttm_eps": 35.0,
+                    "dio_days": 64.0, "dso_days": 59.0, "contract_liab_亿元": 12.0, "ocf_亿元": 40.0, "fcf_亿元": 35.0,
+                },
+                {
+                    "pk_key": "3034_2026Q2", "stock_id": "3034", "raw_date": "2026-06-30", "year_qtr": "2026Q2",
+                    "gross_margin_pct": 42.42, "op_margin_pct": 22.56, "eps": 10.4, "ttm_eps": 40.0,
+                    "dio_days": 66.8, "dso_days": 61.0, "contract_liab_亿元": 15.2, "ocf_亿元": 55.0, "fcf_亿元": 48.11,
+                },
+                {
+                    "pk_key": "9999_2026Q2", "stock_id": "9999", "raw_date": "2026-06-30", "year_qtr": "2026Q2",
+                    "gross_margin_pct": 30.0, "op_margin_pct": 10.0, "eps": 1.0, "ttm_eps": "",
+                    "dio_days": "N/A", "dso_days": "N/A", "contract_liab_亿元": "", "ocf_亿元": "", "fcf_亿元": "",
+                },
+            ]),
+            "02_Income_Statement": pd.DataFrame(),
+            "03_Balance_Sheet": pd.DataFrame([
+                {
+                    "pk_key": "3034_2026Q2", "stock_id": "3034", "raw_date": "2026-06-30", "year_qtr": "2026Q2",
+                    "inventory": 13310.0, "contract_liab_current": 1520000000.0,
+                    "parent_equity": 60850000000.0, "capital_stock": 6085000000.0,
+                },
+                {
+                    "pk_key": "9999_2026Q2", "stock_id": "9999", "raw_date": "2026-06-30", "year_qtr": "2026Q2",
+                    "inventory": "", "contract_liab_current": "", "parent_equity": "", "capital_stock": "",
+                },
+            ]),
+            "01_Monthly_Revenue": pd.DataFrame([
+                {"pk_key": "3034_2026-09", "stock_id": "3034", "raw_date": "2026-09-30", "rev_ym": "2026-09", "revenue": 10000000000.0, "yoy_pct": 8.0},
+                {"pk_key": "3034_2026-10", "stock_id": "3034", "raw_date": "2026-10-31", "rev_ym": "2026-10", "revenue": 10345000000.0, "yoy_pct": 12.8},
+            ]),
+            "06_Dividend_Policy": pd.DataFrame([
+                {"pk_key": "3034_2025", "stock_id": "3034", "raw_date": "2026-06-01", "div_year": "2025", "cash_dividend": 32.0},
+            ]),
+            "07_Chip_Summary": pd.DataFrame([
+                {
+                    "pk_key": "3034_2026-11-11", "stock_id": "3034", "raw_date": "2026-11-11", "trade_week": "2026-W46",
+                    "foreign_net_buy_5d_lots": 850.0, "trust_net_buy_5d_lots": 320.0, "three_inst_net_5d_lots": 1170.0,
+                    "margin_chg_5d_lots": -120.0, "est_margin_maint_pct": 131.5, "chip_quadrant_tag": "🟢 法人買＋融資減",
+                },
+                {
+                    "pk_key": "9999_2026-11-11", "stock_id": "9999", "raw_date": "2026-11-11", "trade_week": "2026-W46",
+                    "foreign_net_buy_5d_lots": 0.0, "trust_net_buy_5d_lots": 0.0, "three_inst_net_5d_lots": 0.0,
+                    "margin_chg_5d_lots": "", "est_margin_maint_pct": "", "chip_quadrant_tag": "未分類",
+                },
+            ]),
         }
 
-        class _FakeWS:
-            def __init__(self, rows: list[list[str]]) -> None:
-                self._rows = rows
+        class _FakeCache:
+            def enable_batch_mode(self) -> None:
+                pass
 
-            def get_all_values(self) -> list[list[str]]:
-                return self._rows
+            def _get_worksheet(self, title: str) -> str:
+                return title
 
-        class _FakeSP:
-            def worksheet(self, name: str) -> _FakeWS:
-                if name not in fake_tabs:
-                    raise KeyError(name)
-                return _FakeWS(fake_tabs[name])
+            def _read_stock_rows(self, ws_name: str, sid: str) -> pd.DataFrame:
+                df = fake_tabs.get(ws_name, pd.DataFrame())
+                if df.empty or "stock_id" not in df.columns:
+                    return pd.DataFrame()
+                return df.loc[df["stock_id"] == sid].copy()
 
-        class _FakeGC:
-            def open_by_key(self, key: str) -> _FakeSP:
-                return _FakeSP()
+        class _FakeTaxSvc:
+            def load(self) -> dict[str, dict[str, str]]:
+                return {"3034": {"stock_name": "聯詠", "sector_group": "半導體", "sub_industry": "驅動IC設計", "valuation_regime": "穩健價值與高息股", "peers": '["3545"]'}}
+
+            def get_cached(self, sid: str) -> dict[str, str] | None:
+                return self.load().get(sid)
+
+        class _FakeAnalyzer:
+            def __init__(self, cache: Any, reports_dir: Any = None) -> None:
+                pass
+
+            def compute_cross_sectional_pe_map(self, close_lookup: Any) -> dict[str, float]:
+                return {"驅動IC設計": 14.0}
+
+            def compute_fundamental_features(self, sid: str, **kwargs: Any) -> Any:
+                return SimpleNamespace(
+                    revenue_momentum={"summary_line": "QTD +10%", "qtd_line": "達成率 35%"},
+                    margin_trends={"summary_line": "毛利率連兩季擴張"},
+                    forward_valuation={
+                        "summary_line": "Forward PE 11.8x (折價)",
+                        "implied_core_forward_eps": 40.0,
+                        "implied_forward_pe": 11.78,
+                        "sector_benchmark_pe": 14.0,
+                        "sector_pe_ratio": 0.84,
+                    },
+                    paid_in_capital_twd=6085000000.0,
+                    safe_weighted_shares=608500000.0,
+                )
+
+            def _fetch_yahoo_stock_rss(self, sid: str) -> list[dict[str, Any]]:
+                return []
+
+        import fundamental_analyzer as fa_mod
+        import fundamental_cache as fc_mod
+        import taxonomy_service as ts_mod
 
         with (
-            patch.dict(os.environ, {"GSHEET_SPREADSHEET_ID": "FAKE_PUBLIC_ID", "GOOGLE_APPLICATION_CREDENTIALS": "tests/test_taishin_nova.py"}),
-            patch("taishin_portfolio_service.gspread.service_account", return_value=_FakeGC()),
+            patch.object(fc_mod, "FundamentalCacheManager", return_value=_FakeCache()),
+            patch.object(fa_mod, "FundamentalAnalyzer", _FakeAnalyzer),
+            patch.object(ts_mod, "TaxonomyService", _FakeTaxSvc),
+            patch("quant.fundamental_cache.FundamentalCacheManager", return_value=_FakeCache()),
+            patch("quant.fundamental_analyzer.FundamentalAnalyzer", _FakeAnalyzer),
+            patch("quant.taxonomy_service.TaxonomyService", _FakeTaxSvc),
         ):
-            deep = svc.load_public_deep_fundamental_context({"3034", "9999"}, prices_by_sid={"3034": 471.0})
+            deep = svc.load_public_deep_fundamental_context(
+                {"3034", "9999"},
+                tech_map={"3034": {"close": 471.0}},
+            )
 
         d3034 = deep["3034"]
         self.assertEqual(d3034["income"]["period"], "2026Q2")
@@ -1182,15 +1243,16 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(d3034["cashflow"]["ocf_yi"], 55.0)
         self.assertEqual(d3034["cashflow"]["fcf_yi"], 48.11)
         self.assertEqual(d3034["revenue"]["rev_ym"], "2026-10")
+        self.assertEqual(d3034["revenue"]["mom_pct"], 3.45)
         self.assertEqual(d3034["revenue"]["yoy_pct"], 12.8)
-        self.assertIsNone(d3034["revenue"]["cum_yoy_pct"])
-        self.assertEqual(d3034["valuation"]["pe"], round(471.0 / 40.0, 2))
-        self.assertEqual(d3034["valuation"]["pb"], 4.71)
-        self.assertEqual(d3034["valuation"]["dividend_yield"], round(32.0 / 471.0 * 100.0, 2))
+        self.assertEqual(d3034["valuation"]["pe"], f"{471.0 / 40.0:.2f}")
+        self.assertEqual(d3034["valuation"]["pb"], "4.71")
+        self.assertEqual(d3034["valuation"]["dividend_yield"], f"{32.0 / 471.0 * 100.0:.2f}")
         self.assertEqual(d3034["chip"]["foreign_5d_lots"], "+850.0")
         self.assertEqual(d3034["chip"]["trust_5d_lots"], "+320.0")
         self.assertEqual(d3034["chip"]["three_inst_5d_lots"], "+1170.0")
         self.assertEqual(d3034["chip"]["est_margin_maint_pct"], "131.5%")
+        self.assertEqual(d3034["phase2_features"]["implied_forward_eps"], 40.0)
 
         # Missing values must degrade to N/A rather than misleading 0.0
         d9999 = deep["9999"]

@@ -317,7 +317,7 @@ class Phase3RegimeAndAuditTests(unittest.TestCase):
         self.assertEqual(quota.max_style_b_pullback_picks, 1)
         self.assertAlmostEqual(quota.max_allowed_sector_pe_ratio, 0.85)
 
-        # 驗證 Pass 1 後置硬攔截：紅燈下右側突破股強制轉為 REJECT_TRAP
+        # 驗證 SASD v5.9.0：紅燈下右側突破股改以風控註記提醒 CIO，由最終決策與 enforce_regime_quotas 控管
         item = StockAuditItem(
             stock_id="2382",
             stock_name="廣達",
@@ -335,8 +335,10 @@ class Phase3RegimeAndAuditTests(unittest.TestCase):
             context_by_stock={"2382": {"sector_breadth_pct": 60.0, "sector_member_count": 5}},
             regime_quota=quota.to_dict(),
         )
-        self.assertEqual(guarded[0].verdict_grade, "REJECT_TRAP")
-        self.assertEqual(guarded[0].execution_strategy_type, "NO_TRADE")
+        self.assertEqual(guarded[0].verdict_grade, "S_TIER_SNIPER")
+        self.assertIn("[量化風控備註]", guarded[0].conflict_resolution_reasoning)
+        self.assertIn("紅燈防禦期", guarded[0].conflict_resolution_reasoning)
+        self.assertTrue(any("紅燈防禦期" in f for f in guarded[0].bear_case_flaws))
 
         # 驗證決策層配額調控：黃燈下右側突破最多 1 檔，超額自動移列 watchlist
         yellow_q = {

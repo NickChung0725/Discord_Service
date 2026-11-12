@@ -383,11 +383,11 @@ flowchart TD
      * 今日與明日 ($T+1, T+2$) 應收付交割款淨額、帳戶可用現金水位。
   4. **個別持股部位與建倉記憶對照**：
      * 每檔庫存股之：代號、名稱、持有股數、成本均價、最新市價、未實現損益金額與百分比、佔總持倉權重 (`weight_pct`)。
-     * 技術微結構與支撐位：該股最新 $\text{MA}_{17}, \text{MA}_{45}, \text{MA}_{117}, \text{MA}_{189}$、17MA/189MA 乖離率、`RSI(14)`、昨高/昨低、`ATR(14)`、60 日大量 POC、當日漲跌幅同業百分位 `daily_return_pr`，以及右側棘輪防守參考 (`ratchet_stop_floor`) 與左側結構支撐參考 (`left_side_structural_floor`)。
-     * 深度基本面與籌碼微結構（唯讀自公用 Google Sheet 彙整）：最新季報 EPS / 三率、`存貨 / 合約負債 / DIO / DSO`、單季 OCF / FCF、月營收 YoY/MoM、估值殖利率護城河、近 5 日外資/投信/融資與估算融資維持率、產業分類 (`08_Stock_Taxonomy`)。
-     * 記憶庫錨定值：`initial_tp1`、`initial_tp2`、`initial_sl`、目前移動停利價 `trailing_stop`、`status`、當初買進理由 `entry_thesis` 與失效紅線 `invalidation_rule`。
-  5. **昨晚最新《AI 嚴選強勢潛力新星》（`fresh_top_picks_block`）**：
-     * 提供最新掃描日 `TOP_PICK` 候選清單，作為破線股執行 `🔄 趁彈減碼換股` 汰弱留強之機會成本對照。
+     * 技術微結構與支撐位：該股最新 $\text{MA}_{17}, \text{MA}_{45}, \text{MA}_{117}, \text{MA}_{189}$、17MA/189MA 乖離率、`RSI(14)`、昨高/昨低、`ATR(14)`、60 日大量 POC、當日漲跌幅同業百分位 `daily_return_pr`、同細分產業 17MA 資金廣度 (`sector_breadth_pct`)、處置過熱預警 (`disposition_tag`)，以及右側棘輪防守參考 (`ratchet_stop_floor`)、左側結構支撐參考 (`left_side_structural_floor`) 與反彈第一反壓參考 (`rebound_resistance_target`)。
+     * 深度基本面與籌碼微結構（由 `FundamentalCacheManager` + `FundamentalAnalyzer` 整合）：最新季報 EPS / 三率、`存貨 / 合約負債 / DIO / DSO`、單季 OCF / FCF、月營收 YoY/MoM、Phase 2 本業前瞻估值（`Implied Core Forward EPS` / `Sector PE Ratio` / `QTD Run-Rate` / 三率趨勢語意）、近 5 日外資/投信/融資與估算融資維持率、週集保 400/1000 張大戶底氣 (`tdcc_summary`)、日融資 K 棒效率 (`daily_margin_eff_tag`)、強制回補日曆與近 3 則個股新聞量價反應 (`recent_news`)。
+     * 記憶庫錨定值：`initial_tp1`、`initial_tp2`、`initial_sl`、目前移動停利價 `trailing_stop`、`status`、當初買進理由 `entry_thesis`、失效紅線 `invalidation_rule`，以及建倉時紅藍軍審計備忘（`Audit_Grade`、`Execution_Tactic`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers`）。
+  5. **昨晚最新《AI 嚴選強勢潛力新星》（`fresh_top_picks_block` 雙池整合）**：
+     * 同時彙整最新掃描日順勢 `AI_Daily_Picks` (`TOP_PICK`) 與型態 A 回踩長均線反彈 `Rebound_Watchlist`，作為破線股執行 `🔄 趁彈減碼換股` 汰弱留強之機會成本對照；大盤紅燈雙核心路由 (`RegimeRouter.fetch_live_dual_regime`) 亦自動補齊加權與櫃買 OTC 雙指數視野。
 * **要求 AI 產出的內容（智慧雙軌決策引擎）**：
   * 今日台股開盤跳空方向預判與資金控管總綱。
   * 逐檔持股之今日盤中具體操作指令與雙軌停損定錨：右側順勢嚴守 `ratchet_stop_floor`（達 TP1 執行風格 B 賣半鎖利）；跌破防線時透過四維度穿透審判區分「`🎯 逢低加碼` / `🛡️ 破線轉價值防守`（`thesis_intact=true` 可重定錨至左側結構防線）」與「`🔄 趁彈減碼換股` / `🚨 觸及停損` / `⚠️ 邏輯失效減碼`」。

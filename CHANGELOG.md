@@ -4,6 +4,23 @@
 
 ---
 
+## [v5.9.0] - 2026-11-12
+### ✨ 新增功能 & 🔧 架構升級 — 全鏈路武器掛載與瑤姐主動式 AI 授權終極版
+* **解除 `_enforce_post_audit_guards()` 死板硬攔截，改為風險標註授權 CIO 決策（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
+  * `_enforce_post_audit_guards()` 不再將低風報比、處置過熱、大盤紅燈或產業廣度偏低之候選股強制覆寫為 `REJECT_TRAP`，改為將量化風險觀察附加至 `conflict_resolution_reasoning` 與 `bear_case_flaws` 供 Stage 2 CIO 綜合裁量（僅保留 `PORTFOLIO_SWAP_ONLY` 與處置股改採 `STYLE_B_PULLBACK_LIMIT`）。
+  * `build_audit_record()` 與 `run_audit_stage()` 新增 `Microstructure_Summary`（籌碼微結構與融資效率）與 `Recent_News_Reactions`（近 3 則新聞與量價反應標籤），並於 `run_rebound_pipeline()`（型態 A 反彈選股）同步接上紅藍軍審計與確定性點位。
+* **升級 Stage 2 選股總裁決 Prompt（[`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：
+  * `PROMPT_TEMPLATES["portfolio_selection"]` 全面導入瑤姐 CIO/CRO 主動式視角：授權綜合權衡紅藍軍報告、本業前瞻 EPS / 同業 PE 比值 / QTD Run-Rate、集保 400/1000 張大戶與新聞利多出貨訊號，不再因單一量化瑕疵錯殺長線主流強勢股。
+* **晨間作戰室掛載全 9 大武器與雙核心大盤路由（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * `load_local_technical_context()` 新增同細分產業 17MA 資金廣度 (`sector_breadth_pct`)、處置過熱雷達 (`disposition_tag`)，並於本地快取缺少 `regime_quota` 時自動呼叫 `RegimeRouter.fetch_live_dual_regime()` 補齊加權 + 櫃買 OTC 雙核心與外資期貨淨空單狀態。
+  * `load_public_deep_fundamental_context()` 改以 `FundamentalCacheManager` + `FundamentalAnalyzer` 串接 `compute_fundamental_features()`（Phase 2 本業前瞻 EPS / Sector PE Ratio / QTD Run-Rate / 三率趨勢語意）、`evaluate_weekly_tdcc_anchor()`（週集保 400/1000 張大戶）、`classify_daily_margin_efficiency()`（日融資 K 棒效率）、強制回補日曆與個股 Yahoo RSS 新聞量價反應 (`align_news_with_price_action`)。
+  * `build_fresh_top_picks_block()` 升級為雙池整合版，同時呈現昨晚 `AI_Daily_Picks`（`TOP_PICK`）與 `Rebound_Watchlist`（型態 A 回踩長均線反彈績優股）。
+  * `run_morning_battle_ai_review()` 與 `run_morning_brief()` 將上述 Phase 2/3 武器、記憶卡建倉審計備忘 (`Audit_Grade` / `Bear_Case_Warning` / `Invalidation_Triggers`) 與處置風險完整注入 Morning Battle Dossier。
+* **同步更新晨間作戰 Prompt 與單元測試（[`taishin/taishin_config.py`](/taishin/taishin_config.py)、[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)、[`tests/test_alignment_ai_picker.py`](/tests/test_alignment_ai_picker.py)、[`tests/test_stage_guards.py`](/tests/test_stage_guards.py)）**：
+  * `TAISHIN_MORNING_BATTLE_PROMPT` 納入前瞻估值、集保大戶、處置預警與新聞量價反應判定準則，並同步更新對應單元測試。
+
+---
+
 ## [v5.8.1] - 2026-11-12
 ### 🔧 優化與錯誤修正 (Fixed & Changed) — 追蹤股公用快取自動保鮮與深層財報欄位／單位校準
 * **新增 `sync_memory()` 追蹤中波段持股公用基本面／籌碼快取自動保鮮（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：

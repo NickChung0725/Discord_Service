@@ -970,12 +970,10 @@ def _enforce_post_audit_guards(
     context_by_stock: Mapping[str, Mapping[str, object]] | None = None,
     regime_quota: Mapping[str, object] | None = None,
 ) -> list[StockAuditItem]:
-    """AI 回傳後的 Python 確定性攔截，防止 LLM 偶發性違規（Phase 1 + Phase 3 微結構與大盤風控）。
+    """AI 紅藍軍審計後之輕量風控標註（SASD v5.9.0：不以死板單一指標硬砍 AI 選出之優質股，改為附加風險提示交由 Stage 2 總決策權衡）。
 
-    1. 風報比 < 1.8（或無法計算）卻給 S_TIER：降級 A_TIER_PULLBACK；右側突破型直接 REJECT_TRAP。
-    2. 處置風險預警標的非空時：禁止右側突破追高（RIGHT_BREAKOUT -> REJECT_TRAP；其他改 STYLE_B_PULLBACK_LIMIT）。
-    3. 大盤雙指數風控路由器（RegimeQuotaConfig）：紅燈全面禁止右側突破、黃燈右側突破須 PR85+、族群廣度與相對 PE 上限硬攔截。
-    4. 庫存曝險為 SECTOR_OR_CORR_FULL_SWAP_ONLY 且非 REJECT_TRAP：戰術強制改為 PORTFOLIO_SWAP_ONLY。
+    1. 僅當庫存曝險為 SECTOR_OR_CORR_FULL_SWAP_ONLY 且非 REJECT_TRAP 時，標記為 PORTFOLIO_SWAP_ONLY（提醒換股操作）。
+    2. 風報比偏低、處置預警、大盤紅黃燈、族群廣度或前瞻 PE 偏高時，將量化觀測附加於 conflict_resolution_reasoning 與 bear_case_flaws 供 Stage 2 CIO 綜合裁量，不強制覆寫為 REJECT_TRAP。
     """
     guarded: list[StockAuditItem] = []
     for item in items:
@@ -985,96 +983,47 @@ def _enforce_post_audit_guards(
         grade = item.verdict_grade
         tactic = item.execution_strategy_type
         reasoning = item.conflict_resolution_reasoning
-        sig_type = str((setup or {}).get("signal_type") or "")
+        flaws = list(item.bear_case_flaws)
+        notes: list[str] = []
 
-        if setup is not None and grade == "S_TIER_SNIPER":
+        if setup is not None and grade != "REJECT_TRAP":
             rr = setup.get("deterministic_rr_ratio")
-            if rr is None or float(rr) < AUDIT_RR_GUARD_THRESHOLD:
-                if sig_type == "RIGHT_BREAKOUT":
-                    grade = "REJECT_TRAP"
-                    tactic = "NO_TRADE"
-                else:
-                    grade = "A_TIER_PULLBACK"
-                update["verdict_grade"] = grade
-                update["execution_strategy_type"] = tactic
-                reasoning = (
-                    f"{reasoning}｜[Python 攔截] 風報比 {rr} < "
-                    f"{AUDIT_RR_GUARD_THRESHOLD}，S 級評等已被降級為 {grade}。"
-                )
-                update["conflict_resolution_reasoning"] = reasoning
+            if rr is not None and float(rr) < AUDIT_RR_GUARD_THRESHOLD:
+                notes.append(f"確定性風報比 {rr} 偏低(<{AUDIT_RR_GUARD_THRESHOLD})，宜等拉回支撐區低接")
 
-        # Phase 3.1: 處置風險預警禁止右側突破追高
         disp_tag = str(ctx.get("disposition_tag") or "").strip()
         if grade != "REJECT_TRAP" and disp_tag:
-            if sig_type == "RIGHT_BREAKOUT":
-                grade = "REJECT_TRAP"
-                tactic = "NO_TRADE"
-                reasoning = f"{reasoning}｜[Python 處置攔截] 觸發處置流動性預警，禁止右側突破追高。"
-                update["verdict_grade"] = grade
-                update["execution_strategy_type"] = tactic
-                update["conflict_resolution_reasoning"] = reasoning
-            elif tactic == "BREAKOUT_0915_VWAP_OR_1315_CLOSE":
-                grade = "A_TIER_PULLBACK"
-                tactic = "STYLE_B_PULLBACK_LIMIT"
-                reasoning = f"{reasoning}｜[Python 處置降級] 觸發處置流動性預警，強制改為回測限價低接。"
-                update["verdict_grade"] = grade
-                update["execution_strategy_type"] = tactic
-                update["conflict_resolution_reasoning"] = reasoning
+            notes.append("觸發注意/處置過熱預警，切忌早盤追高，宜採回測限價低接")
+            if tactic == "BREAKOUT_0915_VWAP_OR_1315_CLOSE":
+                update["execution_strategy_type"] = "STYLE_B_PULLBACK_LIMIT"
 
-        # Phase 3.3 & 3.4: 雙指數大盤風控路由器、族群廣度與前瞻估值上限攔截
         if grade != "REJECT_TRAP" and regime_quota:
             r_code = str(regime_quota.get("regime_state") or regime_quota.get("regime") or "")
-            max_rb = int(regime_quota.get("max_right_breakout_picks", 99) or 0)
-            is_rb = sig_type == "RIGHT_BREAKOUT" or tactic == "BREAKOUT_0915_VWAP_OR_1315_CLOSE"
-            if is_rb and (r_code == "RED_DEFENSIVE" or max_rb <= 0):
-                grade = "REJECT_TRAP"
-                tactic = "NO_TRADE"
-                reasoning = f"{reasoning}｜[Python 大盤風控攔截] 紅燈防禦期全面禁止右側突破追價。"
-                update["verdict_grade"] = grade
-                update["execution_strategy_type"] = tactic
-                update["conflict_resolution_reasoning"] = reasoning
-            elif is_rb and r_code == "YELLOW_ROTATION":
-                ret_pr = ctx.get("return_percentile")
-                if ret_pr is not None and float(ret_pr) < 85.0:
-                    grade = "REJECT_TRAP"
-                    tactic = "NO_TRADE"
-                    reasoning = (
-                        f"{reasoning}｜[Python 黃燈強度攔截] 黃燈震盪期右側突破須達同業強弱 PR85（目前 PR{ret_pr}）。"
-                    )
-                    update["verdict_grade"] = grade
-                    update["execution_strategy_type"] = tactic
-                    update["conflict_resolution_reasoning"] = reasoning
-
+            if r_code == "RED_DEFENSIVE":
+                notes.append("大盤處於紅燈防禦期，須確認基本面現金流與法人逆勢買盤特別強勁")
             min_breadth = float(regime_quota.get("min_sector_breadth_pct", 0.0) or 0.0)
             b_members = int(ctx.get("sector_member_count", 0) or 0)
             b_pct = ctx.get("sector_breadth_pct")
-            if grade != "REJECT_TRAP" and min_breadth > 0 and b_members >= 3 and b_pct is not None:
-                if float(b_pct) < min_breadth:
-                    grade = "REJECT_TRAP"
-                    tactic = "NO_TRADE"
-                    reasoning = (
-                        f"{reasoning}｜[Python 族群廣度攔截] 同細分產業站上 17MA 比例 {b_pct}% < 門檻 {min_breadth}%。"
-                    )
-                    update["verdict_grade"] = grade
-                    update["execution_strategy_type"] = tactic
-                    update["conflict_resolution_reasoning"] = reasoning
-
+            if min_breadth > 0 and b_members >= 3 and b_pct is not None and float(b_pct) < min_breadth:
+                notes.append(f"同細分產業站上17MA廣度僅 {b_pct}%，屬個股突圍需留意資金續航力")
             max_pe_ratio = float(regime_quota.get("max_allowed_sector_pe_ratio", 999.0) or 999.0)
             pe_ratio = ctx.get("sector_pe_ratio")
-            if grade != "REJECT_TRAP" and pe_ratio is not None and float(pe_ratio) > max_pe_ratio:
-                grade = "REJECT_TRAP"
-                tactic = "NO_TRADE"
-                reasoning = (
-                    f"{reasoning}｜[Python 估值上限攔截] 前瞻 PE 相對同業比值 {pe_ratio}x > 當前氣候上限 {max_pe_ratio}x。"
-                )
-                update["verdict_grade"] = grade
-                update["execution_strategy_type"] = tactic
-                update["conflict_resolution_reasoning"] = reasoning
+            if pe_ratio is not None and float(pe_ratio) > max_pe_ratio:
+                notes.append(f"前瞻PE相對同業比值 {pe_ratio}x 高於常態({max_pe_ratio}x)，需高成長動能支撐")
 
         if grade != "REJECT_TRAP":
             status = _exposure_field(exposures.get(item.stock_id), "exposure_status")
             if status == "SECTOR_OR_CORR_FULL_SWAP_ONLY":
                 update["execution_strategy_type"] = "PORTFOLIO_SWAP_ONLY"
+                notes.append("台新庫存已有同產業或高相關持股，建議採汰弱留強換股操作")
+
+        if notes:
+            note_str = "｜[量化風控備註] " + "；".join(notes)
+            update["conflict_resolution_reasoning"] = f"{reasoning}{note_str}"
+            if len(flaws) < 4:
+                flaws.append("；".join(notes))
+                update["bear_case_flaws"] = flaws
+
         guarded.append(item.model_copy(update=update) if update else item)
     return guarded
 
@@ -1151,8 +1100,11 @@ def build_audit_record(
     item: StockAuditItem,
     setup: Mapping[str, object] | None,
     exposure: object,
+    *,
+    microstructure_block: str = "",
+    news_items: list[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
-    """合併 Python 確定性點位與 AI 審計結論（對應 05_Position_Thesis_Memory 擴充欄位語意）。"""
+    """合併 Python 確定性點位、微結構、新聞量價反應與 AI 審計結論（完整傳遞至 Stage 2 總決策）。"""
     setup = setup or {}
     zone_low, zone_high = setup.get("ideal_buy_zone_low"), setup.get("ideal_buy_zone_high")
     ref = setup.get("entry_reference_price")
@@ -1161,6 +1113,10 @@ def build_audit_record(
     else:
         ideal = "" if ref is None else str(ref)
     swap = _exposure_field(exposure, "exposure_status") == "SECTOR_OR_CORR_FULL_SWAP_ONLY"
+    compact_news = [
+        f"[{n.get('pub_date', '')[:10]}] {n.get('title', '')} ➔ {n.get('reaction_tag', '')}"
+        for n in (news_items or [])[:3]
+    ]
     return {
         "Audit_Grade": item.verdict_grade,
         "Execution_Tactic": item.execution_strategy_type,
@@ -1170,9 +1126,14 @@ def build_audit_record(
         "TP1_Target_Or_POC": setup.get("tp1_price"),
         "Deterministic_RR": setup.get("deterministic_rr_ratio"),
         "Bear_Case_Warning": item.bear_case_flaws[0] if item.bear_case_flaws else "",
+        "Bear_Case_Flaws_All": list(item.bear_case_flaws),
+        "Bull_Case_Catalysts": list(item.bull_case_catalysts),
+        "Auditor_Reasoning": item.conflict_resolution_reasoning,
         "Invalidation_Triggers": list(item.thesis_invalidation_triggers),
         "Exposure_Status": _exposure_field(exposure, "exposure_status", "OPEN"),
         "Swap_Banner": format_swap_banner(exposure) if swap else "",
+        "Microstructure_Summary": microstructure_block,
+        "Recent_News_Reactions": compact_news,
     }
 
 
@@ -1716,6 +1677,8 @@ async def run_audit_stage(
                 )
             except Exception as error:  # noqa: BLE001
                 print(f"[warn] {sid} 新聞量價對齊失敗（略過）：{error}")
+        audit_contexts[sid]["microstructure_block"] = microstructure_block
+        audit_contexts[sid]["news"] = news
         blocks.append((sid, build_audit_block(row, setup, exposure, news, fund_block, microstructure_block)))
 
     items, missing = await run_red_blue_audit(blocks, model=model)
@@ -1784,7 +1747,14 @@ async def run_audit_stage(
     survivor_ids = {i.stock_id for i in survivors}
 
     records = {
-        i.stock_id: build_audit_record(i, setups.get(i.stock_id), exposures.get(i.stock_id)) for i in survivors
+        i.stock_id: build_audit_record(
+            i,
+            setups.get(i.stock_id),
+            exposures.get(i.stock_id),
+            microstructure_block=str((audit_contexts.get(i.stock_id) or {}).get("microstructure_block") or ""),
+            news_items=list((audit_contexts.get(i.stock_id) or {}).get("news") or []),
+        )
+        for i in survivors
     }
     rejected: list[dict[str, str]] = []
     for item in guarded:
@@ -2684,16 +2654,43 @@ async def run_rebound_pipeline(
             )
 
         analyzed = selected.loc[selected["stock_id"].isin(ai_results.keys())].reset_index(drop=True)
+        audit_records: dict[str, dict[str, object]] = {}
+        pre_filtered_avoid: list[dict[str, str]] = []
+        if bool(_cfg(config, "ai_picker_red_blue_audit", True)) and not analyzed.empty:
+            before_audit = analyzed
+            try:
+                analyzed, audit_records, audit_rejected = await run_audit_stage(
+                    analyzed,
+                    config,
+                    target_date=target_date,
+                    daily_dir=daily_dir,
+                    analyzer=analyzer,
+                    model=portfolio_model,
+                    market_regime=market_regime,
+                    dry_run=dry_run,
+                )
+                pre_filtered_avoid.extend(audit_rejected)
+                print(f"[rebound] Pass 1 紅藍軍審計：通過 {len(analyzed)} 檔、淘汰 {len(audit_rejected)} 檔。")
+            except Exception as error:  # noqa: BLE001
+                analyzed = before_audit
+                audit_records = {}
+                print(f"[warn] [rebound] 紅藍軍審計失敗，退回未審計流程：{type(error).__name__}: {error}")
+
         if not analyzed.empty:
-            dossiers = [
-                build_dossier(
+            dossiers = []
+            for i, row in enumerate(analyzed.to_dict("records"), start=1):
+                sid = str(row["stock_id"])
+                dossier = build_dossier(
                     i,
                     row,
-                    str(ai_results[str(row["stock_id"])]["snapshot"]),
-                    str(ai_results[str(row["stock_id"])]["summary"]),
+                    str(ai_results[sid]["snapshot"]),
+                    str(ai_results[sid]["summary"]),
                 )
-                for i, row in enumerate(analyzed.to_dict("records"), start=1)
-            ]
+                if sid in audit_records:
+                    dossier += "\n- [D. 紅藍軍審計與 Python 確定性點位]\n  " + json.dumps(
+                        audit_records[sid], ensure_ascii=False, default=str
+                    )
+                dossiers.append(dossier)
             rebound_context = (
                 "本批次為【型態 A：高點急跌回踩長均線（45MA/117MA）反彈清單】。"
                 "請特別針對「均值回歸反彈空間（目標 17MA 與 +12% 正乖離）」、「長均線支撐防守力道」、"
@@ -2711,6 +2708,11 @@ async def run_rebound_pipeline(
             )
             raw_text = str(getattr(portfolio_meta, "text", "") or "")
             decision = parse_portfolio_json(raw_text, set(ai_results.keys()), max_top)
+            if decision is not None:
+                if audit_records:
+                    decision = apply_audit_to_decision(decision, audit_records)
+                if pre_filtered_avoid:
+                    decision = merge_pre_filtered_avoid(decision, pre_filtered_avoid)
             portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
             # 只要有經過 AI 分析，即確保所有反彈標的皆生成戰情室 HTML 並發布至 GitHub，且 war_room_url 寫入 00_Watchlist_Master

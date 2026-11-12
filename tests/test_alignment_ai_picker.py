@@ -654,9 +654,12 @@ class RedBlueAuditPhase1Test(unittest.TestCase):
             {},
         )
         by_id = {i.stock_id: i for i in out}
-        self.assertEqual(by_id["2330"].verdict_grade, "REJECT_TRAP")
-        self.assertEqual(by_id["2317"].verdict_grade, "A_TIER_PULLBACK")
-        self.assertEqual(select_audit_survivors(out), [by_id["2317"]])
+        # SASD v5.9.0: low R/R is annotated for CIO instead of hard REJECT_TRAP
+        self.assertEqual(by_id["2330"].verdict_grade, "S_TIER_SNIPER")
+        self.assertIn("1.35", by_id["2330"].conflict_resolution_reasoning)
+        self.assertTrue(any("1.35" in f for f in by_id["2330"].bear_case_flaws))
+        self.assertEqual(by_id["2317"].verdict_grade, "S_TIER_SNIPER")
+        self.assertEqual(select_audit_survivors(out), [by_id["2330"], by_id["2317"]])
 
     def test_swap_only_exposure_overrides_tactic_and_record_banner(self) -> None:
         exposure = SimpleNamespace(
