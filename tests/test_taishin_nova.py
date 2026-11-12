@@ -1114,6 +1114,91 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(enriched[0]["trailing_stop"], 460.0)
         self.assertEqual(decisions["3034"]["trailing_stop"], 460.0)
 
+    def test_load_public_deep_fundamental_context_matches_sheet_schemas_and_na_handling(self) -> None:
+        """Verify load_public_deep_fundamental_context reads real SHEET_SCHEMAS tabs/columns and formats N/A cleanly."""
+        import taishin_portfolio_service as svc
+
+        fake_tabs = {
+            "05_AI_Metrics_Wide": [
+                ["pk_key", "stock_id", "raw_date", "year_qtr", "gross_margin_pct", "op_margin_pct", "eps", "ttm_eps", "dio_days", "dso_days", "contract_liab_亿元", "ocf_亿元", "fcf_亿元"],
+                ["3034_2026Q1", "3034", "2026-03-31", "2026Q1", "39.06", "20.10", "8.5", "35.0", "64.0", "59.0", "12.0", "40.0", "35.0"],
+                ["3034_2026Q2", "3034", "2026-06-30", "2026Q2", "42.42", "22.56", "10.4", "40.0", "66.8", "61.0", "15.2", "55.0", "48.11"],
+                ["9999_2026Q2", "9999", "2026-06-30", "2026Q2", "30.0", "10.0", "1.0", "", "", "", "", "", ""],
+            ],
+            "03_Balance_Sheet": [
+                ["pk_key", "stock_id", "raw_date", "year_qtr", "inventory", "contract_liab_current", "parent_equity", "capital_stock"],
+                ["3034_2026Q2", "3034", "2026-06-30", "2026Q2", "12500000000", "1520000000", "60850000000", "6085000000"],
+                ["9999_2026Q2", "9999", "2026-06-30", "2026Q2", "", "", "", ""],
+            ],
+            "01_Monthly_Revenue": [
+                ["pk_key", "stock_id", "raw_date", "rev_ym", "mom_pct", "yoy_pct"],
+                ["3034_2026-10", "3034", "2026-10-31", "2026-10", "3.45", "12.80"],
+            ],
+            "06_Dividend_Policy": [
+                ["pk_key", "stock_id", "raw_date", "div_year", "cash_dividend"],
+                ["3034_2025", "3034", "2026-06-01", "2025", "32.0"],
+            ],
+            "07_Chip_Summary": [
+                ["pk_key", "stock_id", "raw_date", "trade_week", "foreign_net_buy_5d_lots", "trust_net_buy_5d_lots", "margin_chg_5d_lots", "est_margin_maint_pct", "chip_quadrant_tag"],
+                ["3034_2026-11-11", "3034", "2026-11-11", "2026-W46", "850", "320", "-120", "131.5", "🟢 法人買＋融資減"],
+                ["9999_2026-11-11", "9999", "2026-11-11", "2026-W46", "", "", "", "", ""],
+            ],
+            "08_Stock_Taxonomy": [
+                ["stock_id", "sector_group", "sub_industry", "valuation_regime", "peers", "updated_at"],
+                ["3034", "半導體", "驅動IC設計", "穩健價值與高息股", "[\"3545\", \"8016\"]", "2026-10-01"],
+            ],
+        }
+
+        class _FakeWS:
+            def __init__(self, rows: list[list[str]]) -> None:
+                self._rows = rows
+
+            def get_all_values(self) -> list[list[str]]:
+                return self._rows
+
+        class _FakeSP:
+            def worksheet(self, name: str) -> _FakeWS:
+                if name not in fake_tabs:
+                    raise KeyError(name)
+                return _FakeWS(fake_tabs[name])
+
+        class _FakeGC:
+            def open_by_key(self, key: str) -> _FakeSP:
+                return _FakeSP()
+
+        with (
+            patch.dict(os.environ, {"GSHEET_SPREADSHEET_ID": "FAKE_PUBLIC_ID", "GOOGLE_APPLICATION_CREDENTIALS": "tests/test_taishin_nova.py"}),
+            patch("taishin_portfolio_service.gspread.service_account", return_value=_FakeGC()),
+        ):
+            deep = svc.load_public_deep_fundamental_context({"3034", "9999"}, prices_by_sid={"3034": 471.0})
+
+        d3034 = deep["3034"]
+        self.assertEqual(d3034["income"]["period"], "2026Q2")
+        self.assertEqual(d3034["income"]["eps"], 10.4)
+        self.assertEqual(d3034["income"]["gm_qoq_pp"], 3.36)
+        self.assertEqual(d3034["balance"]["inventory_yi"], 125.0)
+        self.assertEqual(d3034["balance"]["contract_liabilities_yi"], 15.2)
+        self.assertEqual(d3034["cashflow"]["ocf_yi"], 55.0)
+        self.assertEqual(d3034["cashflow"]["fcf_yi"], 48.11)
+        self.assertEqual(d3034["revenue"]["rev_ym"], "2026-10")
+        self.assertEqual(d3034["revenue"]["yoy_pct"], 12.8)
+        self.assertIsNone(d3034["revenue"]["cum_yoy_pct"])
+        self.assertEqual(d3034["valuation"]["pe"], round(471.0 / 40.0, 2))
+        self.assertEqual(d3034["valuation"]["pb"], 4.71)
+        self.assertEqual(d3034["valuation"]["dividend_yield"], round(32.0 / 471.0 * 100.0, 2))
+        self.assertEqual(d3034["chip"]["foreign_5d_lots"], "+850")
+        self.assertEqual(d3034["chip"]["trust_5d_lots"], "+320")
+        self.assertEqual(d3034["chip"]["est_margin_maint_pct"], "131.5")
+
+        # Missing values must degrade to N/A rather than misleading 0.0
+        d9999 = deep["9999"]
+        self.assertEqual(d9999["balance"]["inventory_yi"], "N/A")
+        self.assertEqual(d9999["balance"]["contract_liabilities_yi"], "N/A")
+        self.assertEqual(d9999["cashflow"]["ocf_yi"], "N/A")
+        self.assertEqual(d9999["cashflow"]["fcf_yi"], "N/A")
+        self.assertEqual(d9999["chip"]["foreign_5d_lots"], "N/A")
+        self.assertEqual(d9999["chip"]["est_margin_maint_pct"], "N/A")
+
 
 if __name__ == "__main__":
     unittest.main()

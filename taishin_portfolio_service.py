@@ -948,14 +948,20 @@ def load_public_watchlist_cache(stock_ids: set[str]) -> dict[str, dict[str, str]
         return {}
 
 
-def load_public_deep_fundamental_context(stock_ids: set[str]) -> dict[str, dict[str, Any]]:
+def load_public_deep_fundamental_context(
+    stock_ids: set[str],
+    prices_by_sid: Mapping[str, float] | None = None,
+) -> dict[str, dict[str, Any]]:
     """Read latest fundamental, valuation, chip margin maintenance, and taxonomy records for tracked stocks.
 
-    Aligned 100% with `quant/fundamental_config.py` SHEET_SCHEMAS:
-    - `05_AI_Metrics_Wide` (single source of truth for quarterly EPS, margins, OCF/FCF, inventories, DIO/DSO, PE/PB/Yield)
-    - `04_Monthly_Revenue_YoY` (latest monthly revenue MoM, YoY, cumulative YoY)
-    - `07_Chip_Summary` (`foreign_net_5d_lots`, `it_net_5d_lots`, `margin_chg_5d_lots`, `est_margin_maint_pct`, `chip_quadrant_tag`)
-    - `08_Stock_Taxonomy` (`sector_group`, `sub_industry`, `valuation_regime`, `peers`)
+    Aligned with `quant/fundamental_config.py` SHEET_SCHEMAS (plus legacy tab/column fallbacks):
+    - `05_AI_Metrics_Wide`: quarterly EPS/TTM EPS, margins, DIO/DSO, `contract_liab_亿元`, `ocf_亿元`, `fcf_亿元`
+    - `03_Balance_Sheet`: `inventory`, `contract_liab_current`, `parent_equity`, `capital_stock` (for PB)
+    - `04_Cash_Flow`: `operating_cf`, `free_cf` fallback
+    - `01_Monthly_Revenue`: latest `rev_ym`, `mom_pct`, `yoy_pct`
+    - `06_Dividend_Policy`: `cash_dividend` (for cash dividend yield)
+    - `07_Chip_Summary`: `foreign_net_buy_5d_lots`, `trust_net_buy_5d_lots`, `margin_chg_5d_lots`, `est_margin_maint_pct`, `chip_quadrant_tag`
+    - `08_Stock_Taxonomy`: `sector_group`, `sub_industry`, `valuation_regime`, `peers`
     """
     clean_ids = {clean_leading_zero_code(s) for s in stock_ids if clean_leading_zero_code(s)}
     if not clean_ids:
@@ -1011,24 +1017,53 @@ def load_public_deep_fundamental_context(stock_ids: set[str]) -> dict[str, dict[
                 )
             return grouped
 
-        def _to_yi(val: Any) -> float:
-            num = _to_float(val, 0.0)
+        def _opt_float(val: Any) -> float | None:
+            if val in ("", None, "N/A", "nan", "NaN"):
+                return None
+            try:
+                return float(str(val).replace(",", "").strip())
+            except (TypeError, ValueError):
+                return None
+
+        def _opt_yi(val: Any, *, already_yi: bool = False) -> float | str:
+            num = _opt_float(val)
+            if num is None:
+                return "N/A"
+            if already_yi:
+                return round(num, 2)
             return round(num / 1e8, 2) if abs(num) >= 1e5 else round(num, 2)
 
-        # 1. Quarterly Wide Metrics (`05_AI_Metrics_Wide` has all joined income, balance, cashflow & valuation!)
+        def _pick_yi(row: Mapping[str, Any], *yi_keys: str, raw_keys: tuple[str, ...] = ()) -> float | str:
+            for k in yi_keys:
+                v = row.get(k)
+                if v not in ("", None, "N/A", "nan", "NaN"):
+                    return _opt_yi(v, already_yi=True)
+            for k in raw_keys:
+                v = row.get(k)
+                if v not in ("", None, "N/A", "nan", "NaN"):
+                    return _opt_yi(v, already_yi=False)
+            return "N/A"
+
+        ttm_eps_by_sid: dict[str, float] = {}
+
+        # 1. Quarterly Wide Metrics (`05_AI_Metrics_Wide`)
         wide_map = _read_latest_by_stock(
             ("05_AI_Metrics_Wide",),
-            ("period", "report_date", "updated_at"),
+            ("year_qtr", "raw_date", "period", "report_date", "updated_at"),
         )
         for sid, items in wide_map.items():
             last = items[-1]
             prev = items[-2] if len(items) >= 2 else {}
-            q_label = str(_pick_first(last, "period", "year_quarter", "report_date", default="最新季")).strip()
+            q_label = str(_pick_first(last, "year_qtr", "period", "year_quarter", "report_date", default="最新季")).strip()
             eps = round(_to_float(_pick_first(last, "eps", "EPS", default=0.0)), 2)
             gm = round(_to_float(_pick_first(last, "gross_margin_pct", default=0.0)), 2)
             opm = round(_to_float(_pick_first(last, "op_margin_pct", "operating_margin_pct", default=0.0)), 2)
             prev_gm = _to_float(_pick_first(prev, "gross_margin_pct", default=gm))
             gm_qoq = round(gm - prev_gm, 2) if prev else 0.0
+
+            ttm_eps = _opt_float(_pick_first(last, "ttm_eps", default=None))
+            if ttm_eps is not None and ttm_eps > 0:
+                ttm_eps_by_sid[sid] = ttm_eps
 
             result[sid]["income"] = {
                 "period": q_label,
@@ -1038,8 +1073,8 @@ def load_public_deep_fundamental_context(stock_ids: set[str]) -> dict[str, dict[
                 "gm_qoq_pp": gm_qoq,
             }
 
-            inv_yi = _to_yi(_pick_first(last, "inventories", "inventory", default=0.0))
-            cl_yi = _to_yi(_pick_first(last, "contract_liabilities", default=0.0))
+            inv_yi = _pick_yi(last, raw_keys=("inventories", "inventory"))
+            cl_yi = _pick_yi(last, "contract_liab_亿元", raw_keys=("contract_liab_current", "contract_liabilities"))
             dio = _pick_first(last, "dio_days", default="N/A")
             dso = _pick_first(last, "dso_days", default="N/A")
             result[sid]["balance"] = {
@@ -1050,8 +1085,8 @@ def load_public_deep_fundamental_context(stock_ids: set[str]) -> dict[str, dict[
                 "dso_days": dso,
             }
 
-            ocf_yi = _to_yi(_pick_first(last, "ocf", "operating_cash_flow", default=0.0))
-            fcf_yi = _to_yi(_pick_first(last, "fcf", "free_cash_flow", default=0.0))
+            ocf_yi = _pick_yi(last, "ocf_亿元", raw_keys=("ocf", "operating_cash_flow", "operating_cf"))
+            fcf_yi = _pick_yi(last, "fcf_亿元", raw_keys=("fcf", "free_cash_flow", "free_cf"))
             result[sid]["cashflow"] = {
                 "ocf_yi": ocf_yi,
                 "fcf_yi": fcf_yi,
@@ -1060,61 +1095,127 @@ def load_public_deep_fundamental_context(stock_ids: set[str]) -> dict[str, dict[
             pe_val = _pick_first(last, "pe_ttm", "pe", "per", default="")
             pb_val = _pick_first(last, "pb_ratio", "pb", "pbr", default="")
             dy_val = _pick_first(last, "cash_dividend_yield_pct", "dividend_yield", default="")
-            roe_val = _pick_first(last, "roe_annualized_pct", "roe_q_pct", default="")
+            roe_val = _pick_first(last, "parent_roe_pct", "roe_annualized_pct", "roe_q_pct", default="")
             result[sid]["valuation"] = {
-                "pe": round(_to_float(pe_val), 2) if pe_val not in ("", None) else "N/A",
-                "pb": round(_to_float(pb_val), 2) if pb_val not in ("", None) else "N/A",
-                "dividend_yield": round(_to_float(dy_val), 2) if dy_val not in ("", None) else "N/A",
-                "roe_pct": round(_to_float(roe_val), 2) if roe_val not in ("", None) else "N/A",
+                "pe": round(_to_float(pe_val), 2) if pe_val not in ("", None, "N/A") else "N/A",
+                "pb": round(_to_float(pb_val), 2) if pb_val not in ("", None, "N/A") else "N/A",
+                "dividend_yield": round(_to_float(dy_val), 2) if dy_val not in ("", None, "N/A") else "N/A",
+                "roe_pct": round(_to_float(roe_val), 2) if roe_val not in ("", None, "N/A") else "N/A",
             }
 
-        # Fallback to `02_Balance_Sheet` if `inventories` or `contract_liabilities` was 0 in wide table
-        bs_map = _read_latest_by_stock(("02_Balance_Sheet",), ("period", "report_date", "updated_at"))
+        # 1b. Balance Sheet (`03_Balance_Sheet` / `02_Balance_Sheet`) for inventory, contract_liab, and PB
+        bs_map = _read_latest_by_stock(
+            ("03_Balance_Sheet", "02_Balance_Sheet"),
+            ("year_qtr", "raw_date", "period", "report_date", "updated_at"),
+        )
         for sid, items in bs_map.items():
             last = items[-1]
+            q_label = str(_pick_first(last, "year_qtr", "period", "report_date", default="最新季")).strip()
             bal = result[sid].setdefault(
                 "balance",
-                {"period": str(last.get("period", "最新季")), "inventory_yi": 0.0, "contract_liabilities_yi": 0.0, "dio_days": "N/A", "dso_days": "N/A"},
+                {"period": q_label, "inventory_yi": "N/A", "contract_liabilities_yi": "N/A", "dio_days": "N/A", "dso_days": "N/A"},
             )
-            if not bal.get("inventory_yi"):
-                bal["inventory_yi"] = _to_yi(_pick_first(last, "inventories", "inventory", default=0.0))
-            if not bal.get("contract_liabilities_yi"):
-                bal["contract_liabilities_yi"] = _to_yi(_pick_first(last, "contract_liabilities", default=0.0))
+            if bal.get("inventory_yi") in ("N/A", "", None, 0.0):
+                bs_inv = _pick_yi(last, raw_keys=("inventory", "inventories"))
+                if bs_inv != "N/A":
+                    bal["inventory_yi"] = bs_inv
+            if bal.get("contract_liabilities_yi") in ("N/A", "", None, 0.0):
+                bs_cl = _pick_yi(last, raw_keys=("contract_liab_current", "contract_liabilities"))
+                if bs_cl != "N/A":
+                    bal["contract_liabilities_yi"] = bs_cl
 
-        # 2. Monthly Revenue (`04_Monthly_Revenue_YoY`)
-        rev_map = _read_latest_by_stock(("04_Monthly_Revenue_YoY", "04_Monthly_Revenue"), ("rev_year_month", "rev_ym", "revenue_date"))
+            # Compute PB if missing and live price is available
+            val_dict = result[sid].setdefault("valuation", {"pe": "N/A", "pb": "N/A", "dividend_yield": "N/A", "roe_pct": "N/A"})
+            px = _to_float((prices_by_sid or {}).get(sid), 0.0)
+            if val_dict.get("pb") == "N/A" and px > 0:
+                p_eq = _opt_float(last.get("parent_equity"))
+                cap_stk = _opt_float(last.get("capital_stock"))
+                if p_eq and cap_stk and p_eq > 0 and cap_stk > 0:
+                    bps = p_eq / (cap_stk / 10.0)
+                    if bps > 0:
+                        val_dict["pb"] = round(px / bps, 2)
+
+        # 1c. Cash Flow fallback (`04_Cash_Flow` / `03_Cash_Flow_Statement` / `03_Cash_Flow`)
+        cf_map = _read_latest_by_stock(
+            ("04_Cash_Flow", "03_Cash_Flow_Statement", "03_Cash_Flow"),
+            ("year_qtr", "raw_date", "period", "report_date", "updated_at"),
+        )
+        for sid, items in cf_map.items():
+            last = items[-1]
+            cf_dict = result[sid].setdefault("cashflow", {"ocf_yi": "N/A", "fcf_yi": "N/A"})
+            if cf_dict.get("ocf_yi") in ("N/A", "", None, 0.0):
+                cf_ocf = _pick_yi(last, raw_keys=("operating_cf", "operating_cash_flow", "ocf"))
+                if cf_ocf != "N/A":
+                    cf_dict["ocf_yi"] = cf_ocf
+            if cf_dict.get("fcf_yi") in ("N/A", "", None, 0.0):
+                cf_fcf = _pick_yi(last, raw_keys=("free_cf", "free_cash_flow", "fcf"))
+                if cf_fcf != "N/A":
+                    cf_dict["fcf_yi"] = cf_fcf
+
+        # 1d. Valuation fallback: PE from TTM EPS & dividend yield from `06_Dividend_Policy` / `05_Valuation_PER_PBR`
+        if prices_by_sid:
+            for sid, px_raw in prices_by_sid.items():
+                px = _to_float(px_raw, 0.0)
+                if px <= 0 or sid not in result:
+                    continue
+                val_dict = result[sid].setdefault("valuation", {"pe": "N/A", "pb": "N/A", "dividend_yield": "N/A", "roe_pct": "N/A"})
+                if val_dict.get("pe") == "N/A" and ttm_eps_by_sid.get(sid, 0.0) > 0:
+                    val_dict["pe"] = round(px / ttm_eps_by_sid[sid], 2)
+
+        div_map = _read_latest_by_stock(
+            ("06_Dividend_Policy",),
+            ("div_year", "raw_date", "ex_dividend_date", "updated_at"),
+        )
+        for sid, items in div_map.items():
+            last = items[-1]
+            px = _to_float((prices_by_sid or {}).get(sid), 0.0)
+            val_dict = result[sid].setdefault("valuation", {"pe": "N/A", "pb": "N/A", "dividend_yield": "N/A", "roe_pct": "N/A"})
+            if val_dict.get("dividend_yield") == "N/A" and px > 0:
+                cash_div = _opt_float(_pick_first(last, "cash_dividend", "total_dividend", default=None))
+                if cash_div is not None and cash_div >= 0:
+                    val_dict["dividend_yield"] = round(cash_div / px * 100.0, 2)
+
+        # 2. Monthly Revenue (`01_Monthly_Revenue` + legacy `04_Monthly_Revenue_YoY`)
+        rev_map = _read_latest_by_stock(
+            ("01_Monthly_Revenue", "04_Monthly_Revenue_YoY", "04_Monthly_Revenue"),
+            ("rev_ym", "raw_date", "rev_year_month", "revenue_date"),
+        )
         for sid, items in rev_map.items():
             last = items[-1]
-            ym = str(_pick_first(last, "rev_year_month", "rev_ym", "revenue_date", default="")).strip()
-            mom = _to_float(_pick_first(last, "mom_pct", default=0.0))
-            yoy = _to_float(_pick_first(last, "yoy_pct", default=0.0))
-            cum_yoy = _to_float(_pick_first(last, "cum_yoy_pct", "cumulative_yoy_pct", default=0.0))
+            ym = str(_pick_first(last, "rev_ym", "rev_year_month", "revenue_date", default="")).strip()
+            mom = _opt_float(_pick_first(last, "mom_pct", default=None))
+            yoy = _opt_float(_pick_first(last, "yoy_pct", default=None))
+            cum_yoy = _opt_float(_pick_first(last, "cum_yoy_pct", "cumulative_yoy_pct", default=None))
             result[sid]["revenue"] = {
                 "rev_ym": ym,
-                "mom_pct": round(mom, 2),
-                "yoy_pct": round(yoy, 2),
-                "cum_yoy_pct": round(cum_yoy, 2),
+                "mom_pct": round(mom, 2) if mom is not None else None,
+                "yoy_pct": round(yoy, 2) if yoy is not None else None,
+                "cum_yoy_pct": round(cum_yoy, 2) if cum_yoy is not None else None,
             }
 
         # 3. Chip & Margin Maintenance (`07_Chip_Summary`)
-        chip_map = _read_latest_by_stock(("07_Chip_Summary",), ("as_of_date", "updated_at"))
+        chip_map = _read_latest_by_stock(
+            ("07_Chip_Summary",),
+            ("raw_date", "trade_week", "as_of_date", "updated_at"),
+        )
         for sid, items in chip_map.items():
             last = items[-1]
-            f5 = _to_int(_pick_first(last, "foreign_net_5d_lots", "foreign_5d_net_lots", default=0))
-            it5 = _to_int(_pick_first(last, "it_net_5d_lots", "trust_5d_net_lots", default=0))
-            m5 = _to_int(_pick_first(last, "margin_chg_5d_lots", default=0))
+            f5_raw = _pick_first(last, "foreign_net_buy_5d_lots", "foreign_net_5d_lots", "foreign_5d_net_lots", default=None)
+            it5_raw = _pick_first(last, "trust_net_buy_5d_lots", "it_net_5d_lots", "trust_net_5d_lots", "trust_5d_net_lots", default=None)
+            m5_raw = _pick_first(last, "margin_chg_5d_lots", default=None)
             maint_raw = _pick_first(last, "est_margin_maint_pct", default="")
-            maint_str = f"{_to_float(maint_raw):.1f}" if maint_raw not in ("", None) else "N/A"
-            quad_tag = str(_pick_first(last, "chip_quadrant_tag", "inst_Flow_Tag", default="未分類")).strip()
+            maint_num = _opt_float(maint_raw)
+            maint_str = f"{maint_num:.1f}" if maint_num is not None else "N/A"
+            quad_tag = str(_pick_first(last, "chip_quadrant_tag", "inst_Flow_Tag", default="未分類")).strip() or "未分類"
             result[sid]["chip"] = {
-                "foreign_5d_lots": f"{f5:+d}",
-                "trust_5d_lots": f"{it5:+d}",
-                "margin_chg_5d_lots": f"{m5:+d}",
+                "foreign_5d_lots": f"{_to_int(f5_raw):+d}" if _opt_float(f5_raw) is not None else "N/A",
+                "trust_5d_lots": f"{_to_int(it5_raw):+d}" if _opt_float(it5_raw) is not None else "N/A",
+                "margin_chg_5d_lots": f"{_to_int(m5_raw):+d}" if _opt_float(m5_raw) is not None else "N/A",
                 "est_margin_maint_pct": maint_str,
                 "chip_quadrant_tag": quad_tag,
             }
 
-        # 4. Taxonomy (`08_Stock_Taxonomy` + fallback to `00_Watchlist_Master.valuation_regime`)
+        # 4. Taxonomy (`08_Stock_Taxonomy` + fallback to `00_Watchlist_Master`)
         tax_map = _read_latest_by_stock(("08_Stock_Taxonomy", "00_Watchlist_Master"), ("updated_at", "stock_id"))
         for sid, items in tax_map.items():
             last = items[-1]
@@ -3338,32 +3439,57 @@ async def run_morning_battle_ai_review(
                 f"營益率=`{inc.get('operating_margin_pct')}%`"
             )
         if bal:
-            dio_txt = f"｜DIO=`{bal.get('dio_days')}` 天" if bal.get("dio_days") not in ("", None) else ""
-            dso_txt = f"｜DSO=`{bal.get('dso_days')}` 天" if bal.get("dso_days") not in ("", None) else ""
+            inv_v = bal.get("inventory_yi")
+            inv_str = f"`{inv_v}` 億元" if inv_v not in ("", None, "N/A") else "`N/A`"
+            cl_v = bal.get("contract_liabilities_yi")
+            cl_str = f"`{cl_v}` 億元" if cl_v not in ("", None, "N/A") else "`N/A`"
+            dio_txt = f"｜DIO=`{bal.get('dio_days')}` 天" if bal.get("dio_days") not in ("", None, "N/A") else ""
+            dso_txt = f"｜DSO=`{bal.get('dso_days')}` 天" if bal.get("dso_days") not in ("", None, "N/A") else ""
             deep_lines.append(
-                f"📦 營運資金實測（核對失效紅線）：最新存貨=`{bal.get('inventory_yi')}` 億元｜"
-                f"合約負債(在手訂單)=`{bal.get('contract_liabilities_yi')}` 億元{dio_txt}{dso_txt}"
+                f"📦 營運資金實測（核對失效紅線）：最新存貨={inv_str}｜"
+                f"合約負債(在手訂單)={cl_str}{dio_txt}{dso_txt}"
             )
         if cf:
+            ocf_v = cf.get("ocf_yi")
+            ocf_str = f"`{ocf_v}` 億元" if ocf_v not in ("", None, "N/A") else "`N/A`"
+            fcf_v = cf.get("fcf_yi")
+            fcf_str = f"`{fcf_v}` 億元" if fcf_v not in ("", None, "N/A") else "`N/A`"
             deep_lines.append(
-                f"💵 現金流含金量：最新單季 OCF=`{cf.get('ocf_yi')}` 億元｜單季 FCF=`{cf.get('fcf_yi')}` 億元"
+                f"💵 現金流含金量：最新單季 OCF={ocf_str}｜單季 FCF={fcf_str}"
             )
         if rev and rev.get("rev_ym"):
+            mom_v = rev.get("mom_pct")
+            yoy_v = rev.get("yoy_pct")
+            cum_v = rev.get("cum_yoy_pct")
+            mom_str = f"`{mom_v:+.2f}%`" if isinstance(mom_v, (int, float)) else "`N/A`"
+            yoy_str = f"`{yoy_v:+.2f}%`" if isinstance(yoy_v, (int, float)) else "`N/A`"
+            cum_txt = f"｜累計 YoY=`{cum_v:+.2f}%`" if isinstance(cum_v, (int, float)) else ""
             deep_lines.append(
-                f"📈 最新月營收 ({rev.get('rev_ym')})：MoM=`{rev.get('mom_pct'):+.2f}%`｜"
-                f"YoY=`{rev.get('yoy_pct'):+.2f}%`｜累計 YoY=`{rev.get('cum_yoy_pct'):+.2f}%`"
+                f"📈 最新月營收 ({rev.get('rev_ym')})：MoM={mom_str}｜YoY={yoy_str}{cum_txt}"
             )
         if val and any(val.get(k) not in ("", None) for k in ("pe", "pb", "dividend_yield")):
+            dy_v = val.get("dividend_yield")
+            dy_str = f"{dy_v}%" if dy_v not in ("", None, "N/A") else "N/A"
             deep_lines.append(
                 f"⚖️ 估值與殖利率護城河：PE=`{val.get('pe') or 'N/A'}`｜PB=`{val.get('pb') or 'N/A'}`｜"
-                f"近一年現金殖利率=`{val.get('dividend_yield') or 'N/A'}%`"
+                f"近一年現金殖利率=`{dy_str}`"
             )
         if chip:
-            maint_str = f"`{chip.get('est_margin_maint_pct')}%`" if chip.get("est_margin_maint_pct") not in ("", None) else "`N/A`"
+            maint_str = (
+                f"`{chip.get('est_margin_maint_pct')}%`"
+                if chip.get("est_margin_maint_pct") not in ("", None, "N/A")
+                else "`N/A`"
+            )
             quad_str = chip.get("chip_quadrant_tag") or "未分類"
+            f5_v = chip.get("foreign_5d_lots")
+            f5_str = f"`{f5_v}` 張" if f5_v not in ("", None, "N/A") else "`N/A`"
+            it5_v = chip.get("trust_5d_lots")
+            it5_str = f"`{it5_v}` 張" if it5_v not in ("", None, "N/A") else "`N/A`"
+            m5_v = chip.get("margin_chg_5d_lots")
+            m5_str = f"`{m5_v}` 張" if m5_v not in ("", None, "N/A") else "`N/A`"
             deep_lines.append(
-                f"籌碼與融資維持率：外資近5日=`{chip.get('foreign_5d_lots')}` 張｜"
-                f"投信近5日=`{chip.get('trust_5d_lots')}` 張｜融資近5日增減=`{chip.get('margin_chg_5d_lots')}` 張｜"
+                f"籌碼與融資維持率：外資近5日={f5_str}｜"
+                f"投信近5日={it5_str}｜融資近5日增減={m5_str}｜"
                 f"估算融資維持率={maint_str}｜資法人對作標籤=`{quad_str}`"
             )
 
@@ -3877,7 +4003,12 @@ def run_morning_brief(
         print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，載入深度財報/籌碼微結構並呼叫 VERTEX_STAGE2_MODEL...")
         try:
             tracked_sids = {clean_leading_zero_code(m.get("stock_no", "")) for m in active_memories} - {""}
-            deep_fund_map = load_public_deep_fundamental_context(tracked_sids)
+            prices_by_sid = {
+                sno: _to_float(hold.get("current_price"), 0.0)
+                for sno, hold in agg_holdings.items()
+                if _to_float(hold.get("current_price"), 0.0) > 0
+            }
+            deep_fund_map = load_public_deep_fundamental_context(tracked_sids, prices_by_sid=prices_by_sid)
             fresh_top_picks_block = build_fresh_top_picks_block(picks_bundle)
             reviewed_active, decisions_by_sno, battle_headline, model_version = asyncio.run(
                 run_morning_battle_ai_review(
