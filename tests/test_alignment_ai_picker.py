@@ -661,6 +661,24 @@ class RedBlueAuditPhase1Test(unittest.TestCase):
         self.assertEqual(by_id["2317"].verdict_grade, "S_TIER_SNIPER")
         self.assertEqual(select_audit_survivors(out), [by_id["2330"], by_id["2317"]])
 
+    def test_apply_audit_to_decision_prevents_tp1_tp2_inversion(self) -> None:
+        from quant.alignment_ai_picker import apply_audit_to_decision
+
+        decision = {
+            "top_picks": [
+                {"stock_id": "2330", "target_price_1": "1050", "target_price_2": "1080", "stop_loss_price": "980"}
+            ],
+            "watchlist": [],
+        }
+        audit_records = {
+            "2330": {"TP1_Target_Or_POC": 1100.0, "Hard_Stop_Loss": 990.0}
+        }
+        updated = apply_audit_to_decision(decision, audit_records)
+        pick = updated["top_picks"][0]
+        self.assertIn("1100.00", pick["target_price_1"])
+        self.assertIn("1188.00", pick["target_price_2"])
+        self.assertIn("990.00", pick["stop_loss_price"])
+
     def test_swap_only_exposure_overrides_tactic_and_record_banner(self) -> None:
         exposure = SimpleNamespace(
             exposure_status="SECTOR_OR_CORR_FULL_SWAP_ONLY",

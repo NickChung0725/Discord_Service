@@ -896,11 +896,11 @@ AUDITOR_SYSTEM_PROMPT = """你是一位掌管部位風控的台股機構級「�
 【核心審計鐵律】
 1. 有罪推定原則：所有通過 Python 初篩的股票，預設都有 50% 機率是隔日沖主力製造的假突破陷阱。你必須先在 `bear_case_flaws` 找出它最致命的破綻。
 2. 新聞與量價對齊鐵律：絕對不可單憑新聞利多標題給出正面評價！若新聞標題看多，但 Python 標註為『⚠️ 爆量收黑/長上影線：疑似利多出貨』，必須判定為主力藉新聞掩護出貨，直接打入 `REJECT_TRAP`。
-3. 算術與點位尊重鐵律：所有停損價、追價上限、上方 Volume POC 壓力區與預估風報比（R/R Ratio）皆由 Python 精確計算完畢。若 Python 計算之 `deterministic_rr_ratio < 2.0`，原則上不得評為 `S_TIER_SNIPER`。
+3. 算術與點位尊重鐵律：所有停損價、追價上限、上方 Volume POC 壓力區與預估風報比（R/R Ratio）皆由 Python 精確計算完畢。若 deterministic_rr_ratio < 1.8，請優先評估是否適合改採 STYLE_B_PULLBACK_LIMIT（拉回支撐低接以提高風報比）並評為 A_TIER_PULLBACK，勿盲目追高。
 4. 消除逆向選擇之進場紀律：
    - 右側突破強勢股：嚴禁建議「死等拉回平盤才買」（會導致真飆股踏空、只買到假突破倒貨股），亦嚴禁 09:00 開盤盲目市價追高；必須採用 `BREAKOUT_0915_VWAP_OR_1315_CLOSE`（早盤冷卻 15 分鐘確認站穩均價線且低於追價上限試單 50%，或 13:15 尾盤確認站穩買進）。
    - Style B 回測股：必須採用 `STYLE_B_PULLBACK_LIMIT` 於支撐區間限價低接。
-5. 庫存共伴曝險鐵律：若候選股被標記為 `SECTOR_OR_CORR_FULL_SWAP_ONLY`（代表使用者台新帳戶中已有同產業或 60 日報酬相關係數 >= 0.80 的高度共伴持股），除非該股基本面與籌碼強度遠勝現有庫存，否則一律判定為 `REJECT_TRAP`。
+5. 庫存共伴曝險鐵律：若候選股被標記為 SECTOR_OR_CORR_FULL_SWAP_ONLY，代表使用者台新帳戶中已有同產業或高相關持股；若該股基本面與籌碼顯著優於現有弱勢庫存，請將戰術設為 PORTFOLIO_SWAP_ONLY 並給予 S_TIER_SNIPER 或 A_TIER_PULLBACK，否則才判定為 REJECT_TRAP。
 6. 寧缺勿濫否決權（Zero-Pick Veto）：如果整批候選股都存在結構性瑕疵，請毫不猶豫將全部股票評為 `REJECT_TRAP`。全數淘汰是完全正確且受讚賞的專業決策。
 7. 微結構與大盤氣候鐵律：若標註『⚠️ 處置與流動性凍結預警』嚴禁建議右側追高突破；若標註『⚠️ 融資套牢誘多』、『⚠️ 散戶接刀警報』或『⚠️ 個股孤狼假突破』，必須列為重大空方破綻並從嚴降級或打入 `REJECT_TRAP`；若標註『MARGIN_CALENDAR_NOTE（強制融券回補窗口）』則屬制度性買盤，不得誤判為基本面利多。"""
 
@@ -1769,16 +1769,30 @@ async def run_audit_stage(
 
 
 def apply_audit_to_decision(decision: dict, audit_records: Mapping[str, Mapping[str, object]]) -> dict:
-    """將 Python 確定性點位與審計結論併入 top_picks 與 watchlist；TP1 / 停損一律沿用 Python 計算值。"""
+    """將 Python 確定性點位與審計結論併入 top_picks 與 watchlist，並防止 TP1 >= TP2 價格倒掛。"""
+    try:
+        from quant.fundamental_analyzer import _first_price
+    except ImportError:
+        from fundamental_analyzer import _first_price  # type: ignore[no-redef]
+
     for pick in decision.get("top_picks", []):
         record = audit_records.get(str(pick.get("stock_id")))
         if not record:
             continue
         pick["audit"] = dict(record)
-        if record.get("TP1_Target_Or_POC") is not None:
-            pick["target_price_1"] = f"{record['TP1_Target_Or_POC']}（Python 確定性點位）"
-        if record.get("Hard_Stop_Loss") is not None:
-            pick["stop_loss_price"] = f"{record['Hard_Stop_Loss']}（Python 確定性硬停損）"
+        py_tp1 = _parse_optional_num(record.get("TP1_Target_Or_POC"))
+        py_sl = _parse_optional_num(record.get("Hard_Stop_Loss"))
+        ai_tp2 = _first_price(pick.get("target_price_2"))
+
+        if py_tp1 is not None and py_tp1 > 0:
+            pick["target_price_1"] = f"{py_tp1:.2f}（Python 確定性點位）"
+            # 防倒掛：若原 AI 設定之 TP2 <= Python TP1，自動將 TP2 向上推升至少 8%
+            if ai_tp2 is not None and ai_tp2 <= py_tp1:
+                bumped_tp2 = round(py_tp1 * 1.08, 2)
+                pick["target_price_2"] = f"{bumped_tp2:.2f}（依 Python TP1 自動順延 +8% 波段目標）"
+        if py_sl is not None and py_sl > 0:
+            pick["stop_loss_price"] = f"{py_sl:.2f}（Python 確定性硬停損）"
+
     for w_item in decision.get("watchlist", []):
         record = audit_records.get(str(w_item.get("stock_id")))
         if record and "audit" not in w_item:
@@ -2654,43 +2668,22 @@ async def run_rebound_pipeline(
             )
 
         analyzed = selected.loc[selected["stock_id"].isin(ai_results.keys())].reset_index(drop=True)
-        audit_records: dict[str, dict[str, object]] = {}
-        pre_filtered_avoid: list[dict[str, str]] = []
-        if bool(_cfg(config, "ai_picker_red_blue_audit", True)) and not analyzed.empty:
-            before_audit = analyzed
-            try:
-                analyzed, audit_records, audit_rejected = await run_audit_stage(
-                    analyzed,
-                    config,
-                    target_date=target_date,
-                    daily_dir=daily_dir,
-                    analyzer=analyzer,
-                    model=portfolio_model,
-                    market_regime=market_regime,
-                    dry_run=dry_run,
-                )
-                pre_filtered_avoid.extend(audit_rejected)
-                print(f"[rebound] Pass 1 紅藍軍審計：通過 {len(analyzed)} 檔、淘汰 {len(audit_rejected)} 檔。")
-            except Exception as error:  # noqa: BLE001
-                analyzed = before_audit
-                audit_records = {}
-                print(f"[warn] [rebound] 紅藍軍審計失敗，退回未審計流程：{type(error).__name__}: {error}")
 
         if not analyzed.empty:
             dossiers = []
             for i, row in enumerate(analyzed.to_dict("records"), start=1):
                 sid = str(row["stock_id"])
-                dossier = build_dossier(
-                    i,
-                    row,
-                    str(ai_results[sid]["snapshot"]),
-                    str(ai_results[sid]["summary"]),
-                )
-                if sid in audit_records:
-                    dossier += "\n- [D. 紅藍軍審計與 Python 確定性點位]\n  " + json.dumps(
-                        audit_records[sid], ensure_ascii=False, default=str
+                snapshot_txt = str(ai_results[sid].get("snapshot") or "").strip()
+                if not snapshot_txt:
+                    snapshot_txt = str(analyzer.build_quant_snapshot(sid))
+                dossiers.append(
+                    build_dossier(
+                        i,
+                        row,
+                        snapshot_txt,
+                        str(ai_results[sid]["summary"]),
                     )
-                dossiers.append(dossier)
+                )
             rebound_context = (
                 "本批次為【型態 A：高點急跌回踩長均線（45MA/117MA）反彈清單】。"
                 "請特別針對「均值回歸反彈空間（目標 17MA 與 +12% 正乖離）」、「長均線支撐防守力道」、"
@@ -2708,11 +2701,6 @@ async def run_rebound_pipeline(
             )
             raw_text = str(getattr(portfolio_meta, "text", "") or "")
             decision = parse_portfolio_json(raw_text, set(ai_results.keys()), max_top)
-            if decision is not None:
-                if audit_records:
-                    decision = apply_audit_to_decision(decision, audit_records)
-                if pre_filtered_avoid:
-                    decision = merge_pre_filtered_avoid(decision, pre_filtered_avoid)
             portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
             # 只要有經過 AI 分析，即確保所有反彈標的皆生成戰情室 HTML 並發布至 GitHub，且 war_room_url 寫入 00_Watchlist_Master

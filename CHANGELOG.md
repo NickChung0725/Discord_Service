@@ -4,16 +4,17 @@
 
 ---
 
-## [v5.9.0] - 2026-11-12
-### ✨ 新增功能 & 🔧 架構升級 — 全鏈路武器掛載與瑤姐主動式 AI 授權終極版
+## [v5.9.0 / v5.9.1] - 2026-11-12
+### ✨ 新增功能 & 🔧 架構升級 — 全鏈路武器掛載、瑤姐主動式 AI 授權與防衝突補丁
 * **解除 `_enforce_post_audit_guards()` 死板硬攔截，改為風險標註授權 CIO 決策（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
   * `_enforce_post_audit_guards()` 不再將低風報比、處置過熱、大盤紅燈或產業廣度偏低之候選股強制覆寫為 `REJECT_TRAP`，改為將量化風險觀察附加至 `conflict_resolution_reasoning` 與 `bear_case_flaws` 供 Stage 2 CIO 綜合裁量（僅保留 `PORTFOLIO_SWAP_ONLY` 與處置股改採 `STYLE_B_PULLBACK_LIMIT`）。
-  * `build_audit_record()` 與 `run_audit_stage()` 新增 `Microstructure_Summary`（籌碼微結構與融資效率）與 `Recent_News_Reactions`（近 3 則新聞與量價反應標籤），並於 `run_rebound_pipeline()`（型態 A 反彈選股）同步接上紅藍軍審計與確定性點位。
+  * `AUDITOR_SYSTEM_PROMPT` 同步調整第 3、5 條鐵律（低風報比改採 `STYLE_B_PULLBACK_LIMIT`、換股優於現股改採 `PORTFOLIO_SWAP_ONLY`），避免 Pass 1 與 Pass 2 邏輯衝突；`apply_audit_to_decision()` 補齊 TP1/TP2 防倒掛機制（若原 `target_price_2 <= py_tp1` 自動順延 `+8%`）。
+  * `build_audit_record()` 與 `run_audit_stage()` 新增 `Microstructure_Summary`（籌碼微結構與融資效率）與 `Recent_News_Reactions`（近 3 則新聞與量價反應標籤）；`run_rebound_pipeline()` 維持輕量 `analyzer.build_quant_snapshot()` 注入而不誤調 `17MA` 順勢點位審計。
 * **升級 Stage 2 選股總裁決 Prompt（[`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：
   * `PROMPT_TEMPLATES["portfolio_selection"]` 全面導入瑤姐 CIO/CRO 主動式視角：授權綜合權衡紅藍軍報告、本業前瞻 EPS / 同業 PE 比值 / QTD Run-Rate、集保 400/1000 張大戶與新聞利多出貨訊號，不再因單一量化瑕疵錯殺長線主流強勢股。
 * **晨間作戰室掛載全 9 大武器與雙核心大盤路由（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
   * `load_local_technical_context()` 新增同細分產業 17MA 資金廣度 (`sector_breadth_pct`)、處置過熱雷達 (`disposition_tag`)，並於本地快取缺少 `regime_quota` 時自動呼叫 `RegimeRouter.fetch_live_dual_regime()` 補齊加權 + 櫃買 OTC 雙核心與外資期貨淨空單狀態。
-  * `load_public_deep_fundamental_context()` 改以 `FundamentalCacheManager` + `FundamentalAnalyzer` 串接 `compute_fundamental_features()`（Phase 2 本業前瞻 EPS / Sector PE Ratio / QTD Run-Rate / 三率趨勢語意）、`evaluate_weekly_tdcc_anchor()`（週集保 400/1000 張大戶）、`classify_daily_margin_efficiency()`（日融資 K 棒效率）、強制回補日曆與個股 Yahoo RSS 新聞量價反應 (`align_news_with_price_action`)。
+  * `load_public_deep_fundamental_context()` 改以 `FundamentalCacheManager` + `FundamentalAnalyzer` 串接 `compute_fundamental_features()`（Phase 2 本業前瞻 EPS / Sector PE Ratio / QTD Run-Rate / 三率趨勢語意）、`evaluate_weekly_tdcc_anchor()`（週集保 400/1000 張大戶）、`classify_daily_margin_efficiency()`（日融資 K 棒效率）、強制回補日曆與個股 Yahoo RSS 新聞量價反應（`align_news_with_price_action(..., excerpt_fetcher=None)` 關閉外部二次爬蟲保障秒級回應）。
   * `build_fresh_top_picks_block()` 升級為雙池整合版，同時呈現昨晚 `AI_Daily_Picks`（`TOP_PICK`）與 `Rebound_Watchlist`（型態 A 回踩長均線反彈績優股）。
   * `run_morning_battle_ai_review()` 與 `run_morning_brief()` 將上述 Phase 2/3 武器、記憶卡建倉審計備忘 (`Audit_Grade` / `Bear_Case_Warning` / `Invalidation_Triggers`) 與處置風險完整注入 Morning Battle Dossier。
 * **同步更新晨間作戰 Prompt 與單元測試（[`taishin/taishin_config.py`](/taishin/taishin_config.py)、[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)、[`tests/test_alignment_ai_picker.py`](/tests/test_alignment_ai_picker.py)、[`tests/test_stage_guards.py`](/tests/test_stage_guards.py)）**：
