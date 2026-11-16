@@ -723,12 +723,40 @@ def fetch_tdcc_opendata_map(
         except Exception:  # noqa: BLE001
             pass
 
-    req = Request(TDCC_OPENDATA_CSV_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urlopen(req, timeout=timeout) as resp:
-        csv_text = resp.read().decode("utf-8-sig", errors="replace")
-
     import csv
+    import http.client
     import io
+    import socket
+    import ssl
+    import urllib.request
+
+    class _IPv4HTTPSConnection(http.client.HTTPSConnection):
+        def connect(self) -> None:
+            infos = socket.getaddrinfo(self.host, self.port, socket.AF_INET, socket.SOCK_STREAM)
+            last_err: OSError | None = None
+            for family, socktype, proto, _, sockaddr in infos:
+                sock = None
+                try:
+                    sock = socket.socket(family, socktype, proto)
+                    sock.settimeout(self.timeout)
+                    sock.connect(sockaddr)
+                    self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+                    return
+                except OSError as exc:
+                    last_err = exc
+                    if sock is not None:
+                        sock.close()
+            if last_err is not None:
+                raise last_err
+
+    class _IPv4HTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req: urllib.request.Request):  # type: ignore[override]
+            return self.do_open(_IPv4HTTPSConnection, req, context=self._context)
+
+    req = Request(TDCC_OPENDATA_CSV_URL, headers={"User-Agent": "Mozilla/5.0"})
+    opener = urllib.request.build_opener(_IPv4HTTPSHandler(context=ssl.create_default_context()))
+    with opener.open(req, timeout=timeout) as resp:
+        csv_text = resp.read().decode("utf-8-sig", errors="replace")
 
     stocks: dict[str, dict[str, Any]] = {}
     reader = csv.DictReader(io.StringIO(csv_text))

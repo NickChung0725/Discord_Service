@@ -47,6 +47,7 @@
 | **`04_Cash_Flow`** | **現金流量表 (自動累季轉單季)**：自動將 FinMind Q2/Q3/Q4 累計值拆解為**單季真實流量**（含折舊攤銷、AR/存貨/AP 營運資金變動、營業現金流 OCF、資本支出 CapEx、自由現金流 FCF）。 | 同季報水位增量同步。 |
 | **`05_AI_Metrics_Wide`** | **AI 衍生財務比率寬表**：後端 Pandas 精確算妥之毛利率、費用率、營益率、業外佔比、淨利率、TTM EPS、年化 ROE、DIO/DSO/DPO/CCC 週轉天數、OCF/NI 含金量、EBITDA、淨負債比、流動/速動比、利息保障倍數。 | 每次季報更新時由系統後端自動重算寫入（嚴禁 AI 自行心算）。 |
 | **`06_Dividend_Policy`** | **歷年股利政策表**：民國年自動轉西元年、現金股利、股票股利、總股利、現金股利總額(億)、年度 EPS、配息率 (`payout_ratio_pct`)、除息日。 | 30 天 TTL 增量更新。 |
+| **`07_Chip_Summary`** | **三大法人與外資籌碼表**：外資持股比例、20 日持股變化、外資/投信/自營商及三大法人合計之近 5 日與近 20 日買賣超（張）。 | 每日 TTL（>= 1 天）增量更新。 |
 | **`07_Chip_Summary`** | **三大法人、融資維持率與 TDCC 集保大戶籌碼表**：外資持股比例、20 日持股變化、外資/投信/自營商及三大法人合計之近 5 日與近 20 日買賣超（張）、融資使用率與維持率、資法人對作象限，以及 TDCC 官方免費 Open Data 之 400/1,000 張大戶持股比與總股東人數。 | 每日 TTL（>= 1 天）增量更新。 |
 | **`08_Stock_Taxonomy`** | **細分產業與同業知識庫**（SASD v5.7.3）：`stock_id`、`stock_name`、`official_industry`、`sector_group`（互斥六大板塊）、`sub_industry`（細分次產業，供 21:30 同業限額分群）、`valuation_regime`（估值定價邏輯：`景氣循環股` / `穩健價值與高息股` / `成長型科技與利基股` / `高本益比/題材研發股`）、`component_nature`（主動/被動元件等）、`supply_chain_role`、`core_products`、`theme_tags`、`peers`（經 Python 真實代號防幻覺校驗）、`updated_at`。同步本地快取 `finmind_reports/.state/stock_taxonomy.json`。 | TTL 90 天；由 `GEMINI_MODEL`（免費 flash-lite）搭配 Yahoo 業務簡介（自動過濾 SEO 空殼樣板字）產生，入榜訊號股與 `/stock_ai` 查詢時補齊並交接至 Stage 1 表頭。 |
 | **`MA_Signal_Tracker`** | **19:00 均線與量能強勢股追蹤表**：記錄每日符合五線排列之個股、標註「🆕 是（新進榜）/ 🔄 否（持續符合）」、「連續天數」、「每日執行狀況」、「17MA 近期走勢」、**「成交量(張) / 5日均量(張) / 20日均量(張) / 量能狀態(量比)」**並自動套用條件格式底色（放量點火自動亮橘紅加粗、低量冷門灰字警示）。 | 每日 19:00 `scan-all` 自動同步。 |
