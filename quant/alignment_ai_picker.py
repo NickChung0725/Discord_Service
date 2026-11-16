@@ -1229,8 +1229,10 @@ def build_audit_prompt(blocks: list[str]) -> str:
 async def _audit_batch(
     batch: list[tuple[str, str]], model: str | None
 ) -> tuple[list[StockAuditItem], list[str]]:
-    ids = {sid for sid, _ in batch}
-    stock_ids_str = ",".join(sorted(ids))
+    ids = [sid for sid, _ in batch]
+    ids_set = set(ids)
+    # 避免多個數字代號以逗號串接時被 BigQuery/Pandas 誤判為千分位大整數 (如 203,428,822,885)
+    stock_ids_str = "|".join(sorted(ids))
     try:
         meta = await ask_vertex_ai_with_meta(
             build_audit_prompt([block for _, block in batch]),
@@ -1249,8 +1251,8 @@ async def _audit_batch(
     if parsed is None:
         print(f"[warn] 紅藍軍審計批次 {sorted(ids)} 輸出無法解析。")
         return [], sorted(ids)
-    items = [i for i in parsed.audited_stocks if i.stock_id in ids]
-    missing = sorted(ids - {i.stock_id for i in items})
+    items = [i for i in parsed.audited_stocks if i.stock_id in ids_set]
+    missing = sorted(ids_set - {i.stock_id for i in items})
     return items, missing
 
 
@@ -1259,12 +1261,62 @@ async def run_red_blue_audit(
     *,
     model: str | None = None,
     batch_size: int = AUDIT_BATCH_SIZE,
+    use_vertex_batch: bool = False,
+    poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
+    target_date: date | None = None,
 ) -> tuple[list[StockAuditItem], list[str]]:
-    """Pass 1：每 batch_size 檔為一批以 asyncio.gather 並行審計。回傳 (審計結果, 未取得審計結果之代號)。"""
+    """Pass 1 紅藍軍審計：
+    - 當 `use_vertex_batch=True` 時，採 Vertex AI Batch API（預設模型 `get_vertex_batch_stage1_model()` 即 `gemini-3.8-flash`），
+      每檔候選股獨立一筆 Batch Request（`custom_id` 為 `stock_id`），享 50% Batch 折扣且 BigQuery `stock_id` 欄位精確為單一股票代號。
+    - 當 `use_vertex_batch=False` 時，維持每 `batch_size` 檔以 `asyncio.gather` 即時並行呼叫。
+    """
+    if not blocks:
+        return [], []
+
+    resolved_model = model or get_vertex_batch_stage1_model()
+
+    if use_vertex_batch:
+        day_str = (target_date or date.today()).isoformat()
+        batch_prompts: dict[str, str] = {
+            sid: build_audit_prompt([block]) for sid, block in blocks
+        }
+        stock_id_map: dict[str, str] = {sid: sid for sid, _ in blocks}
+        try:
+            batch_outputs = await run_vertex_batch_requests(
+                batch_prompts,
+                model=resolved_model,
+                job_prefix=f"pass1_audit_{day_str}",
+                poll_interval_seconds=poll_interval,
+                tag="red_blue_audit_batch",
+                task_type="RED_BLUE_AUDIT",
+                stock_ids=stock_id_map,
+            )
+        except Exception as error:  # noqa: BLE001
+            print(f"[warn] 紅藍軍 Vertex Batch 呼叫失敗，自動退回即時模式：{type(error).__name__}: {error}")
+            batch_outputs = {}
+
+        if batch_outputs:
+            items: list[StockAuditItem] = []
+            missing: list[str] = []
+            for sid, _ in blocks:
+                ai_meta = batch_outputs.get(sid)
+                if ai_meta is None:
+                    missing.append(sid)
+                    continue
+                parsed = parse_audit_response(str(getattr(ai_meta, "text", "") or ""))
+                if parsed is None or not parsed.audited_stocks:
+                    missing.append(sid)
+                    continue
+                matched = next((it for it in parsed.audited_stocks if str(it.stock_id).strip() == sid), parsed.audited_stocks[0])
+                if str(matched.stock_id).strip() != sid:
+                    matched = matched.model_copy(update={"stock_id": sid})
+                items.append(matched)
+            return items, missing
+
     batches = [blocks[i : i + batch_size] for i in range(0, len(blocks), batch_size)]
-    outcomes = await asyncio.gather(*(_audit_batch(b, model) for b in batches))
-    items: list[StockAuditItem] = []
-    missing: list[str] = []
+    outcomes = await asyncio.gather(*(_audit_batch(b, resolved_model) for b in batches))
+    items = []
+    missing = []
     for batch_items, batch_missing in outcomes:
         items.extend(batch_items)
         missing.extend(batch_missing)
@@ -1373,6 +1425,9 @@ async def run_audit_stage(
     model: str | None = None,
     market_regime: Mapping[str, object] | None = None,
     dry_run: bool = False,
+    stage1_results: Mapping[str, Mapping[str, object]] | None = None,
+    use_vertex_batch: bool = False,
+    poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, object]], list[dict[str, str]]]:
     """Pass 1 紅藍軍審計：除息補償 → 點位 → 處置/三層籌碼/族群廣度 → 庫存曝險 → 新聞量價對齊 → AI 審計 → 硬攔截 → 訊號留痕。
 
@@ -1492,6 +1547,18 @@ async def run_audit_stage(
                 )
             except Exception as error:  # noqa: BLE001
                 print(f"[warn] {sid} 基本面語意特徵計算失敗（略過）：{error}")
+
+        # 強制注入 Stage 1 已算妥之量化財務快照與單股財報診斷結論，徹底消除 Pass 1 盲審
+        s1_entry = (stage1_results or {}).get(sid) or {}
+        s1_snap = str(s1_entry.get("snapshot") or "").strip()
+        s1_sum = str(s1_entry.get("summary") or "").strip()
+        s1_extra_lines: list[str] = []
+        if s1_snap:
+            s1_extra_lines.append("【Stage 1 核心財務、估值與籌碼實測快照】\n" + s1_snap)
+        if s1_sum:
+            s1_extra_lines.append("【Stage 1 單股財報審計結論 (ai_summary_json)】\n  " + s1_sum[:900])
+        if s1_extra_lines:
+            fund_block = (fund_block + "\n" + "\n".join(s1_extra_lines)).strip()
 
         # Phase 3.1: 除權息跳空補償（僅用於技術點位/POC/ATR 計算；處置風險維持真實原始價格與週轉率）
         prices_for_setup = raw_stock_prices
@@ -1617,10 +1684,7 @@ async def run_audit_stage(
             r_label = regime_quota_dict.get("regime_state") or regime_quota_dict.get("regime") or ""
             r_banner = regime_quota_dict.get("regime_summary_tag") or regime_quota_dict.get("banner") or ""
             micro_lines.append(
-                f"- 大盤雙指數風控：{r_label}｜右側突破配額上限 "
-                f"{regime_quota_dict.get('max_right_breakout_picks')} 檔｜回測低接上限 "
-                f"{regime_quota_dict.get('max_style_b_pullback_picks')} 檔"
-                + (f"｜{r_banner}" if r_banner else "")
+                f"- 大盤雙指數氣候：{r_label}（{r_banner or '請優先篩選基本面與籌碼頂尖且具安全墊之標的'}）"
             )
         if disposition_tag:
             micro_lines.append(f"- 處置流動性雷達：{disposition_tag}")
@@ -1688,7 +1752,14 @@ async def run_audit_stage(
         audit_contexts[sid]["news"] = news
         blocks.append((sid, build_audit_block(row, setup, exposure, news, fund_block, microstructure_block)))
 
-    items, missing = await run_red_blue_audit(blocks, model=model)
+    audit_model = model or get_vertex_batch_stage1_model()
+    items, missing = await run_red_blue_audit(
+        blocks,
+        model=audit_model,
+        use_vertex_batch=use_vertex_batch,
+        poll_interval=poll_interval,
+        target_date=target_date,
+    )
     guarded = _enforce_post_audit_guards(
         items,
         setups,
@@ -2313,15 +2384,19 @@ async def run_pipeline(
     if bool(_cfg(config, "ai_picker_red_blue_audit", True)) and not analyzed.empty:
         before_audit = analyzed
         try:
+            audit_model = get_vertex_batch_stage1_model()
             analyzed, audit_records, audit_rejected = await run_audit_stage(
                 analyzed,
                 config,
                 target_date=target_date,
                 daily_dir=daily_dir,
                 analyzer=analyzer,
-                model=portfolio_model,
+                model=audit_model,
                 market_regime=market_regime,
                 dry_run=dry_run,
+                stage1_results=results,
+                use_vertex_batch=stage1_batch,
+                poll_interval=batch_poll,
             )
             pre_filtered_avoid = [*pre_filtered_avoid, *audit_rejected]
             audit_all_rejected = analyzed.empty

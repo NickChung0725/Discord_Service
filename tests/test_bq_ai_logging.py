@@ -130,7 +130,7 @@ class BigQueryAiLoggingGuaranteeTests(unittest.TestCase):
             mock_ask.assert_called_once()
             _, kwargs = mock_ask.call_args
             self.assertEqual(kwargs["task_type"], "RED_BLUE_AUDIT")
-            self.assertEqual(kwargs["stock_id"], "2330,2454")
+            self.assertEqual(kwargs["stock_id"], "2330|2454")
             self.assertTrue(kwargs["blocking_bq_log"])
             self.assertTrue(str(kwargs["custom_id"]).startswith("AUDIT_"))
 

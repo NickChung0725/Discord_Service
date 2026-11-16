@@ -936,17 +936,32 @@ def compute_sector_breadth(
     taxonomy_records: Mapping[str, Mapping[str, Any]],
     target_stock_id: str | None = None,
 ) -> dict[str, Any]:
-    """計算同細分產業資金共振度（SASD v5.4.0 Phase 3 SectorBreadth）。
-
-    ``stock_metrics``：``{stock_id: {"close", "ma17", "ret_pct"}}``。
-    回傳站上 MA17 家數比（%）、樣本數，以及 ``target_stock_id`` 在族群內的漲幅百分位
-    （100 = 最強；樣本 < 2 時為 None）。
-    """
+    """計算同細分產業資金共振度（SASD v5.9.3：若細分 sub_industry 樣本 < 3 檔，自動回退至官方 industry_category 或 sector_group）。"""
     target = str(sector_name or "").strip()
     members = [
         sid for sid, rec in taxonomy_records.items()
         if str(rec.get("sub_industry") or "").strip() == target and sid in stock_metrics
     ]
+    if len(members) < 3 and target_stock_id and str(target_stock_id) in taxonomy_records:
+        t_rec = taxonomy_records[str(target_stock_id)]
+        off_ind = str(t_rec.get("official_industry") or "").strip()
+        sec_grp = str(t_rec.get("sector_group") or "").strip()
+        if off_ind:
+            off_members = [
+                sid for sid, rec in taxonomy_records.items()
+                if str(rec.get("official_industry") or "").strip() == off_ind and sid in stock_metrics
+            ]
+            if len(off_members) >= len(members):
+                members = off_members
+                target = off_ind
+        if len(members) < 3 and sec_grp:
+            grp_members = [
+                sid for sid, rec in taxonomy_records.items()
+                if str(rec.get("sector_group") or "").strip() == sec_grp and sid in stock_metrics
+            ]
+            if len(grp_members) >= len(members):
+                members = grp_members
+                target = sec_grp
     if not members and target:
         members = [
             sid for sid, m in stock_metrics.items()

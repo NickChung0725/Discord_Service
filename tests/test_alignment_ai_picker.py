@@ -719,6 +719,41 @@ class RedBlueAuditPhase1Test(unittest.TestCase):
         self.assertLess(pullback["hard_stop_loss"], pullback["ideal_buy_zone_low"])
         self.assertIsNone(compute_deterministic_trade_setup(prices.head(10)))
 
+    def test_run_red_blue_audit_vertex_batch_uses_stage1_model_and_per_stock_requests(self) -> None:
+        item_json = json.dumps(
+            {
+                "audited_stocks": [
+                    {
+                        "stock_id": "2330",
+                        "stock_name": "台積電",
+                        "bear_case_flaws": ["漲多震盪"],
+                        "bull_case_catalysts": ["AI需求強"],
+                        "conflict_resolution_reasoning": "多頭勝出",
+                        "execution_strategy_type": "STYLE_B_PULLBACK_LIMIT",
+                        "thesis_invalidation_triggers": ["跌破月線"],
+                        "verdict_grade": "S_TIER_SNIPER",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        fake_batch_out = {"2330": SimpleNamespace(text=item_json)}
+        with (
+            patch("alignment_ai_picker.get_vertex_batch_stage1_model", return_value="gemini-3.8-flash"),
+            patch("alignment_ai_picker.run_vertex_batch_requests", new=AsyncMock(return_value=fake_batch_out)) as mock_batch,
+        ):
+            items, missing = asyncio.run(
+                run_red_blue_audit([("2330", "block_2330")], use_vertex_batch=True, target_date=date(2026, 11, 16))
+            )
+            mock_batch.assert_awaited_once()
+            _, kwargs = mock_batch.call_args
+            self.assertEqual(kwargs["model"], "gemini-3.8-flash")
+            self.assertEqual(kwargs["task_type"], "RED_BLUE_AUDIT")
+            self.assertEqual(kwargs["stock_ids"], {"2330": "2330"})
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0].stock_id, "2330")
+            self.assertEqual(missing, [])
+
 
 if __name__ == "__main__":
     unittest.main()

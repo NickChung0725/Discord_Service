@@ -421,6 +421,9 @@ def _extract_quarter_eps_and_ni(q_data: Mapping[str, Any]) -> tuple[float, float
     )
     eps_val = _to_float(raw_eps) or 0.0
     ni_val = _to_float(raw_ni) or 0.0
+    # 若損益表淨利單位為百萬元（如 6328 代表 63.28 億元），換算股數時自動乘以 1e6 還原為元
+    if 0 < abs(ni_val) < 1e6 and abs(eps_val) >= 0.05 and abs(ni_val / eps_val) < 1e5:
+        ni_val = ni_val * 1e6
     return eps_val, ni_val
 
 
@@ -2902,6 +2905,8 @@ class FundamentalAnalyzer:
             cap_series = pd.to_numeric(sorted_bs["capital_stock"], errors="coerce").dropna()
             if not cap_series.empty:
                 paid_in_capital_twd = float(cap_series.iloc[-1])
+                if 0 < paid_in_capital_twd < 1e7:
+                    paid_in_capital_twd *= 1e6
 
         if fallback_market_cap is None and paid_in_capital_twd > 0 and close is not None and close > 0:
             fallback_market_cap = (paid_in_capital_twd / 10.0) * float(close)

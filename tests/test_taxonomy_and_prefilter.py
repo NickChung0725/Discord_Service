@@ -263,6 +263,26 @@ class TaxonomyAndPrefilterTests(unittest.TestCase):
                 limiter.wait_for_slot.assert_called_once()
         self.assertEqual(adapter_send.call_count, 3)
 
+    def test_compute_sector_breadth_falls_back_when_sub_industry_under_3(self) -> None:
+        from quant.taxonomy_service import compute_sector_breadth
+
+        tax = {
+            "3034": {"sub_industry": "顯示驅動IC", "official_industry": "半導體業", "sector_group": "半導體"},
+            "2330": {"sub_industry": "晶圓代工", "official_industry": "半導體業", "sector_group": "半導體"},
+            "2454": {"sub_industry": "手機晶片", "official_industry": "半導體業", "sector_group": "半導體"},
+        }
+        metrics = {
+            "3034": {"close": 500.0, "ma17": 490.0, "ret_pct": 2.5},
+            "2330": {"close": 1000.0, "ma17": 980.0, "ret_pct": 1.0},
+            "2454": {"close": 1200.0, "ma17": 1250.0, "ret_pct": -1.5},
+        }
+        res = compute_sector_breadth("顯示驅動IC", metrics, taxonomy_records=tax, target_stock_id="3034")
+        self.assertEqual(res["sector_name"], "半導體業")
+        self.assertEqual(res["member_count"], 3)
+        self.assertEqual(res["above_ma17_count"], 2)
+        self.assertAlmostEqual(res["breadth_pct"], 66.7, places=1)
+        self.assertAlmostEqual(res["return_percentile"], 100.0, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()

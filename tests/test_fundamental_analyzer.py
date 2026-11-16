@@ -289,6 +289,17 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("RIGHT_SIDE_EXPANDING", block)
         self.assertIn("MARGIN_TRIPLE_EXPANSION", block)
 
+    def test_extract_quarter_eps_and_ni_scales_millions_to_twd(self) -> None:
+        from quant.fundamental_analyzer import _extract_quarter_eps_and_ni
+
+        eps, ni = _extract_quarter_eps_and_ni({"EPS": 10.40, "net_income_parent": 6328.0})
+        self.assertAlmostEqual(eps, 10.40)
+        self.assertAlmostEqual(ni, 6_328_000_000.0)
+
+        eps2, ni2 = _extract_quarter_eps_and_ni({"EPS": 2.0, "IncomeAfterTaxes": 600_000_000.0})
+        self.assertAlmostEqual(eps2, 2.0)
+        self.assertAlmostEqual(ni2, 600_000_000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

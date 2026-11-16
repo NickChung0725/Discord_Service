@@ -4,6 +4,21 @@
 
 ---
 
+## [v5.9.3] - 2026-11-16
+### ✨ 新增功能 & 🔧 優化與修正 — 紅藍軍審計 Vertex Batch 化、Stage 1 結論注入與單位/族群廣度資料斷鏈修復
+* **Pass 1 紅藍軍審計 (`RED_BLUE_AUDIT`) 升級支援 Vertex AI Batch 與 Stage 1 結論注入（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
+  * `run_red_blue_audit()` 新增 `use_vertex_batch`、`poll_interval`、`target_date` 參數，預設使用 `get_vertex_batch_stage1_model()`（`gemini-3.8-flash`），於 `use_vertex_batch=True` 時將每檔候選股獨立為單筆 Batch Request（`custom_id` 為 `stock_id`），失敗時自動退回即時模式；`_audit_batch()` 改以 `|` 串接多檔 `stock_id` 避免 BigQuery/Pandas 誤判千分位整數。
+  * `run_audit_stage()` 新增 `stage1_results`、`use_vertex_batch`、`poll_interval` 參數，強制將 Stage 1 量化財務快照 (`snapshot`) 與單股財報審計結論 (`summary`) 注入審計資料卡消除盲審，並調整 `micro_lines` 大盤雙指數氣候描述。
+  * `run_pipeline()` 呼叫 `run_audit_stage()` 時改以 `get_vertex_batch_stage1_model()` 並傳入 `stage1_results=results`、`use_vertex_batch=stage1_batch` 與 `poll_interval=batch_poll`。
+* **修復百萬元股本／淨利單位換算（[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)）**：
+  * `_extract_quarter_eps_and_ni()` 於 `0 < abs(ni_val) < 1e6` 且 `abs(eps_val) >= 0.05`（`abs(ni_val / eps_val) < 1e5`）時自動乘以 `1e6` 還原為「元」。
+  * `FundamentalAnalyzer.compute_fundamental_features()` 讀取 `capital_stock` 時，若 `0 < paid_in_capital_twd < 1e7` 自動乘以 `1e6` 轉為「元」，修復前瞻 EPS 與集保大戶估算。
+* **修復細分產業廣度「共 1 檔」盲區（[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)）**：
+  * `compute_sector_breadth()` 當 `sub_industry` 匹配樣本數 `< 3` 檔時，依序自動回退至 `official_industry` 或 `sector_group` 計算資金共振度與同業報酬 PR 值。
+* **同步更新單元測試（[`tests/test_bq_ai_logging.py`](/tests/test_bq_ai_logging.py)、[`tests/test_alignment_ai_picker.py`](/tests/test_alignment_ai_picker.py)、[`tests/test_fundamental_analyzer.py`](/tests/test_fundamental_analyzer.py)、[`tests/test_taxonomy_and_prefilter.py`](/tests/test_taxonomy_and_prefilter.py)）**。
+
+---
+
 ## [v5.9.0 / v5.9.1] - 2026-11-12
 ### ✨ 新增功能 & 🔧 架構升級 — 全鏈路武器掛載、瑤姐主動式 AI 授權與防衝突補丁
 * **解除 `_enforce_post_audit_guards()` 死板硬攔截，改為風險標註授權 CIO 決策（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
