@@ -310,6 +310,50 @@ def select_stocks(
     return selected.drop_duplicates(subset=["stock_id"]).reset_index(drop=True)
 
 
+def add_momentum_indicators(prices: pd.DataFrame) -> pd.DataFrame:
+    """純向量化補齊 9 日 KD (K9, D9)、MACD(12,26,9) 柱狀體 (MACD_OSC) 與成交量均線，不覆蓋既有 MA3~MA189。"""
+    result = prices.copy()
+    result["date"] = pd.to_datetime(result["date"], errors="coerce")
+    result["close"] = pd.to_numeric(result["close"], errors="coerce")
+    result = (
+        result.dropna(subset=["date", "close"])
+        .sort_values("date")
+        .drop_duplicates(subset=["date"], keep="last")
+        .reset_index(drop=True)
+    )
+    if "Trading_Volume" in result.columns and "vol_lots" not in result.columns:
+        vol_shares = pd.to_numeric(result["Trading_Volume"], errors="coerce")
+        result["vol_lots"] = (vol_shares / 1000.0).round(0)
+        result["vol_ma5_lots"] = (
+            result["vol_lots"].rolling(window=5, min_periods=1).mean().round(0)
+        )
+        result["vol_ma20_lots"] = (
+            result["vol_lots"].rolling(window=20, min_periods=1).mean().round(0)
+        )
+
+    ema12 = result["close"].ewm(span=12, adjust=False).mean()
+    ema26 = result["close"].ewm(span=26, adjust=False).mean()
+    dif = ema12 - ema26
+    dea = dif.ewm(span=9, adjust=False).mean()
+    result["MACD_OSC"] = (dif - dea).round(4)
+
+    high_col = "high" if "high" in result.columns else ("max" if "max" in result.columns else None)
+    low_col = "low" if "low" in result.columns else ("min" if "min" in result.columns else None)
+    if high_col and low_col:
+        high_s = pd.to_numeric(result[high_col], errors="coerce")
+        low_s = pd.to_numeric(result[low_col], errors="coerce")
+        low_9 = low_s.rolling(window=9, min_periods=1).min()
+        high_9 = high_s.rolling(window=9, min_periods=1).max()
+        denom = (high_9 - low_9).replace(0.0, float("nan"))
+        rsv = ((result["close"] - low_9) / denom * 100.0).fillna(50.0).clip(0.0, 100.0)
+        result["K9"] = rsv.ewm(com=2, adjust=False).mean().round(2)
+        result["D9"] = result["K9"].ewm(com=2, adjust=False).mean().round(2)
+    else:
+        result["K9"] = float("nan")
+        result["D9"] = float("nan")
+    return result
+
+
 def add_moving_averages(prices: pd.DataFrame) -> pd.DataFrame:
     missing = sorted(PRICE_COLUMNS.difference(prices.columns))
     if missing:
@@ -339,28 +383,7 @@ def add_moving_averages(prices: pd.DataFrame) -> pd.DataFrame:
             result["vol_lots"].rolling(window=20, min_periods=1).mean().round(0)
         )
 
-    # 9日 KD 與 MACD(12,26,9) 柱狀體（純向量化計算）
-    ema12 = result["close"].ewm(span=12, adjust=False).mean()
-    ema26 = result["close"].ewm(span=26, adjust=False).mean()
-    dif = ema12 - ema26
-    dea = dif.ewm(span=9, adjust=False).mean()
-    result["MACD_OSC"] = (dif - dea).round(4)
-
-    high_col = "high" if "high" in result.columns else ("max" if "max" in result.columns else None)
-    low_col = "low" if "low" in result.columns else ("min" if "min" in result.columns else None)
-    if high_col and low_col:
-        high_s = pd.to_numeric(result[high_col], errors="coerce")
-        low_s = pd.to_numeric(result[low_col], errors="coerce")
-        low_9 = low_s.rolling(window=9, min_periods=1).min()
-        high_9 = high_s.rolling(window=9, min_periods=1).max()
-        denom = (high_9 - low_9).replace(0.0, float("nan"))
-        rsv = ((result["close"] - low_9) / denom * 100.0).fillna(50.0).clip(0.0, 100.0)
-        result["K9"] = rsv.ewm(com=2, adjust=False).mean().round(2)
-        result["D9"] = result["K9"].ewm(com=2, adjust=False).mean().round(2)
-    else:
-        result["K9"] = float("nan")
-        result["D9"] = float("nan")
-    return result
+    return add_momentum_indicators(result)
 
 
 # --------------------------------------------------------------------------- #
@@ -553,10 +576,17 @@ def compute_rebound_trade_setup(
         return None
 
     close_t = float(frame["close"].iloc[-1])
-    ma17 = float(frame["close"].tail(17).mean())
-    ma45 = float(frame["close"].tail(45).mean()) if len(frame) >= 45 else ma17
-    ma117 = float(frame["close"].tail(117).mean()) if len(frame) >= 117 else ma45
-    ma189 = float(frame["close"].tail(189).mean()) if len(frame) >= 189 else ma117
+    last_row = frame.iloc[-1]
+    ma17 = _parse_optional_float(last_row.get("MA17")) or float(frame["close"].tail(17).mean())
+    ma45 = _parse_optional_float(last_row.get("MA45")) or (
+        float(frame["close"].tail(45).mean()) if len(frame) >= 45 else ma17
+    )
+    ma117 = _parse_optional_float(last_row.get("MA117")) or (
+        float(frame["close"].tail(117).mean()) if len(frame) >= 117 else ma45
+    )
+    ma189 = _parse_optional_float(last_row.get("MA189")) or (
+        float(frame["close"].tail(189).mean()) if len(frame) >= 189 else ma117
+    )
 
     ma_lookup = {"45MA": ma45, "117MA": ma117, "189MA": ma189}
     resolved_ma_name = support_ma if support_ma in ma_lookup else None
@@ -3988,8 +4018,10 @@ def scan_rebound_from_prices(
         }
         try:
             working = group
-            if not set(("MA3", "MA17", "MA45", "MA117", "MA189", "K9", "D9", "MACD_OSC")).issubset(working.columns):
+            if not set(("MA3", "MA17", "MA45", "MA117", "MA189")).issubset(working.columns):
                 working = add_moving_averages(working)
+            elif not set(("K9", "D9", "MACD_OSC")).issubset(working.columns):
+                working = add_momentum_indicators(working)
             signal = classify_rebound_signal(working, lookback_days=lookback_days)
             if signal is not None:
                 rebounds.append({**meta, **signal})
