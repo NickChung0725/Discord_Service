@@ -656,7 +656,7 @@ def is_mandatory_margin_covering_window(
     return False
 
 
-TDCC_OPENDATA_CSV_URL = "https://smart.tdcc.com.tw/opendata/getOD.ashx?id=1-5"
+TDCC_OPENDATA_CSV_URL = "https://opendata.tdcc.com.tw/getOD.ashx?id=1-5"
 
 # TDCC 集保官方持股分級代碼 (1~15) 對應持股下限（股）
 TDCC_LEVEL_LOWER_BOUNDS: dict[str, float] = {
@@ -700,7 +700,7 @@ def fetch_tdcc_opendata_map(
     *,
     as_of: date | None = None,
     cache_dir: Path = Path("finmind_reports/.state"),
-    timeout: int = 25,
+    timeout: int = 60,
 ) -> dict[str, dict[str, Any]]:
     """抓取台灣集保結算所（TDCC）官方免費 Open Data 全市場股權分散表（週五更新）。
 
@@ -753,7 +753,18 @@ def fetch_tdcc_opendata_map(
         def https_open(self, req: urllib.request.Request):  # type: ignore[override]
             return self.do_open(_IPv4HTTPSConnection, req, context=self._context)
 
-    req = Request(TDCC_OPENDATA_CSV_URL, headers={"User-Agent": "Mozilla/5.0"})
+    req = Request(
+        TDCC_OPENDATA_CSV_URL,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/130.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+        },
+    )
     opener = urllib.request.build_opener(_IPv4HTTPSHandler(context=ssl.create_default_context()))
     with opener.open(req, timeout=timeout) as resp:
         csv_text = resp.read().decode("utf-8-sig", errors="replace")

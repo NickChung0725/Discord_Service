@@ -1871,6 +1871,11 @@ class FundamentalAnalyzer:
                 "margin_chg_20d_lots",
                 "short_margin_ratio_pct",
                 "est_margin_maint_pct",
+                "tdcc_date",
+                "tdcc_400_lots_pct",
+                "tdcc_1000_lots_pct",
+                "tdcc_1000_lots_diff_pct",
+                "tdcc_total_shareholders",
             ]
             show = df_chip[[c for c in cols if c in df_chip.columns]].copy()
             parts.append("\n- 【法人與信用籌碼 (近 8 週，含融資使用率/增減與估算維持率)】")

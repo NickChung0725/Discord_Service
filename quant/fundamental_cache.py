@@ -1273,7 +1273,7 @@ class FundamentalCacheManager:
                     if not prev_vals.empty and pd.notna(tdcc_1000_lots_pct):
                         tdcc_1000_lots_diff_pct = round(tdcc_1000_lots_pct - float(prev_vals.iloc[-1]), 2)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("TDCC opendata enrichment skipped for %s: %s", stock_id, exc)
+            logger.warning("TDCC opendata enrichment skipped for %s: %s", stock_id, exc)
 
         row = {
             "pk_key": f"{stock_id}_{trade_week}",
