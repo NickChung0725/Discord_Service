@@ -26,11 +26,14 @@ import requests
 logger = logging.getLogger(__name__)
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+# 鎖定機構級通訊社與原生財經數據平台之 Google News 查詢語法
+_MACRO_QUERY_RAW = (
+    "(費半 OR 台積電ADR OR 輝達 OR 聯準會 OR 美股 OR 財報 OR 晶圓) "
+    "(鉅亨網 OR MoneyDJ OR 財經M平方 OR 中央社 OR 路透 OR 彭博 OR 華爾街日報 OR 經濟日報 OR 工商時報 OR Reuters OR Bloomberg OR CNBC) "
+    "when:2d"
+)
 GOOGLE_NEWS_MACRO_RSS_URL = (
-    "https://news.google.com/rss/search?"
-    "q=%28%E8%B2%BB%E5%8D%8A+OR+%E5%8F%B0%E7%A9%8D%E9%9B%BBADR+OR+%E8%BC%9D%E9%81%94+"
-    "OR+%E8%81%AF%E6%BA%96%E6%9C%83+OR+%E7%BE%8E%E8%82%A1+OR+%E9%97%9C%E7%A8%85%29+when%3A2d"
-    "&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    f"https://news.google.com/rss/search?q={quote(_MACRO_QUERY_RAW)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
 )
 DEFAULT_TIMEOUT_SECONDS = 12
 USER_AGENT_HEADERS = {
@@ -50,12 +53,69 @@ MACRO_SYMBOLS: tuple[tuple[str, str, str], ...] = (
     ("TWD=X", "USDTWD", "美元/台幣"),
 )
 
-_MACRO_NOISE_PATTERNS = (
+# 機構級財經媒體白名單（必須命中至少一項才放行，或未標註來源但標題含彭博/路透/法說外電）
+TRUSTED_MACRO_SOURCES: tuple[str, ...] = (
+    "MoneyDJ",
+    "嘉實",
+    "鉅亨",
+    "Anue",
+    "cnyes",
+    "財經M平方",
+    "MacroMicro",
+    "中央社",
+    "CNA",
+    "經濟日報",
+    "工商時報",
+    "路透",
+    "Reuters",
+    "彭博",
+    "Bloomberg",
+    "華爾街日報",
+    "WSJ",
+    "金融時報",
+    "Financial Times",
+    "CNBC",
+    "公開資訊觀測站",
+)
+
+# 娛樂八卦、綜合電視台農場與「標題殺手」黑名單句型
+_MACRO_NOISE_PATTERNS: tuple[str, ...] = (
     "股市爆料同學會",
     "盤中焦點",
     "即時新聞】",
     "早盤",
     "今日股價與討論",
+    "巴逆逆",
+    "外遇",
+    "醜聞",
+    "嚇壞全網",
+    "網驚",
+    "網哭",
+    "專家喊",
+    "法人點名",
+    "偷偷漲",
+    "飆股",
+    "明牌",
+    "後悔沒買",
+    "存股族",
+    "小資族",
+    "三立",
+    "SETN",
+    "東森",
+    "ETtoday",
+    "TVBS",
+    "民視",
+    "中天",
+    "中時新聞網",
+    "自由時報",
+    "自由財經",
+    "FTNN",
+    "鏡週刊",
+    "壹蘋",
+    "風傳媒",
+    "Newtalk",
+    "NOWnews",
+    "品觀點",
 )
 
 
@@ -155,6 +215,16 @@ def fetch_yahoo_quote_snapshot(
         return None
 
 
+def _is_trusted_macro_item(title: str, source: str) -> bool:
+    """Check if the headline comes from an institutional/trusted financial source and is free of clickbait."""
+    combined = f"{title} {source}"
+    if any(noise in combined for noise in _MACRO_NOISE_PATTERNS):
+        return False
+    if not source:
+        return True
+    return any(trusted.lower() in combined.lower() for trusted in TRUSTED_MACRO_SOURCES)
+
+
 def fetch_macro_news_headlines(
     *,
     max_items: int = 5,
@@ -163,7 +233,7 @@ def fetch_macro_news_headlines(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     now_utc: datetime | None = None,
 ) -> list[dict[str, str]]:
-    """Fetch and clean recent international macro / US semiconductor news headlines."""
+    """Fetch and filter recent international macro / US semiconductor news from institutional sources only."""
     http = session or requests
     try:
         resp = http.get(GOOGLE_NEWS_MACRO_RSS_URL, headers=USER_AGENT_HEADERS, timeout=timeout)
@@ -182,22 +252,25 @@ def fetch_macro_news_headlines(
     ref_now = now_utc or datetime.now(timezone.utc)
     cutoff = timedelta(hours=max_age_hours)
     seen_titles: set[str] = set()
-    cleaned: list[dict[str, str]] = []
+    tier1_cleaned: list[dict[str, str]] = []
+    fallback_cleaned: list[dict[str, str]] = []
 
     for item in root.findall(".//item"):
         raw_title = html.unescape((item.findtext("title") or "").strip())
         if not raw_title:
             continue
-        if any(pat in raw_title for pat in _MACRO_NOISE_PATTERNS):
-            continue
 
-        # Google News often appends " - 媒體名稱" at the end
-        source = ""
+        source = (item.findtext("source") or "").strip()
         title_body = raw_title
         if " - " in raw_title:
             parts = raw_title.rsplit(" - ", 1)
             title_body = parts[0].strip()
-            source = parts[1].strip()
+            if not source:
+                source = parts[1].strip()
+
+        # Hard block clickbait / tabloid noise immediately
+        if any(pat in f"{title_body} {source}" for pat in _MACRO_NOISE_PATTERNS):
+            continue
 
         norm_key = re.sub(r"\s+", "", title_body.lower())[:36]
         if not norm_key or norm_key in seen_titles:
@@ -217,17 +290,24 @@ def fetch_macro_news_headlines(
                 pub_str = ""
 
         seen_titles.add(norm_key)
-        cleaned.append(
-            {
-                "title": title_body,
-                "source": source,
-                "pub_time": pub_str,
-            }
-        )
-        if len(cleaned) >= max_items:
+        entry = {
+            "title": title_body,
+            "source": source,
+            "pub_time": pub_str,
+        }
+        if _is_trusted_macro_item(title_body, source):
+            tier1_cleaned.append(entry)
+        else:
+            fallback_cleaned.append(entry)
+
+        if len(tier1_cleaned) >= max_items:
             break
 
-    return cleaned
+    # Prioritize Tier-1 institutional sources; only pad with non-blacklisted fallback if needed
+    result = tier1_cleaned[:max_items]
+    if len(result) < max_items:
+        result.extend(fallback_cleaned[: max_items - len(result)])
+    return result
 
 
 def classify_macro_risk_tone(quotes: Mapping[str, Mapping[str, Any]]) -> tuple[str, str]:

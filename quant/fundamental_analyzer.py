@@ -69,7 +69,74 @@ NOISE_TITLE_PATTERNS = [
     "股價走強",
     "股價上攻",
     "早盤",
+    "法人點名",
+    "潛力股",
+    "偷偷漲",
+    "專家喊",
+    "分析師點名",
+    "飆股",
+    "明牌",
+    "巴逆逆",
+    "外遇",
+    "醜聞",
+    "嚇壞全網",
+    "網驚",
+    "網哭",
+    "後悔沒買",
+    "存股族",
+    "小資族",
 ]
+
+# 低含金量之綜合新聞台／八卦自媒體黑名單（出現於 source 或內文署名時直接剔除）
+BLACKLISTED_MEDIA_SOURCES = (
+    "三立",
+    "SETN",
+    "東森",
+    "ETtoday",
+    "TVBS",
+    "民視",
+    "中天",
+    "FTNN",
+    "鏡週刊",
+    "壹蘋",
+    "品觀點",
+    "NOWnews",
+    "Newtalk",
+    "風傳媒",
+    "中時新聞網",
+    "自由財經",
+    "自由時報",
+    "CMoney",
+    "理財寶",
+)
+
+# Tier-1 高含金量機構級財經媒體與官方資料源白名單（優先置頂採用）
+TRUSTED_TW_STOCK_MEDIA_KEYWORDS = (
+    "公開資訊觀測站",
+    "重大訊息",
+    "MOPS",
+    "MoneyDJ",
+    "嘉實",
+    "XQ",
+    "鉅亨",
+    "Anue",
+    "cnyes",
+    "財經M平方",
+    "MacroMicro",
+    "中央社",
+    "CNA",
+    "經濟日報",
+    "工商時報",
+    "路透",
+    "Reuters",
+    "彭博",
+    "Bloomberg",
+    "華爾街日報",
+    "WSJ",
+    "金融時報",
+    "CNBC",
+)
+
 RSS_MAX_AGE_DAYS = 180
 RSS_TITLE_SUMMARY_DUP_RATIO = 0.85
 RSS_NO_CONTENT_NOTE = "（僅有媒體標題，無公開具體展望數據，嚴禁據此推論）"
@@ -77,6 +144,37 @@ RSS_NO_CONTENT_NOTE = "（僅有媒體標題，無公開具體展望數據，嚴
 # Stage 0 硬性排雷門檻（/stock_ai 軟性警示；排程選股硬性攔截）
 HARD_MIN_VOLUME_LOTS = 300
 HARD_MIN_CONTRACT_LIAB_YI = 1.0
+
+
+def _detect_institutional_source_tier(item: Mapping[str, Any]) -> tuple[int, str]:
+    """Identify whether an RSS item originates from a Tier-1 institutional financial source.
+
+    Returns `(tier_rank, resolved_source_label)`:
+    - `tier_rank = 1`: Explicitly matches `TRUSTED_TW_STOCK_MEDIA_KEYWORDS` (MOPS, MoneyDJ, Anue, CNA, Economic/Commercial Daily, Reuters/Bloomberg).
+    - `tier_rank = 0`: Neutral / unlabelled source (not in blacklist).
+    - `tier_rank = -1`: Matches `BLACKLISTED_MEDIA_SOURCES` or clickbait patterns (should be dropped).
+    """
+    title = str(item.get("title", "") or "")
+    source = str(item.get("source", "") or "")
+    desc = str(item.get("summary") if "summary" in item else item.get("description", "") or "")
+    link = str(item.get("link", "") or "").lower()
+    combined = f"{title} {source} {desc}"
+
+    if any(pat in title for pat in NOISE_TITLE_PATTERNS):
+        return -1, source
+    if any(b_src in f"{title} {source}" for b_src in BLACKLISTED_MEDIA_SOURCES):
+        return -1, source
+    # If Yahoo RSS wraps a blacklisted tabloid in the first 40 chars of description
+    desc_head = desc[:45]
+    if any(b_src in desc_head for b_src in BLACKLISTED_MEDIA_SOURCES):
+        return -1, source
+
+    for kw in TRUSTED_TW_STOCK_MEDIA_KEYWORDS:
+        if kw.lower() in combined.lower() or kw.lower() in link:
+            resolved = source if (source and source != "Yahoo股市") else kw
+            return 1, resolved
+
+    return 0, source
 
 
 def _parse_rss_pubdate(raw: str) -> datetime | None:
@@ -118,16 +216,10 @@ def filter_and_clean_rss(
     now: datetime | None = None,
     max_age_days: int = RSS_MAX_AGE_DAYS,
     sort_by_date: bool = False,
+    strict_trusted_only: bool = False,
 ) -> list[dict]:
-    """清洗 RSS 新聞，回傳最多 5 筆（sort_by_date=True 時依發布時間由新到舊排序）。
-
-    1. 剔除 CMoney 盤中自動生成的看圖說故事廢文與討論區連結（NOISE_TITLE_PATTERNS / cmoney.tw/forum）。
-    2. 剔除發布時間超過 max_age_days（預設 180 天）之過期舊聞。
-    3. 摘要為空、或與標題重複度 > 85%（如富果空殼摘要）時，強制標註無內文，防止 AI 腦補。
-       （is_guidance=True 時，摘要為空或與標題完全相同亦視為空殼。）
-    摘要欄位優先使用 `summary`，其次為 RSS 解析出的 `description`。
-    """
-    valid_items: list[tuple[float, int, dict]] = []
+    """清洗 RSS 新聞，回傳最多 5 筆（優先保留 MoneyDJ/鉅亨網/MOPS/中央社/路透彭博等機構級來源，徹底剔除標題殺手與八卦農場）。"""
+    valid_items: list[tuple[int, float, int, dict]] = []
     for idx, original in enumerate(news_items):
         item = dict(original)
         title = str(item.get("title", "") or "")
@@ -138,6 +230,14 @@ def filter_and_clean_rss(
             continue
         if _rss_item_too_old(item, now=now, max_age_days=max_age_days):
             continue
+
+        tier_rank, detected_src = _detect_institutional_source_tier(item)
+        if tier_rank < 0:
+            continue
+        if strict_trusted_only and tier_rank < 1:
+            continue
+        if detected_src and item.get("source") in ("", "Yahoo股市"):
+            item["source"] = f"Yahoo股市/{detected_src}" if item.get("source") == "Yahoo股市" else detected_src
 
         key = "summary" if "summary" in item else "description"
         summary = str(item.get(key, "") or "")
@@ -158,10 +258,12 @@ def filter_and_clean_rss(
             item[key] = RSS_NO_CONTENT_NOTE
         published = _parse_rss_pubdate(str(item.get("pubDate", "") or ""))
         sort_ts = published.timestamp() if published is not None else float("-inf")
-        valid_items.append((sort_ts, -idx, item))
+        valid_items.append((tier_rank, sort_ts, -idx, item))
+
     if sort_by_date:
-        valid_items.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
-    return [entry[2] for entry in valid_items[:5]]
+        # 優先排 Tier-1 機構級來源，同級內依發布時間由新到舊排序
+        valid_items.sort(key=lambda entry: (entry[0], entry[1], entry[2]), reverse=True)
+    return [entry[3] for entry in valid_items[:5]]
 
 
 def build_hard_warnings(metrics: dict) -> list[str]:
@@ -1388,7 +1490,8 @@ class FundamentalAnalyzer:
 
         if not items:
             source_label = "Google News RSS"
-            query_recent = f"{stock_id} {stock_name} 台股 when:30d".strip()
+            trusted_media_filter = "(MoneyDJ OR 鉅亨網 OR 中央社 OR 經濟日報 OR 工商時報 OR 財經M平方 OR 公開資訊觀測站)"
+            query_recent = f"{stock_id} {stock_name} {trusted_media_filter} when:30d".strip()
             try:
                 raw_items = self._fetch_google_news_rss(query_recent)
             except Exception:
@@ -1426,7 +1529,8 @@ class FundamentalAnalyzer:
         """定向檢索近期法說會/管理層展望報導（純 Python、不耗 AI 額度）。"""
         title_block = "\n■ 近期法說會與管理層未來展望檢索 (Google News RSS，近 180 天)"
         query = (
-            f"{stock_name} {stock_id} (法說 OR 展望 OR 訂單 OR 產能 OR 資本支出 OR 毛利率 OR 財測) when:180d"
+            f"{stock_name} {stock_id} (法說 OR 展望 OR 訂單 OR 產能 OR 資本支出 OR 毛利率 OR 財測 OR 營收) "
+            f"(MoneyDJ OR 鉅亨網 OR 中央社 OR 經濟日報 OR 工商時報 OR 公開資訊觀測站) when:180d"
         ).strip()
         try:
             items = self._fetch_google_news_rss(query)

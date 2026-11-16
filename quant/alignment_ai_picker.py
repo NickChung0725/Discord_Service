@@ -1730,12 +1730,15 @@ async def run_audit_stage(
         news: list[dict[str, object]] = []
         if analyzer is not None and has_prices:
             try:
-                raw_news = await asyncio.to_thread(
-                    analyzer._fetch_google_news_rss,  # noqa: SLF001
-                    f"{sid} {row.get('stock_name', '')} 台股".strip(),
-                )
+                from fundamental_analyzer import filter_and_clean_rss
+                raw_news = await asyncio.to_thread(analyzer._fetch_yahoo_stock_rss, sid)  # noqa: SLF001
+                cleaned_news = filter_and_clean_rss(raw_news, is_guidance=False, max_age_days=14, sort_by_date=True)
+                if not cleaned_news:
+                    q_str = f"{sid} {row.get('stock_name', '')} (MoneyDJ OR 鉅亨網 OR 中央社 OR 經濟日報 OR 工商時報) when:14d"
+                    raw_gnews = await asyncio.to_thread(analyzer._fetch_google_news_rss, q_str)  # noqa: SLF001
+                    cleaned_news = filter_and_clean_rss(raw_gnews, is_guidance=False, max_age_days=14, sort_by_date=True)
                 recent_news = _filter_recent_rss_news(
-                    raw_news,
+                    cleaned_news,
                     raw_stock_prices,
                     trading_days=5,
                     target_date=target_date,

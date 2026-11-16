@@ -1309,14 +1309,16 @@ def load_public_deep_fundamental_context(
                             pass
             result[sid]["chip"] = chip_entry
 
-            # 6. Recent Stock News + Price Action Reaction (Yahoo Stock RSS + align_news_with_price_action)
+            # 6. Recent Stock News + Price Action Reaction (Filtered by Institutional Media Whitelist)
             try:
+                from fundamental_analyzer import filter_and_clean_rss
                 raw_rss = analyzer._fetch_yahoo_stock_rss(sid)  # noqa: SLF001
-                if prices_df is not None and not prices_df.empty and raw_rss:
+                clean_rss = filter_and_clean_rss(raw_rss, is_guidance=False, max_age_days=30, sort_by_date=True)
+                if prices_df is not None and not prices_df.empty and clean_rss:
                     sub_p = prices_df.loc[prices_df["stock_id"] == sid]
-                    aligned_news = align_news_with_price_action(raw_rss[:3], sub_p, excerpt_fetcher=None)
+                    aligned_news = align_news_with_price_action(clean_rss[:3], sub_p, excerpt_fetcher=None)
                     result[sid]["recent_news"] = [
-                        f"[{n.get('pub_date', '')[:16]}] {n.get('title', '')} ➔ {n.get('reaction_tag', '')}（摘要：{str(n.get('summary', ''))[:90]}）"
+                        f"[{n.get('pub_date', '')[:16]}] {n.get('title', '')} ({n.get('source', '機構新聞')}) ➔ {n.get('reaction_tag', '')}（摘要：{str(n.get('summary', ''))[:90]}）"
                         for n in aligned_news[:3]
                     ]
             except Exception:  # noqa: BLE001

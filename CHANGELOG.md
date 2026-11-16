@@ -19,6 +19,21 @@
 
 ---
 
+## [v5.9.2] - 2026-11-16
+### ✨ 新增功能 & 🔧 優化與修正 — 機構級財經新聞白名單與標題殺手過濾器
+* **國際盤與總經新聞檢索淨化（[`taishin/macro_context.py`](/taishin/macro_context.py)）**：
+  * 更新 `GOOGLE_NEWS_MACRO_RSS_URL` 鎖定機構級通訊社與原生財經媒體（鉅亨網、MoneyDJ、財經M平方、中央社、路透、彭博、華爾街日報、經濟日報、工商時報、Reuters、Bloomberg、CNBC）。
+  * 新增 `TRUSTED_MACRO_SOURCES` 與 `_is_trusted_macro_item()`，並擴充 `_MACRO_NOISE_PATTERNS` 封殺綜合電視台農場、娛樂八卦與標題黨句型；`fetch_macro_news_headlines()` 採 Tier-1 機構新聞優先、非黑名單備援。
+* **台股個股新聞、MOPS 重訊與法說展望白名單化（[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)）**：
+  * 擴充 `NOISE_TITLE_PATTERNS` 並新增 `BLACKLISTED_MEDIA_SOURCES`、`TRUSTED_TW_STOCK_MEDIA_KEYWORDS` 與 `_detect_institutional_source_tier()`；升級 `filter_and_clean_rss()` 自動剔除低含金量媒體並將 Tier-1 機構級來源排序置頂。
+  * 升級 `fetch_free_stock_news_and_search()` 與 `fetch_earnings_call_and_outlook()` 的 Google News 檢索詞限定機構級財經媒體。
+* **Pass 1 紅藍軍審計與晨間作戰室新聞源對齊（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * `run_audit_stage()` 改以 Yahoo 個股 RSS + `filter_and_clean_rss()` 為主源，不足時再查限定媒體之 Google News RSS。
+  * `load_public_deep_fundamental_context()` 串接 `filter_and_clean_rss()` 過濾個股近期新聞並附帶媒體來源標籤。
+* **擴充單元測試（[`tests/test_fundamental_analyzer.py`](/tests/test_fundamental_analyzer.py)、[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)）**。
+
+---
+
 ## [v5.9.0 / v5.9.1] - 2026-11-12
 ### ✨ 新增功能 & 🔧 架構升級 — 全鏈路武器掛載、瑤姐主動式 AI 授權與防衝突補丁
 * **解除 `_enforce_post_audit_guards()` 死板硬攔截，改為風險標註授權 CIO 決策（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：

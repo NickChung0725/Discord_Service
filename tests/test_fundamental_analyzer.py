@@ -300,6 +300,45 @@ class FundamentalAnalyzerTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(eps2, 2.0)
         self.assertAlmostEqual(ni2, 600_000_000.0)
 
+    def test_filter_and_clean_rss_prioritizes_institutional_and_drops_tabloid(self) -> None:
+        from quant.fundamental_analyzer import filter_and_clean_rss
+
+        items = [
+            {
+                "title": "專家喊這檔偷偷漲！巴逆逆也驚呆",
+                "source": "三立新聞網",
+                "pubDate": "Mon, 16 Nov 2026 08:00:00 +0800",
+                "description": "三立新聞網報導",
+                "link": "https://example.com/1",
+            },
+            {
+                "title": "台積電法說展望樂觀",
+                "source": "自由財經",
+                "pubDate": "Mon, 16 Nov 2026 09:00:00 +0800",
+                "description": "自由時報報導",
+                "link": "https://example.com/2",
+            },
+            {
+                "title": "台積電資本支出維持高檔",
+                "source": "未標註媒體",
+                "pubDate": "Mon, 16 Nov 2026 09:30:00 +0800",
+                "description": "一般市場觀察，資本支出計畫不變。",
+                "link": "https://example.com/3",
+            },
+            {
+                "title": "台積電先進製程產能滿載",
+                "source": "Yahoo股市",
+                "pubDate": "Mon, 16 Nov 2026 07:00:00 +0800",
+                "description": "MoneyDJ新聞 報導，先進製程產能利用率維持高檔。",
+                "link": "https://example.com/4",
+            },
+        ]
+        cleaned = filter_and_clean_rss(items, is_guidance=False, sort_by_date=True)
+        self.assertEqual(len(cleaned), 2)
+        self.assertEqual(cleaned[0]["title"], "台積電先進製程產能滿載")
+        self.assertEqual(cleaned[0]["source"], "Yahoo股市/MoneyDJ")
+        self.assertEqual(cleaned[1]["title"], "台積電資本支出維持高檔")
+
 
 if __name__ == "__main__":
     unittest.main()
