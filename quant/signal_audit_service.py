@@ -23,7 +23,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 DEFAULT_AUDIT_DB_PATH = Path("data") / "signal_audit.db"
-SIGNAL_AUDIT_GSHEET_TAB = "09_Signal_Audit_Log"
+SIGNAL_AUDIT_GSHEET_TAB = "Signal_Audit_Log"
 SIGNAL_AUDIT_GSHEET_HEADERS: list[str] = [
     "audit_id",
     "signal_date",
@@ -476,7 +476,7 @@ class SignalAuditStore:
         credentials_path: str | None = None,
         tab_name: str = SIGNAL_AUDIT_GSHEET_TAB,
     ) -> int:
-        """將 `signal_audit_log` 增量／全表同步至 Google Sheets 專屬分頁（預設 `09_Signal_Audit_Log`）。"""
+        """將 `signal_audit_log` 增量／全表同步至 Google Sheets 專屬分頁（預設 `Signal_Audit_Log`）。"""
         rows = self.fetch_all_rows()
         if not rows:
             return 0

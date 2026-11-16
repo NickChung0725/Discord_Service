@@ -15,6 +15,13 @@
   * `FundamentalAnalyzer.compute_fundamental_features()` 讀取 `capital_stock` 時，若 `0 < paid_in_capital_twd < 1e7` 自動乘以 `1e6` 轉為「元」，修復前瞻 EPS 與集保大戶估算。
 * **修復細分產業廣度「共 1 檔」盲區（[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)）**：
   * `compute_sector_breadth()` 當 `sub_industry` 匹配樣本數 `< 3` 檔時，依序自動回退至 `official_industry` 或 `sector_group` 計算資金共振度與同業報酬 PR 值。
+* **事後審計分頁更名為 `Signal_Audit_Log` 並校正 SASD 架構文件（[`quant/signal_audit_service.py`](/quant/signal_audit_service.py)、[`finmind_scanner.json`](/finmind_scanner.json)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`discord_service_sasd.md`](/discord_service_sasd.md)、[`README.md`](/README.md)）**：
+  * 將 `SIGNAL_AUDIT_GSHEET_TAB` 與 `signal_audit_gsheet_tab_name` 預設值由 `09_Signal_Audit_Log` 統一更名為 `Signal_Audit_Log`（與編號 `00~08` 核心快取表區隔）。
+  * 全面校準 [`discord_service_sasd.md`](/discord_service_sasd.md) 第 2.3、3.2、3.4、4.1、4.2、4.5 節，刪除過時之 `09_Shareholding_Dispersion` / `10_SubSector_Taxonomy` / `11_Guidance_Claims` / `12_AI_Diagnosis_Cache` 與 `Google Search Grounding` 描述，100% 對齊 `SHEET_SCHEMAS` 實作並揭露 FinMind 免費版 `TaiwanStockHoldingSharesPer` 權限限制。
+* **串接 TDCC 官方免費 Open Data 並擴充至 `07_Chip_Summary`（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`quant/fundamental_config.py`](/quant/fundamental_config.py)、[`quant/fundamental_cache.py`](/quant/fundamental_cache.py)、[`scripts/fetch_tdcc_opendata.py`](/scripts/fetch_tdcc_opendata.py)、[`scripts/inspect_stock_report.py`](/scripts/inspect_stock_report.py)）**：
+  * 新增 `fetch_tdcc_opendata_map()` 串接台灣集保結算所官方免費 CSV（`id=1-5`，每日快取於 `tdcc_opendata_latest.json`），並讓 `fetch_or_cache_tdcc_holding()` 於 FinMind 免費版權限不足時自動回退至 TDCC Open Data。
+  * `07_Chip_Summary` 擴充 `tdcc_date`、`tdcc_400_lots_pct`、`tdcc_1000_lots_pct`、`tdcc_1000_lots_diff_pct` 與 `tdcc_total_shareholders` 五欄。
+  * 新增測試與查詢腳本 `scripts/fetch_tdcc_opendata.py` 與 `scripts/inspect_stock_report.py`。
 * **同步更新單元測試（[`tests/test_bq_ai_logging.py`](/tests/test_bq_ai_logging.py)、[`tests/test_alignment_ai_picker.py`](/tests/test_alignment_ai_picker.py)、[`tests/test_fundamental_analyzer.py`](/tests/test_fundamental_analyzer.py)、[`tests/test_taxonomy_and_prefilter.py`](/tests/test_taxonomy_and_prefilter.py)）**。
 
 ---

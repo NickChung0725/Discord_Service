@@ -68,7 +68,7 @@
 * **NFR-01 成本最佳化**：盤後批次選股必須支援 GCP Vertex AI Batch API（享標準定價 50% 折扣），並透過本地與雲端多級快取減少重複呼叫。
 * **NFR-02 容錯與高可用性**：當外部 API（FinMind、Google Sheets、Vertex AI、台新 API）發生瞬斷時，需具備指數退避重試（Exponential Backoff）與降級（Fallback）機制。
 * **NFR-03 結構化輸出保證**：所有 AI 診斷結果必須通過嚴格的 JSON Schema 驗證與正規表達式修復，確保後續數值計算與表單寫入不中斷。
-* **NFR-04 可觀測性與稽核**：所有 AI 請求與回應（含 Prompt 長度、Token 消耗、模型名稱、耗時）必須完整寫入 `logs/YYYY-MM-DD_ai_calls.log`。
+* **NFR-04 可觀測性與稽核**：所有 AI 請求與回應（含 Prompt 長度、Token 消耗、模型名稱、耗時）必須完整寫入本地 `finmind_reports/logs/YYYY-MM-DD_ai_calls.log` 並歸檔至 BigQuery `discord_service.ai_prompt_logs`。
 
 ---
 
@@ -111,7 +111,7 @@ graph TB
     end
 
     subgraph AI_Layer["Google AI 與雲端批次層"]
-        GEMINI["Gemini Online API<br/>(Stage 1 Search Grounding / 單股即時診斷)"]
+        GEMINI["Gemini Online API<br/>(Stage 0 產業分類 / 單股即時診斷)"]
         GCS["BigQuery vertex_batch_staging<br/>(input_/predictions_ 5 天到期)"]
         VERTEX["Vertex AI Batch API<br/>(離線批次大規模推論)"]
     end
@@ -156,26 +156,29 @@ graph TB
 
 系統採用雙 Google Spreadsheets 作為輕量級雲端關聯式資料庫與視覺化後台，結構如下：
 
-#### A. 基本面智慧快取表 (`Fundamental_Cache`，共 12 分頁)
-1. `01_Income_Statement`：季度綜合損益表（營收、毛利率、營益率、淨利率、EPS）。
-2. `02_Balance_Sheet`：季度資產負債表（現金、應收帳款、存貨、合約負債、總負債、股東權益）。
-3. `03_Cash_Flow`：季度現金流量表（營業現金流 OCF、資本支出 CapEx、自由現金流 FCF）。
-4. `04_Monthly_Revenue`：月營收明細（單月營收、MoM、YoY、累計 YoY）。
-5. `05_Valuation_PER_PBR`：每日估值指標（本益比 PER、股價淨值比 PBR、殖利率）。
-6. `06_Dividend_History`：歷年股利政策與配息穩定度。
-7. `07_Chip_Summary`：三大法人籌碼與個股融資融券維持率快取表（v5.5.0 擴充：`margin_balance_lots`、`margin_utilization_pct`、`margin_chg_5d_lots`、`margin_chg_20d_lots`、`short_margin_ratio_pct`、`est_margin_maint_pct` 估算融資維持率、`chip_quadrant_tag` 資法人對作四象限標籤）。
-8. `08_Stock_Taxonomy`：細分次產業分類知識庫與同業標籤快取。
-9. `09_Shareholding_Dispersion`：大戶與散戶集保股權分散表。
-10. `10_SubSector_Taxonomy`：個股次產業分類映射與產業特性標籤。
-11. `11_Guidance_Claims`：AI 萃取之公司法說會指引、產能擴充與新產品時程宣稱。
-12. `12_AI_Diagnosis_Cache`：AI 最終診斷評分、Verdict、亮點、風險與目標價快取（避免同日重複消耗 Token）。
+#### A. 基本面智慧快取表 (`Fundamental_Cache`，共 12 張核心分頁 + 1 張事後審計輔助分頁)
+定義於 `quant/fundamental_config.py` 之 `SHEET_SCHEMAS`：
+1. `00_Watchlist_Master`：主控索引與 AI 快取表（記錄股名、產業、各表最新資料水位 `last_rev_ym` / `last_fin_qtr` / `max_div_raw_date` / `max_chip_raw_date`、探測冷卻時間 `last_probe_at`、Stage 1 結構化診斷快取 `ai_summary_json`、`ai_model_version` 與 `war_room_url`）。
+2. `01_Monthly_Revenue`：月營收動能表（單月營收、`mom_pct`、`yoy_pct`）。
+3. `02_Income_Statement`：季度綜合損益表（單季營收、營業成本、毛利、營業費用、營業利益、業外收支、稅前/稅後淨利、母公司淨利、EPS）。
+4. `03_Balance_Sheet`：季度資產負債表（現金、金融資產、應收帳款、存貨、PPE、短長期借款、合約負債、應付帳款、實收股本 `capital_stock`、保留盈餘、母公司權益與總權益）。
+5. `04_Cash_Flow`：單季現金流量表（自動將 FinMind Q2/Q3/Q4 累季值拆解為單季真實流量，含折舊攤銷、AR/存貨/AP 營運資金變動、營業現金流 OCF、資本支出 CapEx、自由現金流 FCF）。
+6. `05_AI_Metrics_Wide`：AI 衍生財務比率寬表（後端 Pandas 精確算妥之毛利率、費用率、營益率、業外佔比、母公司淨利率、單季與 TTM EPS、年化 ROE、DIO/DSO/DPO/CCC 週轉天數、合約負債、OCF/CapEx/FCF、OCF/NI 含金量、EBITDA、有息負債、淨負債比、流動/速動比、利息保障倍數與單季營收 YoY）。
+7. `06_Dividend_Policy`：歷年股利政策表（西元股利年度、現金股利、股票股利、總股利、現金股利總額、年度 EPS、配息率 `payout_ratio_pct`、除息日與發放日）。
+8. `07_Chip_Summary`：三大法人籌碼、個股信用交易與 TDCC 集保大戶快取表（外資持股比例與 20 日變化、外資/投信/自營商及三大法人近 5 日與 20 日買賣超張數、`margin_balance_lots`、`margin_utilization_pct`、`margin_chg_5d_lots`、`margin_chg_20d_lots`、`short_margin_ratio_pct`、`est_margin_maint_pct` 估算融資維持率、`chip_quadrant_tag` 資法人對作四象限標籤；v5.9.4 新增 TDCC 官方免費 Open Data 集保欄位：`tdcc_date`、`tdcc_400_lots_pct`、`tdcc_1000_lots_pct`、`tdcc_1000_lots_diff_pct`、`tdcc_total_shareholders`）。
+9. `08_Stock_Taxonomy`：細分次產業分類知識庫與同業標籤快取（`official_industry`、`sector_group`、`sub_industry`、`valuation_regime`、`component_nature`、`supply_chain_role`、`core_products`、`theme_tags`、`peers`，同步本地快取 `finmind_reports/.state/stock_taxonomy.json`）。
+10. `MA_Signal_Tracker`：19:00 均線與量能強勢股追蹤表（記錄每日符合五線排列之個股、新進/連榜天數、17MA 走勢、量能狀態與五條均線數值）。
+11. `AI_Daily_Picks`：21:30 AI 嚴選進場歷史追蹤表（記錄每日 `TOP_PICK` / `WATCHLIST` / `AVOID`、推薦當下收盤與均線、財報分、總決策分、法說展望評級、進退場點位與 9 個確定性紅藍軍審計欄位）。
+12. `Rebound_Watchlist`：22:00 型態 A 長均線回踩反彈清單（記錄 60 日高點跌幅、回踩支撐均線、17MA 反彈目標潛在空間與 AI 診斷結果）。
+* **事後審計輔助分頁 (`Signal_Audit_Log`)**：由 `quant/signal_audit_service.py` 獨立維護本地 SQLite `data/signal_audit.db`，並於 19:00 / 21:30 / `audit-signals` 執行時將無未來函數事後追蹤紀錄（T+1 實質進場價、T+5/T+10 淨報酬、MFE/MAE、洗盤標記與 `REJECT_TRAP` 錯殺標記）同步至同一試算表之 `Signal_Audit_Log` 分頁。
 
 #### B. 台新個人投資作戰中心 (`Taishin_Portfolio`，共 5 分頁)
+定義於 `taishin/taishin_config.py` 之 `TAISHIN_SHEET_SCHEMAS`：
 1. `01_Account_Statement`：全歷史買賣交易對帳單與成交總表。
-2. `02_Portfolio_Holdings`：即時庫存明細，包含成本均價、市價、損益率，以及技術面四均線 **`ma17`、`ma45`、`ma117`、`ma189`**。
-3. `03_Settlement_And_PnL`：歷史交割與已實現損益紀錄（不含銀行餘額與交割餘額預警）。
+2. `02_Portfolio_Holdings`：即時庫存明細，包含成本均價、市價、損益率，以及技術面五均線 **`ma3`、`ma17`、`ma45`、`ma117`、`ma189`** 與開盤 AI 建議。
+3. `03_Settlement_And_PnL`：歷史交割與已實現損益紀錄。
 4. `04_DCA_0050_Tracker`：0050 每週不定期定額智慧尋底追蹤表。
-5. `05_Position_Thesis_Memory`：**AI 建倉記憶核心表**，鎖定 `initial_tp1`、`initial_tp2`、`initial_sl`、`trailing_stop` 與 `entry_thesis`。
+5. `05_Position_Thesis_Memory`：**AI 建倉記憶核心表**，鎖定 `initial_tp1`、`initial_tp2`、`initial_sl`、`trailing_stop`、`entry_thesis`、`invalidation_rule` 及 9 個確定性紅藍軍審計欄位。
 
 ---
 
@@ -226,7 +229,7 @@ sequenceDiagram
     Core->>Cache: Stage Guards 過濾後，讀取/回補 12 分頁基本面快取
     Core->>AI: 打包多股 Context 為 JSONL 寫入 BigQuery input 表，呼叫 Vertex AI Batch API
     AI-->>Core: 非同步輪詢完成，依 custom_id 解析雙層財報診斷結果
-    Core->>Cache: 回寫診斷結果至 12_AI_Diagnosis_Cache
+    Core->>Cache: 回寫診斷結果至 00_Watchlist_Master 與 AI_Daily_Picks
     Core->>DC: 產生 Plotly 互動圖表上傳 GitHub Pages，推播 AI 嚴選報告
 
     Note over Timer,DC: 【盤後帳務同步與歸因階段】22:45
@@ -269,16 +272,16 @@ flowchart TD
 在 `quant/fundamental_analyzer.py` 與 `services/ai_service.py` 中，單筆即時模式（Discord `/stock_ai` 指令）與排程批次模式（21:30 / 22:00）共用相同的商業邏輯，透過「前後端解耦」實現：
 
 1. **脈絡準備階段 (`prepare_diagnosis_context`)**：
-   * 確認個股次產業分類（`SubSectorRules`），載入該產業專屬的觀察指標與免責項（例如：金融業不看毛利率與自由現金流；營建業重看合約負債與完工入帳週期）。
-   * 若需要更新法說會指引（Stage 1），先透過具備 Google Search Grounding 的輕量模型萃取最新法說展望並快取至 `11_Guidance_Claims`。
-   * 組裝完整的基本面、籌碼面與技術面數據，生成標準化的 Stage 2 Prompt 與唯一識別碼 `custom_id`（格式如 `diag_{date}_{stock_id}`）。
+   * 確認個股次產業分類（`08_Stock_Taxonomy`），載入估值屬性（`valuation_regime`）與產業專屬的觀察指標（例如：金融業不看毛利率與自由現金流；營建業重看合約負債與完工入帳週期）。
+   * 自動抓取 Yahoo 股市個股 RSS（近 30 天重訊與報導）與 Google News 機構級財經媒體白名單檢索（近 180 天法說會展望），過濾農場文與空殼標題。
+   * 組裝完整的基本面（表 1~5）、股利與法人融資籌碼（表 6）、五線均線與量價（表 7），生成標準化的 Stage 1 單股診斷 Prompt（`STAGE1_DIAGNOSIS`）與唯一識別碼 `custom_id`（格式如 `diag_{date}_{stock_id}`）。
 2. **批次提交與輪詢階段 (`run_vertex_batch_requests`)**：
    * **端點分流設計**：AI 模型推論端點（Vertex AI API / Batch）一律固定使用 `VERTEX_LOCATION="global"`（避免 `gemini-4-argon`、`gemini-3.8-flash` 等新世代模型在區域端點發生 `404 NOT_FOUND`）；BigQuery 暫存與永久表則存放在 `BQ_LOCATION="us-central1"`。
    * 將所有候選股的請求寫入專屬 BigQuery 輸入表（`bq://{project}.vertex_batch_staging.input_{seq}`，5 天自動到期）。
    * 呼叫 Vertex AI Batch Prediction Job 提交任務，系統以非同步輪詢（Polling）監控任務狀態，完成後讀取 BigQuery `predictions_{seq}` 輸出表，並以免費 Batch Load 歸檔至 `discord_service.ai_prompt_logs`。
 3. **結果回填與快取階段 (`finalize_diagnosis_from_ai`)**：
-   * 依據 `custom_id` 將 AI 回傳的 JSON 解析並套用產業專屬分數微調與風控降級規則（例如：若公司宣稱樂觀但數據背離，強制將 Verdict 標記為「吹噓」或「待驗證」）。
-   * 寫入 `12_AI_Diagnosis_Cache` 與本地 `YYYY-MM-DD_ai_calls.log`。
+   * 依據 `custom_id` 將 AI 回傳的 `===SUMMARY_JSON===` 解析並經過 `sanitize_stage1_json()` 防呆校驗（例如：無實質內文時強制將 `guidance.verdict` 標記為 `"無資料"`）。
+   * 寫入 `00_Watchlist_Master`（`ai_summary_json`）與本地 `finmind_reports/logs/YYYY-MM-DD_ai_calls.log`。
 
 ---
 
@@ -300,71 +303,70 @@ flowchart TD
        $$SL_{new} = \max\left(SL_{prev}, \text{Cost}_{avg}, MA_{17}, MA_{45}\right)$$
        防守價**只升不降**（$SL_t \ge SL_{t-1}$），確保波段獲利不會回吐變成虧損，並一路追蹤至 $TP_2$ 或跌破移動停利線為止。
 
-### 3.4 Pass 1 紅藍軍審計與庫存曝險耦合流程 (v5.6.0)
+### 3.4 Pass 1 紅藍軍審計與庫存曝險耦合流程 (v5.6.0 ~ v5.9.3)
 
 ```
 [finmind_stock_scanner.py]  compute_deterministic_trade_setup()  → ATR14 / 60 日量 POC / 追價上限 / 硬停損 / TP1 / R:R
                             align_news_with_price_action()       → 新聞發布日量價反應標籤
 [taishin_portfolio_service.py] evaluate_candidate_exposure()     → OPEN / HIGH_CORR_WARNING / SECTOR_OR_CORR_FULL_SWAP_ONLY
-[quant/alignment_ai_picker.py] run_audit_stage()
-   ├─ Pass 1：run_red_blue_audit()（每 3 檔一批、asyncio.gather）→ StockAuditItem（bear_case_flaws 先、verdict_grade 後）
-   ├─ _enforce_post_audit_guards()：風報比 < 1.8 的 S 級降級／淘汰；庫存滿載強制 PORTFOLIO_SWAP_ONLY
+[quant/alignment_ai_picker.py] run_audit_stage()（注入 Stage 1 量化快照與 ai_summary_json）
+   ├─ Pass 1：run_red_blue_audit()（支援 Vertex AI Batch 一檔一筆或即時批次並行）→ StockAuditItem（bear_case_flaws 先、verdict_grade 後）
+   ├─ _enforce_post_audit_guards()：附加量化風險備註供 Stage 2 CIO 權衡；庫存滿載強制 PORTFOLIO_SWAP_ONLY；處置股改採 STYLE_B_PULLBACK_LIMIT
    └─ select_audit_survivors()：剔除 REJECT_TRAP / NO_TRADE（允許 0 檔，Zero-Pick Veto）
-   → Pass 2：Stage 2 跨股總決策（沿用 Python 點位，TP1 / 停損不得改寫）
+   → Pass 2：Stage 2 跨股總決策（STAGE2_PORTFOLIO，沿用 Python 點位，TP1 / 停損不得改寫）
 ```
 
 * **資料結構**：`DeterministicTradeSetup`（dict，欄位見 `compute_deterministic_trade_setup`）、`PortfolioExposureCheckResult`、`StockAuditItem` / `BatchAuditResponse`（Pydantic）。
 * **曝險規則**：同細分產業（`taxonomy_service`）持股 ≥ 2 檔或權重 > 35%，或 60 日日報酬皮爾森相關係數 ≥ 0.80 → 僅限換股；0.70 ≤ corr < 0.80 → 高度共伴警示。重疊交易日 < 30 則不計相關係數。
-* **輸出**：`top_picks[*].audit`（`Audit_Grade`、`Execution_Tactic`、`Ideal_Buy_Or_Ref`、`Chase_Limit_Price`、`Hard_Stop_Loss`、`TP1_Target_Or_POC`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers`）寫入 `ai_recommendations.json` 並顯示於 Discord；`05_Position_Thesis_Memory` 工作表欄位尚未擴充（後續階段）。
+* **輸出**：`top_picks[*].audit`（`Audit_Grade`、`Execution_Tactic`、`Ideal_Buy_Or_Ref`、`Chase_Limit_Price`、`Hard_Stop_Loss`、`TP1_Target_Or_POC`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers`）寫入 `ai_recommendations.json`、`AI_Daily_Picks`、`05_Position_Thesis_Memory` 並顯示於 Discord。
 * **降級策略**：審計流程任一環節失敗皆退回未審計流程，不中斷排程。
 
 ---
 
 ## 第四章：AI 賦能盤點與 Prompt 資訊供給規格 (AI Context Inventory)
 
-本章節完整盤點系統在 4 大 AI 任務中**實際餵給模型的每一項數據欄位**，作為您評估「AI 獲得的資訊是否充足、是否需要增減欄位」的基準規格。
+本章節完整盤點系統在核心 AI 任務中**實際餵給模型的每一項數據欄位**，與程式碼實作 100% 對齊。
 
 ---
 
-### 4.1 任務一：Stage 1 外部法說指引與輿情事實查核
+### 4.1 任務一：Stage 0 細分產業分類與同業定錨 (`TAXONOMY`)
 
-* **觸發時機**：個股首次進入診斷池，或 `11_Guidance_Claims` 快取已過期時。
-* **使用模型與工具**：Gemini Flash 模型 + **Google Search Grounding（聯網搜尋）**。
+* **觸發時機**：個股首次進入候選池或 `/stock_ai` 查詢，且 `08_Stock_Taxonomy`（TTL 90 天）尚未快取時。
+* **使用模型與資料源**：`GEMINI_MODEL`（`gemini-3.8-flash-lite`）+ Yahoo 股市公司業務簡介（`_extract_yahoo_business_summary()`，自動過濾 SEO 樣板字）。
 * **餵給 AI 的資訊 (Inputs)**：
-  * 股票代號 (`stock_id`)、股票名稱 (`stock_name`)、所屬次產業名稱 (`sub_sector`)。
-  * 查詢時間錨點（當前年份與季度，要求鎖定近 3~6 個月內之最新資訊）。
-* **要求 AI 萃取的資訊 (Expected Outputs)**：
-  1. 管理層最新法說會或公開營收展望（如：預期下半年毛利率走勢、稼動率、訂單能見度）。
-  2. 具體的成長動能宣稱（如：AI 伺服器營收佔比目標、新廠投產時程、大客戶認證進度）。
-  3. 潛在外部利空或產業逆風（如：匯損影響、報價下跌、庫存調整）。
+  * 股票代號 (`stock_id`)、股票名稱 (`stock_name`)、證交所/FinMind 官方大類 (`official_industry`)、Yahoo 股市實質業務與產品描述。
+* **要求 AI 產出的結構化欄位 (`08_Stock_Taxonomy`)**：
+  1. `sector_group`（互斥六大板塊）、`sub_industry`（細分次產業，供 Stage 2 同業限額與廣度計算）。
+  2. `valuation_regime`（`景氣循環股` / `穩健價值與高息股` / `成長型科技與利基股` / `高本益比/題材研發股`）。
+  3. `component_nature`、`supply_chain_role`、`core_products`、`theme_tags`、`peers`（經 Python 真實代號防幻覺校驗）。
 
 ---
 
-### 4.2 任務二：Stage 2 個股深度基本面與技術面綜合診斷
+### 4.2 任務二：Stage 1 單股診斷 (`STAGE1_DIAGNOSIS`) ➔ Pass 1 紅藍軍審計 (`RED_BLUE_AUDIT`) ➔ Stage 2 投組總決策 (`STAGE2_PORTFOLIO`)
 
 * **觸發時機**：21:30 順勢選股、22:00 反彈選股（透過 Vertex AI Batch API），以及 Discord `/stock_ai` 單股查詢。
 * **餵給 AI 的完整資料清單 (Context Payload)**：
 
 | 資訊維度 | 餵入 AI Prompt 的具體數據欄位與計算邏輯 | 資料時間跨度 |
 | :--- | :--- | :--- |
-| **1. 產業規則與背景** | • 次產業分類名稱 (`sub_sector`)<br/>• 產業專屬審核重點提示 (`industry_prompt_hint`)<br/>• 產業豁免指標清單（例如特定產業不懲罰負 FCF 或高負債） | 靜態規則庫 + 動態映射 |
-| **2. 外部宣稱 (Stage 1)** | • Stage 1 萃取之公司法說會指引摘要 (`guidance_claims`) | 近 1~2 季公開資訊 |
-| **3. 獲利能力 (損益表)** | • 毛利率 (`Gross Margin %`) 與季增減 (QoQ)、年增減 (YoY) 趨勢<br/>• 營業利益率 (`Operating Margin %`) 與三率三升/三降狀態<br/>• 近四季累積每股盈餘 ($EPS_{TTM}$) 與單季 EPS 變化<br/>• 股東權益報酬率 ($ROE$) | 近 4~8 季趨勢 |
-| **4. 營收動能 (月營收)** | • 最新單月營收金額<br/>• 月增率 ($\text{MoM } \%$)、年增率 ($\text{YoY } \%$)、累計年增率 ($\text{Cumulative YoY } \%$)<br/>• 營收是否創近 N 個月新高或連續成長月數 | 近 6~12 個月 |
-| **5. 領先指標與營運效率** | • **合約負債 (`Contract Liabilities`)**：金額與季變化率（預收貨款/在手訂單領先指標）<br/>• **資本支出 (`CapEx`)**：金額與擴產趨勢<br/>• **現金轉換週期 ($CCC$)**：$$\text{CCC} = \text{DSO (應收天數)} + \text{DIO (存貨天數)} - \text{DPO (應付天數)}$$ 檢視存貨堆積或收款惡化 | 近 4 季比較 |
-| **6. 現金流品質** | • 營業活動現金流 ($OCF$) 與自由現金流 ($$\text{FCF} = \text{OCF} - \text{CapEx}$$)<br/>• **盈餘品質比率**：$$\frac{\text{OCF}}{\text{Net Income}}$$（檢視帳面獲利是否真正收回現金） | 近 4 季 |
-| **7. 償債與財務結構** | • 淨負債比率 (`Net Debt to Equity`)、速動比率 (`Quick Ratio`)、利息保障倍數 | 最新一季 |
-| **8. 估值與股利保護** | • 本益比 ($PER$)、股價淨值比 ($PBR$)、現金殖利率 (`Dividend Yield %`)、歷年配息穩定度 | 最新日資料 + 近 3~5 年配息 |
-| **9. 籌碼面結構** | • 外資近 5 日 / 20 日累計買賣超張數與持股比例變化<br/>• 投信近 5 日 / 20 日累計買賣超張數與連買天數<br/>• 融資使用率變化與大戶持股比例趨勢 | 近 5 日 / 20 日 |
-| **10. 技術面與大盤位階** | • 收盤價、漲跌幅、成交量與量能倍數<br/>• **四條核心均線**：$$\text{MA}_{17}, \text{MA}_{45}, \text{MA}_{117}, \text{MA}_{189}$$ 數值與排列關係<br/>• 技術指標：RSI、MACD 柱狀體、KD、ATR 波動度<br/>• 當前大盤紅綠燈狀態 (`market_regime`) | 最新交易日 |
+| **1. Stage 0 產業定錨與預計算錨點** | • `sector_group`、`sub_industry`、`valuation_regime`、直接同業清單<br/>• Python 預先算妥之 `PE`、`PB`、`近一年現金殖利率`、`17MA 乖離率`、`17MA+12% 極值價`、`收盤 -4% 停損價` | 靜態規則庫 + 最新日資料 |
+| **2. 即時重訊與法說展望 RSS** | • Yahoo 股市個股 RSS（近 30 天重訊與新聞摘要）<br/>• Google News 機構級財經媒體白名單檢索（近 180 天法說會展望，空殼標題強制標註零腦補警示） | 近 30 ~ 180 天公開資訊 |
+| **3. 獲利能力 (表 1 損益結構)** | • 單季營收（億元）、毛利率、營業費用率、營益率、業外佔稅前淨利比 (`non_op_share_pct`)、母公司淨利率<br/>• 單季 EPS、近四季累積 $EPS_{TTM}$ 與單季營收 YoY | 近 8 季趨勢 |
+| **4. 營收動能 (表 5 月營收)** | • 單月營收（億元）、月增率 ($\text{MoM } \%$)、年增率 ($\text{YoY } \%$)<br/>• Phase 2 擴充：含春節豁免之加權 3M YoY 與本季達成率 (`QTD Run-Rate`) | 近 12 個月 |
+| **5. 領先指標與營運效率 (表 2)** | • **現金轉換週期 ($CCC$)**：$$\text{CCC} = \text{DSO (應收天數)} + \text{DIO (存貨天數)} - \text{DPO (應付天數)}$$<br/>• **合約負債 (`contract_liab_亿元`)**：預收貨款/在手訂單領先指標 | 近 8 季比較 |
+| **6. 現金流品質 (表 3)** | • 單季營業現金流 ($OCF$)、資本支出 ($CapEx$)、自由現金流 ($FCF$)、折舊攤銷、AR/存貨/AP 營運資金變動<br/>• **盈餘品質比率**：$\text{OCF} / \text{NI}$（%） | 近 8 季 |
+| **7. 償債與財務結構 (表 4)** | • 有息負債總額、淨負債比率 (`net_debt_ratio_pct`)、流動比率、速動比率、利息保障倍數、年化 ROE、EBITDA | 近 8 季 |
+| **8. 股利與法人/信用籌碼 (表 6)** | • 近 5 年現金/股票股利、配息率 (`payout_ratio_pct`)<br/>• 外資持股比與 20 日變化、外資/投信/自營商/三大法人近 5 日與 20 日買賣超（張）<br/>• 融資餘額、融資使用率、5D/20D 融資增減、券資比、估算融資維持率 (`est_margin_maint_pct`)、`chip_quadrant_tag` | 近 5 年配息 + 最新週/日籌碼 |
+| **9. 技術位階與微結構 (表 7 & Pass 1)** | • 收盤價、今日量/5日均量/20日均量、量比狀態<br/>• **五條均線**：$\text{MA}_{3}, \text{MA}_{17}, \text{MA}_{45}, \text{MA}_{117}, \text{MA}_{189}$、17MA 近 5 日斜率与乖離率<br/>• **Pass 1 微結構與確定性點位**：大盤雙指數配額 (`RegimeQuota`)、處置過熱雷達、同族群 17MA 廣度、`ATR14`、`60 日量 POC`、追價上限、硬停損、`TP1`、`deterministic_rr_ratio`、台新庫存相關係數曝險與近 3 則新聞量價反應 | 近 5 ~ 60 交易日 |
 
-* **要求 AI 產出的結構化 JSON 欄位**：
-  * `verdict`：僅限 `"符合"`、`"待驗證"`、`"吹噓"` 三選一（檢驗財報數據是否支撐法說指引）。
-  * `score`：$0 \sim 100$ 整數評分。
-  * `highlights`：3 點具體量化優勢。
-  * `risks`：明確的財務、籌碼或技術面風險。
-  * `guidance`、`fcf_and_roe`、`chip_and_dividend`：分項深度短評。
-  * `entry_thesis`、建議進場區間、初始停利 ($TP_1, TP_2$) 與初始停損 ($SL$)。
+* **Stage 1 (`STAGE1_DIAGNOSIS`) 產出之 `===SUMMARY_JSON===` 欄位**：
+  * `verdict`（一句話核心結論）、`score`（$0 \sim 100$ 整數）、`trend_tags`（`margin_trend` / `rev_momentum` / `fcf_nature`）。
+  * `highlights`（1~4 點含期別數據）、`risks`（1~4 點含硬傷與期別數據）、`fcf_and_roe`、`chip_and_dividend`。
+  * `guidance`：`claims`、`reality_check`、`verdict`（僅限 `"高度可信"` | `"待驗證"` | `"存疑"` | `"無資料"` 四選一）。
+  * `technical_view`、`trade_plan`（`tactical_type`, `entry_trigger`, `target_price_1`, `target_price_2`, `stop_loss_price`, `invalidation`）。
+* **Pass 1 (`RED_BLUE_AUDIT`) 與 Stage 2 (`STAGE2_PORTFOLIO`) 銜接產出**：
+  * Pass 1 依序生成 `bear_case_flaws` ➔ `bull_case_catalysts` ➔ `conflict_resolution_reasoning` ➔ `execution_strategy_type` ➔ `thesis_invalidation_triggers` ➔ `verdict_grade`（`S_TIER_SNIPER` / `A_TIER_PULLBACK` / `REJECT_TRAP`）。
+  * Stage 2 綜合 `[A]` 均線量能、`[B]` 量化財務、`[C]` Stage 1 結論與 `[D]` 紅藍軍點位，輸出 `market_light`、`market_comment`、`top_picks`、`watchlist`、`avoid`。
 
 ---
 
@@ -415,11 +417,11 @@ flowchart TD
 
 | 評估維度 | 目前供給給 AI 的資訊量 | 充足度評級 | 潛在盲點分析與未來可擴充之高價值資訊 |
 | :--- | :--- | :---: | :--- |
-| **基本面三表與現金流** | 涵蓋毛利/營益率、EPS、ROE、合約負債、CCC、OCF/NI、FCF、淨負債比、月營收 YoY/MoM。 | **⭐⭐⭐⭐⭐<br/>(極度充足)** | 目前財務比率已達機構法人級別。唯一可再微調的是加入 **「同次產業橫向百分位數（Peer Percentile）」**（例如告知 AI 該股毛利率在同業排名前 20%），可減少 AI 對單一數值高低的誤判。 |
-| **技術面趨勢與支撐** | 涵蓋收盤價、量能倍數、17/45/117/189MA、RSI、MACD、KD、ATR。 | **⭐⭐⭐⭐⭐<br/>(v5.3.0 補齊)** | v5.3.0 補齊 `189MA` 後，長短天期均線骨架已非常完整。未來若要強化突破真偽判斷，可多餵入 **「近 60 日大量成交密集區價位（Volume Profile POC）」** 或 **「前波高點套牢區價位」**。 |
-| **籌碼面結構** | 涵蓋外資/投信 5D & 20D 買賣超、持股比例、融資變化、集保股權分散。 | **⭐⭐⭐⭐☆<br/>(充足)** | 對中大型股極為準確。但針對中小型題材股，未來若能補充 **「有無發行可轉債（CB）未轉換餘額」** 或 **「借券賣出餘額變化」**，AI 對主力假突破或避險套利的識破率會更高。 |
-| **法說指引與新聞輿情** | 依賴 Stage 1 Gemini Search Grounding 搜尋近 3~6 個月公開新聞摘要。 | **⭐⭐⭐☆☆<br/>(中等，具提升空間)** | 公開新聞搜尋偶爾會有農場文雜訊或遺漏法說會細節。若未來能串接 **公開資訊觀測站（MOPS）法說會簡報摘要** 或 **近 30 日券商研究報告共識目標價（Consensus EPS）**，Reality Check 的銳利度會再升一級。 |
-| **盤前晨報與帳務風控** | 涵蓋美股四大指數/TSM/NVDA/VIX/匯率、T+2交割、庫存均價、17~189MA、初始 TP/SL/Thesis。 | **⭐⭐⭐⭐⭐<br/>(極度充足)** | 資訊閉環非常完整。唯一可小幅擴充的是加入 **「單一持股佔總資產權重百分比（Position Sizing %）」** 與 **「同產業集中度」**，讓 AI 在晨報中能針對重倉股給予更嚴格的減碼建議。 |
+| **基本面三表與現金流** | 涵蓋毛利/營益率、EPS、ROE、合約負債、CCC、OCF/NI、FCF、淨負債比、月營收 YoY/MoM、Phase 2 本業前瞻 EPS 與同業中位數 PE 對齊。 | **⭐⭐⭐⭐⭐<br/>(極度充足)** | 目前財務比率與橫斷面同業 PE 比值已達機構法人級別。唯一可再微調的是加入 **「同次產業毛利率橫向百分位數」**，減少 AI 對單一數值高低的誤判。 |
+| **技術面趨勢與支撐** | 涵蓋收盤價、量能倍數、3/17/45/117/189MA、17MA 斜率與乖離率、ATR14、近 60 日大量成交密集區（Volume POC）與確定性 TP1/停損點位。 | **⭐⭐⭐⭐⭐<br/>(v5.6.0 補齊)** | 五線均線骨架與 60 日 Volume POC 已完整實作。未來若要強化突破真偽判斷，可補充 **「盤中分時均價線 (VWAP) 收斂度」** 或 **「歷史前波頸線壓力位」**。 |
+| **籌碼面結構** | 涵蓋外資/投信/自營商 5D & 20D 買賣超、外資持股比例、融資使用率與維持率、日融資 K 線效率。 | **⭐⭐⭐⭐☆<br/>(充足)** | ⚠️ **實盤限制揭露**：FinMind 之 `TaiwanStockHoldingSharesPer`（TDCC 週集保股權分散表）需付費 **Sponsor** 等級帳號始可下載；在免費 `register` 等級下呼叫會被拒絕並靜默略過（故不產生 `tdcc_holding_cache.json`）。若不升級 FinMind，可改串接 **TDCC 集保中心官方免費 Open Data CSV (`smart.tdcc.com.tw`)** 以零成本補齊千張大戶數據。 |
+| **法說指引與新聞輿情** | 串接 Yahoo 股市個股 RSS（含 MOPS 重訊摘要）與 Google News 機構級財經媒體白名單檢索，並綁定新聞發布日量價反應標籤。 | **⭐⭐⭐⭐☆<br/>(v5.9.2 升級)** | 已排除農場文與股市爆料同學會貼文，並對僅有標題之新聞強制零腦補警示。未來若能串接 **MOPS 法說會簡報 PDF 摘要** 或 **FactSet/券商共識 EPS**，法說驗證覆蓋率會更高。 |
+| **盤前晨報與帳務風控** | 涵蓋美股四大指數/TSM/NVDA/VIX/匯率、庫存均價、3~189MA、單一持股權重 (`weight_pct`)、同產業與 60 日報酬相關係數曝險、初始 TP/SL/Thesis 與棘輪防守價。 | **⭐⭐⭐⭐⭐<br/>(極度充足)** | 部位權重、同產業集中度與雙軌停損定錨已全面閉環。 |
 
 ---
 
@@ -454,7 +456,7 @@ flowchart TD
 
 | 版本號 | 發布日期 | 核心架構決策與改版重點 (Key Changes & ADRs) | 影響模組 |
 | :--- | :--- | :--- | :--- |
-| **v5.9.3** | 2026-11-16 | **紅藍軍審計 Vertex Batch 化與資料斷鏈修復**：<br/>1. **Pass 1 紅藍軍審計 Batch 化與去盲審**：`run_red_blue_audit()` 支援 `VERTEX_BATCH`（一檔一筆請求，預設 `get_vertex_batch_stage1_model()` 即 `gemini-3.8-flash`）與失敗自動退回即時模式；`_audit_batch()` 以 `\|` 串接 `stock_id` 防 BigQuery 千分位誤判；`run_audit_stage()` 注入 `stage1_results` 財務快照與單股審計結論並由 `run_pipeline()` 串接 `stage1_batch`。<br/>2. **百萬元單位換算修復**：`_extract_quarter_eps_and_ni()` 與 `compute_fundamental_features()` 自動將百萬元級別之 `net_income_parent` 與 `capital_stock` 乘以 `1e6` 還原為「元」，確保前瞻 EPS 與週集保大戶計算正常。<br/>3. **產業廣度樣本回退機制**：`compute_sector_breadth()` 當 `sub_industry` 樣本數 `< 3` 檔時自動回退至 `official_industry` 或 `sector_group`，消除「共 1 檔」盲區。 | `quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`quant/taxonomy_service.py`<br>`tests/test_bq_ai_logging.py`<br>`tests/test_alignment_ai_picker.py`<br>`tests/test_fundamental_analyzer.py`<br>`tests/test_taxonomy_and_prefilter.py` |
+| **v5.9.3** | 2026-11-16 | **紅藍軍審計 Vertex Batch 化、資料斷鏈修復與 SASD 事實校準**：<br/>1. **Pass 1 紅藍軍審計 Batch 化與去盲審**：`run_red_blue_audit()` 支援 `VERTEX_BATCH`（一檔一筆請求，預設 `get_vertex_batch_stage1_model()` 即 `gemini-3.8-flash`）與失敗自動退回即時模式；`_audit_batch()` 以 `\|` 串接 `stock_id` 防 BigQuery 千分位誤判；`run_audit_stage()` 注入 `stage1_results` 財務快照與單股審計結論並由 `run_pipeline()` 串接 `stage1_batch`。<br/>2. **百萬元單位換算修復**：`_extract_quarter_eps_and_ni()` 與 `compute_fundamental_features()` 自動將百萬元級別之 `net_income_parent` 與 `capital_stock` 乘以 `1e6` 還原為「元」，確保前瞻 EPS 與週集保大戶計算正常。<br/>3. **產業廣度樣本回退機制**：`compute_sector_breadth()` 當 `sub_industry` 樣本數 `< 3` 檔時自動回退至 `official_industry` 或 `sector_group`，消除「共 1 檔」盲區。<br/>4. **事後審計分頁更名為 `Signal_Audit_Log` 與 SASD 規格對齊**：將 `SIGNAL_AUDIT_GSHEET_TAB` 及 `finmind_scanner.json` 之 `signal_audit_gsheet_tab_name` 由 `09_Signal_Audit_Log` 改為 `Signal_Audit_Log`；全面校準本文件第 2.3、3.2、3.4、4.1、4.2、4.5 節以 100% 反映 `SHEET_SCHEMAS` 實況。 | `quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`quant/taxonomy_service.py`<br>`quant/signal_audit_service.py`<br>`finmind_stock_scanner.py`<br>`finmind_scanner.json`<br>`tests/test_bq_ai_logging.py`<br>`tests/test_alignment_ai_picker.py`<br>`tests/test_fundamental_analyzer.py`<br>`tests/test_taxonomy_and_prefilter.py` |
 | **v5.9.2** | 2026-11-16 | **機構級財經新聞白名單與標題殺手過濾器**：<br/>1. **國際盤總經新聞淨化**：`taishin/macro_context.py` 新增 `TRUSTED_MACRO_SOURCES` 與 `_is_trusted_macro_item()`，擴充 `_MACRO_NOISE_PATTERNS` 與 `GOOGLE_NEWS_MACRO_RSS_URL`，`fetch_macro_news_headlines()` 採 Tier-1 機構新聞優先。<br/>2. **個股新聞與法說白名單分級**：`quant/fundamental_analyzer.py` 新增 `BLACKLISTED_MEDIA_SOURCES`、`TRUSTED_TW_STOCK_MEDIA_KEYWORDS` 與 `_detect_institutional_source_tier()`，`filter_and_clean_rss()` 自動剔除農場標題並將機構級來源置頂；`fetch_free_stock_news_and_search()` 與 `fetch_earnings_call_and_outlook()` 鎖定機構級媒體檢索詞。<br/>3. **全鏈路對齊**：`quant/alignment_ai_picker.py` `run_audit_stage()` 與 `taishin_portfolio_service.py` `load_public_deep_fundamental_context()` 統一經過 `filter_and_clean_rss()` 過濾新聞源。 | `taishin/macro_context.py`<br>`quant/fundamental_analyzer.py`<br>`quant/alignment_ai_picker.py`<br>`taishin_portfolio_service.py`<br>`tests/test_fundamental_analyzer.py`<br>`tests/test_taishin_nova.py` |
 | **v5.9.0 / v5.9.1** | 2026-11-12 | **全鏈路武器掛載、瑤姐主動式 AI 授權與防衝突補丁**：<br/>1. **紅藍軍審計去僵化授權 CIO**：`_enforce_post_audit_guards()` 取消硬砍 `REJECT_TRAP`，改為附加 `[量化風控備註]` 至 `conflict_resolution_reasoning` / `bear_case_flaws` 交由 Stage 2 綜合裁量；同步更新 `AUDITOR_SYSTEM_PROMPT` 第 3/5 條與 `PROMPT_TEMPLATES["portfolio_selection"]`。<br/>2. **TP1/TP2 防倒掛與紅燈豁免**：`apply_audit_to_decision()` 防止 `target_price_2 <= py_tp1`（自動順延 `+8%`）；`enforce_regime_quotas()` 於紅燈 `max_rb == 0` 時豁免保留 1 檔 `score >= 85` 之高分抗跌真龍頭；`run_rebound_pipeline()` 改採輕量 `build_quant_snapshot()` 注入。<br/>3. **晨間作戰室掛載全 9 大武器與雙核心路由**：`load_local_technical_context()` 補齊同細分產業 17MA 廣度、處置預警與 `RegimeRouter`（`regime_summary_tag`＋外資期貨淨空單）雙核心摘要；`load_public_deep_fundamental_context()` 串接 `FundamentalCacheManager`、`FundamentalAnalyzer` Phase 2 前瞻估值、TDCC 週集保大戶、日融資 K 棒效率、強制回補日曆與個股 Yahoo RSS 新聞量價反應（`excerpt_fetcher=None`）；`build_fresh_top_picks_block()` 雙池整合 `AI_Daily_Picks` 與 `Rebound_Watchlist`。 | `quant/alignment_ai_picker.py`<br>`quant/fundamental_config.py`<br>`taishin_portfolio_service.py`<br>`taishin/taishin_config.py`<br>`tests/test_taishin_nova.py`<br>`tests/test_alignment_ai_picker.py`<br>`tests/test_stage_guards.py` |
 | **v5.8.1** | 2026-11-12 | **追蹤股公用快取自動保鮮、深層財報單位校準與反彈減碼錨點**：<br/>1. `sync_memory()` 於寫入記憶表後針對未平倉追蹤股呼叫 `FundamentalCacheManager().check_and_sync_stock(sno)` 自動保鮮快取。<br/>2. 對齊 `SHEET_SCHEMAS` 表頭與單位換算（百萬元除以 `1e2`、缺值顯示 `N/A`），補齊 `rebound_resistance_target` 與 `TAISHIN_MORNING_BATTLE_PROMPT` 防接刀鐵則。 | `taishin_portfolio_service.py`<br>`taishin/taishin_config.py`<br>`tests/test_taishin_nova.py` |
@@ -463,7 +465,7 @@ flowchart TD
 | **v5.7.4** | 2026-11-12 | **修復 BigQuery 永久日誌表 Schema 型別衝突與超時截斷**：<br/>1. 修正 `save_to_permanent_logs()` 的 `LoadJobConfig` Schema，將 `created_at` 由 `STRING` 改為 `TIMESTAMP` 且全 13 欄位改為 `NULLABLE`，與線上已分區之 `discord_service.ai_prompt_logs` 結構完全一致。<br/>2. 寫入失敗時同步輸出至 `sys.stderr`，避免短命 CLI 靜默吞掉錯誤；將 `flush_bq_archives()` 預設逾時由 `15.0s` 放寬至 `45.0s`。<br/>3. 新增端到端 Sandbox 自檢腳本 `scripts/check_bq_ai_log_flow.py`。 | `services/ai_service.py`<br>`scripts/check_bq_ai_log_flow.py`<br>`tests/test_bq_ai_logging.py` |
 | **v5.7.3** | 2026-11-11 | **三階段漏斗（Stage 0 ➔ Stage 1 ➔ Stage 2）Prompt 與資料流最佳實踐全面升級**：<br/>1. **Stage 0 產業定錨強化**：新增 `_is_yahoo_boilerplate()` 過濾 Yahoo 股市無效 SEO 空殼樣板字，重構互斥六大 `sector_group`，並於 `08_Stock_Taxonomy` 新增 `valuation_regime`（估值定價邏輯：景氣循環 / 穩健高息 / 成長科技 / 高本益比題材）。<br/>2. **Stage 0 ➔ Stage 1 交接與單位正規化**：於 `build_markdown_context()` 頂部注入 Stage 0 產業定錨與 Python 預先算妥之 `PE`、`PB`、`近一年現金殖利率`、`17MA 乖離率` 及 `-4% 停損參考價`（消除零捏造原則與要求 AI 心算估值之矛盾）；將表 2～表 5 原始「元」欄位統一除以 `1e8` 轉為「億元」；補齊表 6 漏列之 7 個融資融券與維持率欄位。<br/>3. **Stale Data Guard 與超漲目標價防呆解鎖**：新增 `check_revenue_staleness()` 標註落後逾 65 天之過期月營收；`sanitize_stage1_json()` 豁免「🚫 觀望避開」或超漲待拉回重估標的之目標價警告死鎖。<br/>4. **Stage 2 跨區衝突裁決與空陣列授權**：統一全階段量能門檻（`< 300 張` 低量、`> 4.0x` 天量），補齊量比連續區間（`<0.75x` / `0.75~3.0x` / `3.0~4.0x` / `>4.0x`），新增 `[B]` vs `[C]` 跨區資料衝突裁決鐵則，並顯式授權無合格標的時輸出 `"top_picks": []`。 | `quant/fundamental_config.py`<br>`quant/taxonomy_service.py`<br>`quant/fundamental_analyzer.py`<br>`quant/alignment_ai_picker.py` |
 | **v5.7.2** | 2026-11-11 | **全系統 AI 呼叫 BigQuery 日誌寫入保障與短命 CLI 防護**：<br/>1. 參考 `finmind-ai-pick` 健全實作，修復短命 CLI / systemd oneshot 服務的 BigQuery 歸檔 Race Condition，實作 `flush_bq_archives()` 與 Python `atexit` 機制，確保行程退出前必定等待 BigQuery load job 完成。<br/>2. 全系統生成底層函數（`_generate_with_fallback` / `_generate_vertex_with_retry`）統一自動觸發歸檔，徹底消除直接調用 `ask_gemini` / `ask_vertex_ai` 或 `/ai` 斜線指令之漏記死角。<br/>3. `save_to_permanent_logs` 注入標準 13 欄位 Schema 嚴格鎖定（含 `custom_id`、`task_type`、`stock_id` 等），避免表格未建或類型推斷失敗。<br/>4. 全面補全 Stage 2 投組選股（Online 模式）、Pass 1 紅藍軍審計、個股診斷、產業分類、台新晨報與盤後健診之 `task_type`、時分秒 `custom_id` 與 `blocking_bq_log=True`。 | `services/ai_service.py`<br>`taishin_portfolio_service.py`<br>`quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`quant/taxonomy_service.py` |
-| **v5.7.0** | 2026-11-09 | 1. **Phase 3 台股微結構過濾與除權息補償**：強制 20 日成交金額中位數 $\ge 5,000$ 萬護欄（`passes_liquidity_median_guard`）、注意／處置過熱預警（`evaluate_disposition_risk`）與除權息前複權回溯補償（`compensate_ex_dividend_gaps`）。<br/>2. **三層籌碼微結構與同族群資金共振度**：停資券日曆窗口、週集保大戶底氣（`evaluate_weekly_tdcc_anchor`）、日融資 K 線實體效率四象限（`classify_daily_margin_efficiency`）與同細分產業站上 17MA 廣度（`compute_sector_breadth`）。<br/>3. **加權＋櫃買（OTC）雙核心路由（`RegimeRouter`）**：結合櫃買 MA20 斜率與外資台指期淨空單變化動態控管右側突破與 Style B 低接配額。<br/>4. **無未來函數事後審計閉環（`quant/signal_audit_service.py`）**：SQLite `data/signal_audit.db` 與 `09_Signal_Audit_Log` 同步，嚴守 `Open_{T+1} + 0.5%` 摩擦成本、停損優先悲觀認定與 `REJECT_TRAP` 錯殺率追蹤，週五自動推播 `Weekly Quantitative Audit Summary`。<br/>5. **Phase 1~3 全鏈路貫通**：Vertex Structured Output `response_schema`、`AI_Daily_Picks` 與 `05_Position_Thesis_Memory` 同步擴充 9 個確定性審計欄。 | `finmind_stock_scanner.py`<br>`finmind_scanner.json`<br>`taishin/macro_context.py`<br>`quant/taxonomy_service.py`<br>`quant/signal_audit_service.py`<br>`quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`quant/fundamental_config.py`<br>`taishin/taishin_config.py`<br>`taishin_portfolio_service.py`<br>`services/ai_service.py` |
+| **v5.7.0** | 2026-11-09 | 1. **Phase 3 台股微結構過濾與除權息補償**：強制 20 日成交金額中位數 $\ge 5,000$ 萬護欄（`passes_liquidity_median_guard`）、注意／處置過熱預警（`evaluate_disposition_risk`）與除權息前複權回溯補償（`compensate_ex_dividend_gaps`）。<br/>2. **三層籌碼微結構與同族群資金共振度**：停資券日曆窗口、週集保大戶底氣（`evaluate_weekly_tdcc_anchor`）、日融資 K 線實體效率四象限（`classify_daily_margin_efficiency`）與同細分產業站上 17MA 廣度（`compute_sector_breadth`）。<br/>3. **加權＋櫃買（OTC）雙核心路由（`RegimeRouter`）**：結合櫃買 MA20 斜率與外資台指期淨空單變化動態控管右側突破與 Style B 低接配額。<br/>4. **無未來函數事後審計閉環（`quant/signal_audit_service.py`）**：SQLite `data/signal_audit.db` 與 `Signal_Audit_Log` 同步，嚴守 `Open_{T+1} + 0.5%` 摩擦成本、停損優先悲觀認定與 `REJECT_TRAP` 錯殺率追蹤，週五自動推播 `Weekly Quantitative Audit Summary`。<br/>5. **Phase 1~3 全鏈路貫通**：Vertex Structured Output `response_schema`、`AI_Daily_Picks` 與 `05_Position_Thesis_Memory` 同步擴充 9 個確定性審計欄。 | `finmind_stock_scanner.py`<br>`finmind_scanner.json`<br>`taishin/macro_context.py`<br>`quant/taxonomy_service.py`<br>`quant/signal_audit_service.py`<br>`quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`quant/fundamental_config.py`<br>`taishin/taishin_config.py`<br>`taishin_portfolio_service.py`<br>`services/ai_service.py` |
 | **v5.6.0** | 2026-11-05 | 1. **Phase 1 AI 紅藍軍審計**：自回歸防偏誤 Schema、有罪推定 Prompt、Zero-Pick Veto。<br/>2. **算術歸 Python**：ATR / 量 POC / 追價上限 / 硬停損 / TP1 / 風報比確定性計算。<br/>3. **庫存曝險耦合**：同產業上限與 60 日報酬相關係數攔截。<br/>4. **新聞量價反應綁定**：辨識利多出貨。<br/>5. **Phase 2 無盲點基本面特徵工程與事件驅動快取**：三層防呆真實流通股數還原（`|EPS| >= 0.25`）、含農曆春節豁免之右側營收動能與 QTD Run-Rate、本業前瞻 EPS 與同產業中位數 PE 對齊、三率變動語意標籤（含殺價搶單警訊）與每月 5 日起營收開獎窗口 Event-Driven Cache Bypass（含 6 小時冷卻保護）。 | `quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`quant/fundamental_config.py`<br>`quant/fundamental_cache.py`<br>`quant/taxonomy_service.py`<br>`finmind_stock_scanner.py`<br>`taishin_portfolio_service.py` |
 | **v5.5.0** | 2026-11-04 | 1. **大盤與個股融資籌碼風控整合**：串接 TWSE/TPEx 官方免費 OpenAPI 取得大盤融資（`fetch_market_margin_snapshot`），升級 `evaluate_market_regime` 辨識「散戶凹單未洗清」與「融資斷頭宣洩」並動態給出建議總持倉上限 (`recommended_max_exposure_pct`)。<br/>2. **07_Chip_Summary 融資擴充**：串接 FinMind `TaiwanStockMarginPurchaseShortSale` 實作估算融資維持率 (`est_margin_maint_pct`) 與「資法人對作四象限標籤 (`chip_quadrant_tag`)」，賦能 Stage 0 硬性排雷與 Stage 1/2 Prompt。<br/>3. **全專案硬編碼時間字串徹底解耦**：移除所有程式碼、Docstring、Prompt 與報表標題之寫死排程時間，統一由本規格書第 2.4 節與 `systemd` 控制。<br/>4. **0050 DCA 恐慌殺融資加碼**：當大盤融資單日暴減 $\le -40$ 億或 5 日累計暴減 $\le -90$ 億時自動提高定投評分與加碼倍數。 | `finmind_stock_scanner.py`<br>`quant/fundamental_cache.py`<br>`quant/fundamental_config.py`<br>`quant/fundamental_analyzer.py`<br>`quant/alignment_ai_picker.py`<br>`services/ai_service.py`<br>`taishin_portfolio_service.py`<br>`taishin/taishin_config.py` |
 | **v5.4.0** | 2026-11-04 | 1. **Vertex AI Batch 改用 BigQuery 交換媒介**：每批獨立 `input_{seq}` / `predictions_{seq}` 暫存表（`vertex_batch_staging`，5 天自動到期），移除 GCS 依賴。<br/>2. **AI 日誌集中化**：Batch 與 Online Gemini 呼叫皆以免費 `load_table_from_json` 寫入 `discord_service.ai_prompt_logs`（失敗只記 Warning，不中斷主流程）。 | `services/ai_service.py`<br>`quant/alignment_ai_picker.py`<br>`quant/fundamental_analyzer.py`<br>`taishin_portfolio_service.py`<br>`services/stock_ai_command.py` |
@@ -476,6 +478,6 @@ flowchart TD
 ## Phase 1 ~ Phase 3 完整閉環總覽（v5.7.0）
 - **規格文件**：Phase 1 (`gemini-code-1793865428763.md`)、Phase 2 (`gemini-code-1793867722705.md`)、Phase 3 (`gemini-code-1794215693400.md`)。
 - **端到端實盤資料流**：
-  1. **19:00 盤後掃描 (`scan-all`)**：`RegimeRouter`（加權 + 櫃買 OTC + 外資台指期）產出 `regime_quota` → `finmind_stock_scanner.py` 執行 20 日成交金額中位數護欄（$\ge 5,000$ 萬）與除權息前複權補償 → 盤後自動觸發 `run_signal_audit_backfill()` 回填 `data/signal_audit.db` 之 T+1~T+10 實盤悲觀路徑並同步至 Google Sheets `09_Signal_Audit_Log`。
-  2. **21:30 AI 嚴選 (`analyze-alignment`)**：Event-Driven Cache Bypass（每月 5 日起營收開獎窗口）→ Phase 2 無盲點基本面特徵（三層安全股數、春節豁免營收動能、本業前瞻 EPS × 橫斷面同業中位數 PE、三率語意標籤）→ Phase 3 微結構（除權息前複權 POC/ATR、處置過熱預警、停資券日曆＋週集保大戶底氣＋日融資 K 線效率、同細分產業 `SectorBreadth`）+ 台新庫存相關係數曝險 + 近 5 交易日新聞量價對齊 → Pass 1 紅藍軍審計（Vertex Structured Output `BatchAuditResponse`）→ Python 後置硬攔截與配額調控（`enforce_regime_quotas`）→ 全數留痕 `signal_audit.db`、寫入 `AI_Daily_Picks`（含 9 個確定性審計欄）並同步 `09_Signal_Audit_Log`（每週五盤後自動附加 `Weekly Quantitative Audit Summary` 推播）。
+  1. **19:00 盤後掃描 (`scan-all`)**：`RegimeRouter`（加權 + 櫃買 OTC + 外資台指期）產出 `regime_quota` → `finmind_stock_scanner.py` 執行 20 日成交金額中位數護欄（$\ge 5,000$ 萬）與除權息前複權補償 → 盤後自動觸發 `run_signal_audit_backfill()` 回填 `data/signal_audit.db` 之 T+1~T+10 實盤悲觀路徑並同步至 Google Sheets `Signal_Audit_Log`。
+  2. **21:30 AI 嚴選 (`analyze-alignment`)**：Event-Driven Cache Bypass（每月 5 日起營收開獎窗口）→ Phase 2 無盲點基本面特徵（三層安全股數、春節豁免營收動能、本業前瞻 EPS × 橫斷面同業中位數 PE、三率語意標籤）→ Phase 3 微結構（除權息前複權 POC/ATR、處置過熱預警、停資券日曆＋週集保大戶底氣＋日融資 K 線效率、同細分產業 `SectorBreadth`）+ 台新庫存相關係數曝險 + 近 5 交易日新聞量價對齊 → Pass 1 紅藍軍審計（Vertex Structured Output `BatchAuditResponse`）→ Python 後置輕量風控標註與配額調控（`enforce_regime_quotas`）→ 全數留痕 `signal_audit.db`、寫入 `AI_Daily_Picks`（含 9 個確定性審計欄）並同步 `Signal_Audit_Log`（每週五盤後自動附加 `Weekly Quantitative Audit Summary` 推播）。
   3. **22:45 建倉記憶歸因 (`sync-memory`)**：自動由 `AI_Daily_Picks` 繼承 Python 確定性硬停損、TP1 與 9 個紅藍軍審計欄位寫入 `05_Position_Thesis_Memory`，銜接隔日 08:15 開盤作戰晨報。

@@ -656,15 +656,135 @@ def is_mandatory_margin_covering_window(
     return False
 
 
+TDCC_OPENDATA_CSV_URL = "https://smart.tdcc.com.tw/opendata/getOD.ashx?id=1-5"
+
+# TDCC 集保官方持股分級代碼 (1~15) 對應持股下限（股）
+TDCC_LEVEL_LOWER_BOUNDS: dict[str, float] = {
+    "1": 1.0,
+    "2": 1000.0,
+    "3": 5001.0,
+    "4": 10001.0,
+    "5": 15001.0,
+    "6": 20001.0,
+    "7": 30001.0,
+    "8": 40001.0,
+    "9": 50001.0,
+    "10": 100001.0,
+    "11": 200001.0,
+    "12": 400001.0,
+    "13": 600001.0,
+    "14": 800001.0,
+    "15": 1000001.0,
+}
+
+_TDCC_OPENDATA_MEM_CACHE: dict[str, dict[str, dict[str, Any]]] = {}
+
+
 def _holding_level_lower_bound(level: object) -> float | None:
-    """解析 FinMind 股權分散級距的持股下限（股）。"""
-    text = str(level).lower().replace(",", "")
+    """解析 FinMind 或 TDCC 官方股權分散級距的持股下限（股）。"""
+    raw = str(level).strip()
+    if raw in TDCC_LEVEL_LOWER_BOUNDS:
+        return TDCC_LEVEL_LOWER_BOUNDS[raw]
+    if raw in ("16", "17"):
+        return None
+    text = raw.lower().replace(",", "")
     if "total" in text or "差異" in text or "合計" in text:
         return None
     numbers = re.findall(r"\d+", text)
     if not numbers:
         return None
     return float(numbers[0])
+
+
+def fetch_tdcc_opendata_map(
+    *,
+    as_of: date | None = None,
+    cache_dir: Path = Path("finmind_reports/.state"),
+    timeout: int = 25,
+) -> dict[str, dict[str, Any]]:
+    """抓取台灣集保結算所（TDCC）官方免費 Open Data 全市場股權分散表（週五更新）。
+
+    每日最多下載一次並快取於記憶體與 ``tdcc_opendata_latest.json``，回傳
+    ``{stock_id: {"tdcc_date": "YYYY-MM-DD", "pct_400_lots": float,
+    "pct_1000_lots": float, "total_shareholders": int, "rows": list[dict]}}``。
+    """
+    today = as_of or _today_in_taipei()
+    today_str = today.isoformat()
+    if today_str in _TDCC_OPENDATA_MEM_CACHE:
+        return _TDCC_OPENDATA_MEM_CACHE[today_str]
+
+    snapshot_path = cache_dir / "tdcc_opendata_latest.json"
+    if snapshot_path.is_file():
+        try:
+            saved = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            if isinstance(saved, dict) and saved.get("fetched_at") == today_str and isinstance(saved.get("stocks"), dict):
+                _TDCC_OPENDATA_MEM_CACHE[today_str] = saved["stocks"]
+                return saved["stocks"]
+        except Exception:  # noqa: BLE001
+            pass
+
+    req = Request(TDCC_OPENDATA_CSV_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(req, timeout=timeout) as resp:
+        csv_text = resp.read().decode("utf-8-sig", errors="replace")
+
+    import csv
+    import io
+
+    stocks: dict[str, dict[str, Any]] = {}
+    reader = csv.DictReader(io.StringIO(csv_text))
+    for r in reader:
+        sid = str(r.get("證券代號") or "").strip()
+        if not sid:
+            continue
+        raw_dt = str(r.get("資料日期") or "").strip()
+        fmt_dt = f"{raw_dt[:4]}-{raw_dt[4:6]}-{raw_dt[6:8]}" if len(raw_dt) == 8 and raw_dt.isdigit() else raw_dt
+        lvl = str(r.get("持股分級") or "").strip()
+        try:
+            people = int(float(str(r.get("人數") or 0).replace(",", "")))
+        except ValueError:
+            people = 0
+        try:
+            pct = float(str(r.get("占集保庫存數比例%") or 0).replace(",", ""))
+        except ValueError:
+            pct = 0.0
+
+        entry = stocks.setdefault(
+            sid,
+            {
+                "tdcc_date": fmt_dt,
+                "pct_400_lots": 0.0,
+                "pct_1000_lots": 0.0,
+                "total_shareholders": 0,
+                "rows": [],
+            },
+        )
+        if lvl in ("12", "13", "14", "15"):
+            entry["pct_400_lots"] = round(float(entry["pct_400_lots"]) + pct, 2)
+        if lvl == "15":
+            entry["pct_1000_lots"] = round(pct, 2)
+        if lvl == "17":
+            entry["total_shareholders"] = people
+        if lvl != "16":
+            entry["rows"].append(
+                {
+                    "date": fmt_dt,
+                    "HoldingSharesLevel": lvl,
+                    "percent": pct,
+                    "people": people,
+                }
+            )
+
+    if stocks:
+        _TDCC_OPENDATA_MEM_CACHE[today_str] = stocks
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_text(
+                json.dumps({"fetched_at": today_str, "stocks": stocks}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to write TDCC opendata snapshot cache: %s", exc)
+    return stocks
 
 
 def evaluate_weekly_tdcc_anchor(
@@ -703,12 +823,12 @@ def evaluate_weekly_tdcc_anchor(
         if "people" not in frame.columns:
             return None
         rows = frame.loc[frame["date"] == day]
-        lvl = rows["HoldingSharesLevel"].astype(str).str.lower()
-        total_rows = rows.loc[lvl.str.contains("total|合計", regex=True)]
+        lvl = rows["HoldingSharesLevel"].astype(str).str.strip().str.lower()
+        total_rows = rows.loc[(lvl == "17") | lvl.str.contains("total|合計", regex=True)]
         if not total_rows.empty:
             val = float(pd.to_numeric(total_rows["people"], errors="coerce").dropna().iloc[0])
             return val if val > 0 else None
-        non_diff = rows.loc[~lvl.str.contains("差異", regex=False)]
+        non_diff = rows.loc[~lvl.isin(["16"]) & ~lvl.str.contains("差異", regex=False)]
         return float(pd.to_numeric(non_diff["people"], errors="coerce").sum()) or None
 
     latest_day = dates[-1]
@@ -743,7 +863,7 @@ def fetch_or_cache_tdcc_holding(
     loader: DataLoader | None = None,
     ttl_days: int = 6,
 ) -> pd.DataFrame | None:
-    """讀取或抓取 FinMind `taiwan_stock_holding_shares_per`（週級別 6 日快取，不浪費額度）。"""
+    """讀取或抓取集保股權分散表（優先 FinMind，權限不足或失敗時自動改採 TDCC 官方免費 Open Data）。"""
     today = as_of or _today_in_taipei()
     sid = str(stock_id).strip()
     store: dict[str, Any] = {}
@@ -755,33 +875,54 @@ def fetch_or_cache_tdcc_holding(
         except Exception:  # noqa: BLE001
             store = {}
     entry = store.get(sid)
+    existing_rows: list[dict[str, Any]] = []
     if isinstance(entry, Mapping):
+        if isinstance(entry.get("rows"), list):
+            existing_rows = [r for r in entry["rows"] if isinstance(r, dict)]
         try:
             fetched_dt = date.fromisoformat(str(entry.get("fetched_at", ""))[:10])
-            if (today - fetched_dt).days <= ttl_days and isinstance(entry.get("rows"), list):
-                return pd.DataFrame(entry["rows"])
+            if (today - fetched_dt).days <= ttl_days and existing_rows:
+                return pd.DataFrame(existing_rows)
         except ValueError:
             pass
-    if loader is None or not hasattr(loader, "taiwan_stock_holding_shares_per"):
-        return None
+
+    records: list[dict[str, Any]] = []
+    if loader is not None and hasattr(loader, "taiwan_stock_holding_shares_per"):
+        try:
+            start_str = (pd.Timestamp(today) - pd.Timedelta(days=35)).strftime("%Y-%m-%d")
+            df = loader.taiwan_stock_holding_shares_per(
+                stock_id=sid, start_date=start_str, end_date=today.isoformat()
+            )
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                cols = [c for c in ("date", "HoldingSharesLevel", "percent", "people") if c in df.columns]
+                slim_rows = df[cols].copy()
+                slim_rows["date"] = pd.to_datetime(slim_rows["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                records = slim_rows.dropna(subset=["date"]).to_dict("records")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("FinMind TDCC fetch skipped for %s (%s); falling back to TDCC Open Data", sid, exc)
+
+    if not records:
+        try:
+            tdcc_map = fetch_tdcc_opendata_map(as_of=today, cache_dir=cache_path.parent)
+            tdcc_entry = tdcc_map.get(sid)
+            if isinstance(tdcc_entry, Mapping) and isinstance(tdcc_entry.get("rows"), list):
+                new_rows = [dict(r) for r in tdcc_entry["rows"]]
+                new_dates = {str(r.get("date", "")) for r in new_rows}
+                kept_old = [r for r in existing_rows if str(r.get("date", "")) not in new_dates]
+                records = kept_old + new_rows
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("TDCC Open Data fallback skipped for %s: %s", sid, exc)
+
+    if not records:
+        return pd.DataFrame(existing_rows) if existing_rows else None
+
+    store[sid] = {"fetched_at": today.isoformat(), "rows": records}
     try:
-        start_str = (pd.Timestamp(today) - pd.Timedelta(days=35)).strftime("%Y-%m-%d")
-        df = loader.taiwan_stock_holding_shares_per(
-            stock_id=sid, start_date=start_str, end_date=today.isoformat()
-        )
-        if not isinstance(df, pd.DataFrame) or df.empty:
-            return None
-        cols = [c for c in ("date", "HoldingSharesLevel", "percent", "people") if c in df.columns]
-        slim_rows = df[cols].copy()
-        slim_rows["date"] = pd.to_datetime(slim_rows["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        records = slim_rows.dropna(subset=["date"]).to_dict("records")
-        store[sid] = {"fetched_at": today.isoformat(), "rows": records}
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
-        return pd.DataFrame(records)
     except Exception as exc:  # noqa: BLE001
-        logger.debug("TDCC holding fetch skipped for %s: %s", sid, exc)
-        return None
+        logger.debug("Failed to persist TDCC cache for %s: %s", sid, exc)
+    return pd.DataFrame(records)
 
 
 # Spec aliases for SASD v5.4.0 Phase 3 internal helpers
@@ -4448,7 +4589,7 @@ def _make_parser() -> argparse.ArgumentParser:
 
     audit_parser = subparsers.add_parser(
         "audit-signals",
-        help="SASD v5.4.0 Phase 3：盤後回填 signal_audit.db 事後績效、同步 09_Signal_Audit_Log 並產出審計週報",
+        help="SASD v5.4.0 Phase 3：盤後回填 signal_audit.db 事後績效、同步 Signal_Audit_Log 並產出審計週報",
     )
     audit_parser.add_argument(
         "--config",
@@ -4460,7 +4601,7 @@ def _make_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--db-path", type=Path, help="覆寫 signal_audit.db 路徑")
     audit_parser.add_argument("--weekly-summary", action="store_true", help="輸出 Weekly Quantitative Audit Summary")
     audit_parser.add_argument("--post-to-discord", action="store_true", help="將審計週報推播至 Discord")
-    audit_parser.add_argument("--no-gsheet", action="store_true", help="不同步 Google Sheets 09_Signal_Audit_Log")
+    audit_parser.add_argument("--no-gsheet", action="store_true", help="不同步 Google Sheets Signal_Audit_Log")
     audit_parser.add_argument("--dry-run", action="store_true", help="僅顯示審計摘要，不同步 Sheets / Discord")
     return parser
 

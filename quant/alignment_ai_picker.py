@@ -2507,7 +2507,7 @@ async def run_pipeline(
         market_regime=market_regime,
     )
 
-    # Phase 3.5: 週五盤後勝率歸因與 False Negative 檢討報告 + 09_Signal_Audit_Log 同步
+    # Phase 3.5: 週五盤後勝率歸因與 False Negative 檢討報告 + Signal_Audit_Log 同步
     audit_store = None
     if bool(_cfg(config, "enable_signal_audit", False)):
         try:
@@ -2570,7 +2570,7 @@ async def run_pipeline(
 
     if save_gsheet and audit_store is not None:
         try:
-            audit_tab = str(_cfg(config, "signal_audit_gsheet_tab_name", "09_Signal_Audit_Log"))
+            audit_tab = str(_cfg(config, "signal_audit_gsheet_tab_name", "Signal_Audit_Log"))
             synced_audit = audit_store.sync_to_gsheet(tab_name=audit_tab)
             if synced_audit > 0:
                 print(f"已同步 {synced_audit} 筆訊號留痕至 Google Sheets [{audit_tab}]。")

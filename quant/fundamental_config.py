@@ -211,6 +211,12 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "short_margin_ratio_pct",       # 券資比 (%) = 融券餘額 / 融資餘額 * 100
         "est_margin_maint_pct",         # 估算個股近20日融資維持率 (%)
         "chip_quadrant_tag",            # 資法人對作四象限標籤
+        # --- v5.9.4 新增 TDCC 集保大戶股權分散欄位 ---
+        "tdcc_date",                    # 集保基準日 (YYYY-MM-DD)
+        "tdcc_400_lots_pct",            # 400 張以上大戶持股比例 (%)
+        "tdcc_1000_lots_pct",           # 1,000 張以上大戶持股比例 (%)
+        "tdcc_1000_lots_diff_pct",      # 1,000 張以上大戶較前期增減 (百分點)
+        "tdcc_total_shareholders",      # 集保總股東人數
         "updated_at",
     ],
     "08_Stock_Taxonomy": [

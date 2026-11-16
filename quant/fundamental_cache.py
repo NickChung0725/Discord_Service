@@ -1246,6 +1246,35 @@ class FundamentalCacheManager:
         else:
             chip_quadrant_tag = "⚡籌碼雙退/清洗浮額(法人賣+融資減)"
 
+        # 5) TDCC 集保大戶股權分散表 (官方免費 Open Data)
+        tdcc_date = ""
+        tdcc_400_lots_pct = float("nan")
+        tdcc_1000_lots_pct = float("nan")
+        tdcc_1000_lots_diff_pct = float("nan")
+        tdcc_total_shareholders = float("nan")
+        try:
+            from finmind_stock_scanner import fetch_tdcc_opendata_map
+
+            tdcc_map = fetch_tdcc_opendata_map(as_of=today)
+            tdcc_info = tdcc_map.get(stock_id)
+            if isinstance(tdcc_info, dict):
+                tdcc_date = str(tdcc_info.get("tdcc_date") or "")
+                tdcc_400_lots_pct = float(tdcc_info.get("pct_400_lots", float("nan")))
+                tdcc_1000_lots_pct = float(tdcc_info.get("pct_1000_lots", float("nan")))
+                sh_cnt = int(tdcc_info.get("total_shareholders", 0) or 0)
+                if sh_cnt > 0:
+                    tdcc_total_shareholders = sh_cnt
+                if df_sheet is not None and not df_sheet.empty and "tdcc_1000_lots_pct" in df_sheet.columns and tdcc_date:
+                    prev_rows = df_sheet.copy()
+                    if "tdcc_date" in prev_rows.columns:
+                        prev_rows = prev_rows.loc[prev_rows["tdcc_date"].astype(str).str.strip() != ""]
+                        prev_rows = prev_rows.loc[prev_rows["tdcc_date"].astype(str) < tdcc_date]
+                    prev_vals = pd.to_numeric(prev_rows["tdcc_1000_lots_pct"], errors="coerce").dropna()
+                    if not prev_vals.empty and pd.notna(tdcc_1000_lots_pct):
+                        tdcc_1000_lots_diff_pct = round(tdcc_1000_lots_pct - float(prev_vals.iloc[-1]), 2)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("TDCC opendata enrichment skipped for %s: %s", stock_id, exc)
+
         row = {
             "pk_key": f"{stock_id}_{trade_week}",
             "stock_id": stock_id,
@@ -1269,6 +1298,12 @@ class FundamentalCacheManager:
             "short_margin_ratio_pct": short_margin_ratio_pct,
             "est_margin_maint_pct": est_margin_maint_pct,
             "chip_quadrant_tag": chip_quadrant_tag,
+            # v5.9.4 新增 TDCC 集保大戶欄位
+            "tdcc_date": tdcc_date,
+            "tdcc_400_lots_pct": tdcc_400_lots_pct,
+            "tdcc_1000_lots_pct": tdcc_1000_lots_pct,
+            "tdcc_1000_lots_diff_pct": tdcc_1000_lots_diff_pct,
+            "tdcc_total_shareholders": tdcc_total_shareholders,
             "updated_at": _now_in_taipei().isoformat(timespec="seconds"),
         }
 
