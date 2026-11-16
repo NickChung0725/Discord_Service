@@ -281,6 +281,167 @@ def prefilter_candidates(frame: pd.DataFrame, max_candidates: int) -> tuple[pd.D
     return selected.reset_index(drop=True), len(frame) - len(selected)
 
 
+def _score_rebound_candidate(
+    row: Mapping[str, object],
+    *,
+    cache: object | None = None,
+    analyzer: object | None = None,
+) -> float:
+    """SASD v6.0 反彈菁英 100 分制預篩計分：技術共振 (25) + 籌碼底氣 (40) + 基本面硬實力 (35)。"""
+    sid = str(row.get("stock_id", "")).strip()
+    tech_score = 0.0
+    k9 = _parse_optional_num(row.get("K9"))
+    d9 = _parse_optional_num(row.get("D9"))
+    osc = _parse_optional_num(row.get("MACD_OSC"))
+    subtype = str(row.get("rebound_subtype") or "")
+    pot_ret = _parse_optional_num(row.get("potential_return_pct")) or 0.0
+    if k9 is not None and d9 is not None and k9 > d9 and k9 < 75.0:
+        tech_score += 10.0
+    elif k9 is not None and d9 is not None and k9 >= d9:
+        tech_score += 5.0
+    if osc is not None and osc >= -0.5:
+        tech_score += 5.0
+    if subtype == "W_BOTTOM_PULLBACK_SETUP":
+        tech_score += 5.0
+    elif subtype == "REBOUND_TOUCH_HOLD":
+        tech_score += 3.0
+    tech_score += min(5.0, max(0.0, pot_ret / 3.0))
+
+    chip_score = 0.0
+    fund_score = 0.0
+    vol_lots = _parse_optional_num(row.get("vol_lots"))
+    hard_metrics: dict[str, object] = {"vol_lots": vol_lots}
+
+    if cache is not None:
+        try:
+            chip_df = cache._read_stock_rows(cache._get_worksheet("07_Chip_Summary"), sid)  # noqa: SLF001
+            if chip_df is not None and not chip_df.empty:
+                if "raw_date" in chip_df.columns:
+                    chip_df = chip_df.sort_values("raw_date")
+                c_row = chip_df.iloc[-1].to_dict()
+                trust_5d = _parse_optional_num(c_row.get("trust_net_buy_5d_lots")) or 0.0
+                tdcc_1000 = _parse_optional_num(c_row.get("tdcc_1000_lots_pct"))
+                m_util = _parse_optional_num(c_row.get("margin_utilization_pct"))
+                inst_5d = _parse_optional_num(c_row.get("three_inst_net_5d_lots"))
+                m_chg_5d = _parse_optional_num(c_row.get("margin_chg_5d_lots"))
+                est_mmr = _parse_optional_num(c_row.get("est_margin_maint_pct"))
+                hard_metrics.update(
+                    {
+                        "three_inst_net_5d_lots": inst_5d,
+                        "trust_net_buy_5d_lots": trust_5d,
+                        "margin_chg_5d_lots": m_chg_5d,
+                        "margin_utilization_pct": m_util,
+                        "est_margin_maint_pct": est_mmr,
+                        "tdcc_1000_lots_pct": tdcc_1000,
+                    }
+                )
+                if trust_5d >= 1000:
+                    chip_score += 18.0
+                elif trust_5d >= 500:
+                    chip_score += 12.0
+                elif trust_5d > 0:
+                    chip_score += 6.0
+                if tdcc_1000 is not None and tdcc_1000 >= 70.0:
+                    chip_score += 12.0
+                elif tdcc_1000 is not None and tdcc_1000 >= 50.0:
+                    chip_score += 6.0
+                if m_util is not None and m_util < 6.0:
+                    chip_score += 10.0
+                elif m_util is not None and m_util < 15.0:
+                    chip_score += 5.0
+                elif (inst_5d or 0.0) > 0:
+                    chip_score += 4.0
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            from fundamental_analyzer import _normalize_monthly_revenue_pcts
+
+            wide_df = cache._read_stock_rows(cache._get_worksheet("05_AI_Metrics_Wide"), sid)  # noqa: SLF001
+            rev_df = cache._read_stock_rows(cache._get_worksheet("01_Monthly_Revenue"), sid)  # noqa: SLF001
+            if wide_df is not None and not wide_df.empty and "raw_date" in wide_df.columns:
+                wide_df = wide_df.sort_values("raw_date")
+            if rev_df is not None and not rev_df.empty:
+                rev_df = _normalize_monthly_revenue_pcts(rev_df)
+            w_row = wide_df.iloc[-1].to_dict() if (wide_df is not None and not wide_df.empty) else {}
+            prev_w = wide_df.iloc[-2].to_dict() if (wide_df is not None and len(wide_df) >= 2) else {}
+            hard_metrics["op_margin_pct"] = _parse_optional_num(w_row.get("op_margin_pct"))
+            hard_metrics["contract_liab"] = _parse_optional_num(w_row.get("contract_liab_亿元"))
+            rev_yoy = None
+            if rev_df is not None and not rev_df.empty and "yoy_pct" in rev_df.columns:
+                rev_yoy = _parse_optional_num(rev_df.iloc[-1].get("yoy_pct"))
+            if rev_yoy is None:
+                rev_yoy = _parse_optional_num(w_row.get("qtr_rev_yoy_pct"))
+            if rev_yoy is not None and rev_yoy >= 30.0:
+                fund_score += 12.0
+            elif rev_yoy is not None and rev_yoy >= 15.0:
+                fund_score += 8.0
+            elif rev_yoy is not None and rev_yoy > 0:
+                fund_score += 4.0
+
+            gm_cur = _parse_optional_num(w_row.get("gross_margin_pct"))
+            gm_prev = _parse_optional_num(prev_w.get("gross_margin_pct"))
+            om_cur = _parse_optional_num(w_row.get("op_margin_pct"))
+            om_prev = _parse_optional_num(prev_w.get("op_margin_pct"))
+            if gm_cur is not None and gm_prev is not None and om_cur is not None and om_prev is not None:
+                if gm_cur > gm_prev and om_cur > om_prev:
+                    fund_score += 12.0
+                elif om_cur > om_prev:
+                    fund_score += 6.0
+
+            fcf = _parse_optional_num(w_row.get("fcf_亿元"))
+            ocf = _parse_optional_num(w_row.get("ocf_亿元"))
+            capex = _parse_optional_num(w_row.get("capex_亿元"))
+            ocf_to_ni = _parse_optional_num(w_row.get("ocf_to_ni_pct"))
+            is_strategic_capex = (
+                fcf is not None
+                and fcf < 0
+                and ocf is not None
+                and ocf > 0
+                and ocf_to_ni is not None
+                and ocf_to_ni >= 90.0
+                and capex is not None
+                and abs(capex) >= 0.8 * ocf
+                and (rev_yoy is not None and rev_yoy >= 15.0)
+            )
+            if is_strategic_capex or (fcf is not None and fcf > 0 and (ocf_to_ni or 0.0) >= 80.0):
+                fund_score += 11.0
+            elif ocf_to_ni is not None and ocf_to_ni >= 80.0:
+                fund_score += 6.0
+        except Exception:  # noqa: BLE001
+            pass
+
+    penalty = -50.0 if build_hard_warnings(hard_metrics) else 0.0
+    return round(tech_score + chip_score + fund_score + penalty, 2)
+
+
+def prefilter_rebound_candidates(
+    frame: pd.DataFrame,
+    *,
+    cache: object | None = None,
+    analyzer: object | None = None,
+    max_candidates: int = 12,
+) -> tuple[pd.DataFrame, int]:
+    """SASD v6.0 反彈菁英預篩：依技術(25)+籌碼(40)+基本面(35) 100分制排序，保留 Top max_candidates 檔。"""
+    if frame is None or frame.empty:
+        return frame.reset_index(drop=True) if frame is not None else pd.DataFrame(), 0
+
+    ranked = frame.copy()
+    ranked["_rebound_score"] = [
+        _score_rebound_candidate(row, cache=cache, analyzer=analyzer)
+        for row in ranked.to_dict("records")
+    ]
+    ranked = ranked.sort_values(
+        ["_rebound_score", "potential_return_pct", "stock_id"],
+        ascending=[False, False, True],
+        kind="stable",
+    )
+    if len(ranked) <= max_candidates:
+        return ranked.rename(columns={"_rebound_score": "rebound_prefilter_score"}).reset_index(drop=True), 0
+    selected = ranked.head(max_candidates).rename(columns={"_rebound_score": "rebound_prefilter_score"})
+    return selected.reset_index(drop=True), len(ranked) - len(selected)
+
+
 # --------------------------------------------------------------------------- #
 # Stage 2: dossiers
 # --------------------------------------------------------------------------- #
@@ -796,10 +957,15 @@ _PORTFOLIO_MA17_RULE = (
 )
 
 _PORTFOLIO_REBOUND_RULE = (
-    "2. 均線斜率與量價結構 (35%)：本批次為『回踩 45MA/117MA 的均值回歸反彈』，"
-    "17MA 多數下彎屬正常現象，不因 17MA 下彎扣分。改請檢查："
-    "(a) 45MA/117MA 支撐守穩；(b) K 線收盤強度 close_strength >= 0.55；"
-    "(c) 反彈至 17MA 空間 potential_return_pct >= 5%。並且 `target_price_1` 優先設為「17MA 反壓」。"
+    "2. 均線斜率與量價結構 (35%)：本批次為『型態 A：回踩 45MA/117MA/189MA 的雙劇本反彈（R1 觸線止穩 / R2 W底右腳預掛）』，"
+    "17MA 下彎屬正常現象，嚴禁因 17MA 下彎扣分！請改為檢核：\n"
+    "   (a) 支撐守穩：45MA/117MA/189MA 上揚支撐力道與 R1/R2 型態完整性（R2 允許今日收盤高於支撐均線 +2.5%~+12%，靜待拉回右腳買點）；\n"
+    "   (b) 籌碼與基本面護城河：對齊 `🛡️土洋對作/投信鎖碼護盤`（投信逆勢大買+千張大戶鎖碼）與 `STRATEGIC_CAPEX_EXPANSION`（戰略擴產負FCF豁免）；\n"
+    "   (c) 空間與風報比：從支撐預掛買點反彈至上方反壓（17MA/117MA/POC）之潛在空間 >= 5% 且風報比 >= 1.8。\n"
+    "   【⚠️ 反彈 CIO 戰術沙盤推演（取代死板單一買價）】：\n"
+    "   - 針對每檔 `top_picks`，請依據 `[D]` 提供的「三層結構錨點選單（積極區/穩健洗盤區/極限左腳區）」與大盤紅綠燈、前瞻本益比，在 `entry_zone_and_trigger` 給出具體分批建倉劇本（例：第一批於 189MA/整數關卡掛單 40%、若破線洗盤至 0.786 回檔區加碼 60%），嚴禁建議於高檔追價；\n"
+    "   - 於 `bull_thesis` 必須先回答【賣壓歸因與錯殺辨識】（基本面惡化 vs 外資提款/法說避險結帳）；\n"
+    "   - 於 `bear_case_and_invalidation` 須給出【事件/法說前後之 If-Then 應變預案】與無條件硬停損條件（破前波左腳低點）。"
 )
 
 
@@ -807,17 +973,27 @@ def _apply_portfolio_prompt_overrides(prompt: str, *, selection_mode: str) -> st
     """依選股模式動態調整 Stage 2 Prompt 的關鍵規則。
 
     - trend：均線多頭順勢金叉（預設）
-    - rebound：型態 A 回踩長均線反彈
+    - rebound：型態 A 回踩長均線反彈（雙劇本 + 三層錨點分批決策）
     """
 
     mode = (selection_mode or "").strip().lower()
     if mode != "rebound":
         return prompt
 
-    # 反彈模式不適用 17MA 下彎扣分條款，改用「長均線守穩 + 收盤強度 + 反彈空間」檢核。
-    if _PORTFOLIO_MA17_RULE in prompt:
-        return prompt.replace(_PORTFOLIO_MA17_RULE, _PORTFOLIO_REBOUND_RULE)
-    return prompt
+    # 反彈模式不適用 17MA 下彎扣分條款，改用「長均線守穩 + 雙劇本 + 三層錨點 CIO 推演」。
+    out = prompt
+    if _PORTFOLIO_MA17_RULE in out:
+        out = out.replace(_PORTFOLIO_MA17_RULE, _PORTFOLIO_REBOUND_RULE)
+    else:
+        out = out.replace(
+            "【輸出規定】",
+            f"【型態 A 反彈模式專屬審視與 CIO 沙盤推演規則】\n{_PORTFOLIO_REBOUND_RULE}\n\n【輸出規定】",
+        )
+    out = out.replace(
+        "確保 `target_price_2 > target_price_1 > 最新收盤價`",
+        "確保 `target_price_2 > target_price_1 > 建議預掛買進區間上限`（R2 預掛股之 TP1 為上方 17MA/117MA 反壓）",
+    )
+    return out
 
 
 async def run_portfolio_selection(
@@ -990,6 +1166,8 @@ def _enforce_post_audit_guards(
             rr = setup.get("deterministic_rr_ratio")
             if rr is not None and float(rr) < AUDIT_RR_GUARD_THRESHOLD:
                 notes.append(f"確定性風報比 {rr} 偏低(<{AUDIT_RR_GUARD_THRESHOLD})，宜等拉回支撐區低接")
+            if setup.get("rebound_subtype") and tactic == "BREAKOUT_0915_VWAP_OR_1315_CLOSE":
+                update["execution_strategy_type"] = "STYLE_B_PULLBACK_LIMIT"
 
         disp_tag = str(ctx.get("disposition_tag") or "").strip()
         if grade != "REJECT_TRAP" and disp_tag:
@@ -1127,6 +1305,8 @@ def build_audit_record(
     return {
         "Audit_Grade": item.verdict_grade,
         "Execution_Tactic": item.execution_strategy_type,
+        "Rebound_Subtype": setup.get("rebound_subtype", ""),
+        "Anchor_Tiers": setup.get("anchor_tiers"),
         "Ideal_Buy_Or_Ref": ideal,
         "Chase_Limit_Price": setup.get("chase_limit_price"),
         "Hard_Stop_Loss": setup.get("hard_stop_loss"),
@@ -1170,6 +1350,20 @@ def build_audit_block(
             f"｜deterministic_rr_ratio {setup['deterministic_rr_ratio']}"
             + (f"｜⚠️ {setup['rr_warning']}" if setup.get("rr_warning") else "")
         )
+        anchor_tiers = setup.get("anchor_tiers")
+        if isinstance(anchor_tiers, Mapping) and anchor_tiers:
+            lines.append(
+                "- 三層結構錨點選單（供 CIO 依基本面與大盤決定分批建倉）："
+                f"第一道防線(積極) {anchor_tiers.get('tier1_aggressive_support', '')}｜"
+                f"第二道防線(穩健洗盤) {anchor_tiers.get('tier2_steady_washout', '')}｜"
+                f"第三道防線(極限左腳) {anchor_tiers.get('tier3_extreme_left_foot', '')}"
+            )
+        if setup.get("rebound_subtype"):
+            lines.append(
+                f"- 【型態 A 反彈審計準則（{setup.get('rebound_subtype')}）】：本標的為長均線反彈/W底右腳低接（非右側追突破），"
+                "execution_strategy_type 請優先選用 STYLE_B_PULLBACK_LIMIT；若具備『STRATEGIC_CAPEX_EXPANSION』"
+                "或『🛡️土洋對作/投信鎖碼護盤』，屬機構鎖碼與擴產利多，勿因負 FCF 或外資短線調節誤判為 REJECT_TRAP。"
+            )
     else:
         lines.append("- 確定性點位：K 線資料不足，無法計算（請從嚴審計）。")
     status = _exposure_field(exposure, "exposure_status", "OPEN")
@@ -1428,6 +1622,7 @@ async def run_audit_stage(
     stage1_results: Mapping[str, Mapping[str, object]] | None = None,
     use_vertex_batch: bool = False,
     poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
+    selection_mode: str = "trend",
 ) -> tuple[pd.DataFrame, dict[str, dict[str, object]], list[dict[str, str]]]:
     """Pass 1 紅藍軍審計：除息補償 → 點位 → 處置/三層籌碼/族群廣度 → 庫存曝險 → 新聞量價對齊 → AI 審計 → 硬攔截 → 訊號留痕。
 
@@ -1438,6 +1633,7 @@ async def run_audit_stage(
         align_news_with_price_action,
         classify_daily_margin_efficiency,
         compensate_ex_dividend_gaps,
+        compute_rebound_trade_setup,
         evaluate_disposition_risk,
         evaluate_weekly_tdcc_anchor,
         extract_ex_dividend_dates,
@@ -1568,7 +1764,15 @@ async def run_audit_stage(
             except Exception:  # noqa: BLE001
                 prices_for_setup = raw_stock_prices
 
-        setup = compute_deterministic_trade_setup(prices_for_setup) if has_prices else None
+        if has_prices and (selection_mode or "").strip().lower() == "rebound":
+            setup = compute_rebound_trade_setup(
+                prices_for_setup,
+                support_ma=str(row.get("support_ma") or "") or None,
+                support_price=_parse_optional_num(row.get("support_price")),
+                rebound_subtype=str(row.get("rebound_subtype") or "") or None,
+            )
+        else:
+            setup = compute_deterministic_trade_setup(prices_for_setup) if has_prices else None
         if setup:
             setups[sid] = setup
 
@@ -1849,13 +2053,19 @@ async def run_audit_stage(
     return kept, records, rejected
 
 
-def apply_audit_to_decision(decision: dict, audit_records: Mapping[str, Mapping[str, object]]) -> dict:
+def apply_audit_to_decision(
+    decision: dict,
+    audit_records: Mapping[str, Mapping[str, object]],
+    *,
+    selection_mode: str = "trend",
+) -> dict:
     """將 Python 確定性點位與審計結論併入 top_picks 與 watchlist，並防止 TP1 >= TP2 價格倒掛。"""
     try:
         from quant.fundamental_analyzer import _first_price
     except ImportError:
         from fundamental_analyzer import _first_price  # type: ignore[no-redef]
 
+    is_rebound = (selection_mode or "").strip().lower() == "rebound"
     for pick in decision.get("top_picks", []):
         record = audit_records.get(str(pick.get("stock_id")))
         if not record:
@@ -1863,15 +2073,17 @@ def apply_audit_to_decision(decision: dict, audit_records: Mapping[str, Mapping[
         pick["audit"] = dict(record)
         py_tp1 = _parse_optional_num(record.get("TP1_Target_Or_POC"))
         py_sl = _parse_optional_num(record.get("Hard_Stop_Loss"))
+        ai_tp1 = _first_price(pick.get("target_price_1"))
         ai_tp2 = _first_price(pick.get("target_price_2"))
+        ai_sl = _first_price(pick.get("stop_loss_price"))
 
-        if py_tp1 is not None and py_tp1 > 0:
+        if py_tp1 is not None and py_tp1 > 0 and (not is_rebound or ai_tp1 is None):
             pick["target_price_1"] = f"{py_tp1:.2f}（Python 確定性點位）"
             # 防倒掛：若原 AI 設定之 TP2 <= Python TP1，自動將 TP2 向上推升至少 8%
             if ai_tp2 is not None and ai_tp2 <= py_tp1:
                 bumped_tp2 = round(py_tp1 * 1.08, 2)
                 pick["target_price_2"] = f"{bumped_tp2:.2f}（依 Python TP1 自動順延 +8% 波段目標）"
-        if py_sl is not None and py_sl > 0:
+        if py_sl is not None and py_sl > 0 and (not is_rebound or ai_sl is None):
             pick["stop_loss_price"] = f"{py_sl:.2f}（Python 確定性硬停損）"
 
     for w_item in decision.get("watchlist", []):
@@ -2696,15 +2908,13 @@ async def run_rebound_pipeline(
     # 1. CLI 明確指定 --run-ai 或 --no-ai 時優先遵循
     # 2. 否則讀取 finmind_scanner.json 的 rebound_auto_run_ai（第一階段預設 False，先觀察標的數量）
     #    若 rebound_auto_run_ai 為 True，則檢查標的數量是否落在合理區間 [min_count, max_count]（預設 3 ~ 15 檔）
-    min_ai_count = int(_cfg(config, "rebound_ai_min_candidates", 3))
-    max_ai_count = int(_cfg(config, "rebound_ai_max_candidates", 15))
+    min_ai_count = int(_cfg(config, "rebound_ai_min_candidates", 1))
     auto_ai_cfg = bool(_cfg(config, "rebound_auto_run_ai", False))
     if run_ai is not None:
         should_run_ai = bool(run_ai) and total_rebounds > 0
     else:
-        should_run_ai = (
-            auto_ai_cfg and (min_ai_count <= total_rebounds <= max_ai_count)
-        )
+        # SASD v6.0：由 prefilter_rebound_candidates 負責裁剪至 Top 12，不再因候選數 > 15 而跳過 AI
+        should_run_ai = auto_ai_cfg and (total_rebounds >= min_ai_count)
 
     post_discord = (
         bool(_cfg(config, "post_rebound_to_discord", True))
@@ -2720,24 +2930,32 @@ async def run_rebound_pipeline(
     bot_token = (os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or "").strip()
 
     ai_results: dict[str, dict[str, object]] = {}
+    audit_records: dict[str, dict[str, object]] = {}
     ai_failures: list[tuple[str, str]] = []
     ai_messages: list[str] = []
 
     if should_run_ai and not rebound_df.empty:
-        max_candidates = int(_cfg(config, "ai_picker_max_candidates", DEFAULT_MAX_CANDIDATES))
+        max_candidates = int(_cfg(config, "rebound_prefilter_top_n", 12))
         max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
         stage1_batch, stage2_batch, batch_poll = resolve_batch_settings(config, use_batch)
         portfolio_model = get_vertex_batch_stage2_model() if stage2_batch else get_vertex_stage2_model()
         call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
         publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
 
-        selected = rebound_df.head(max_candidates).reset_index(drop=True)
-        skipped = max(0, len(rebound_df) - len(selected))
-        selected = enrich_with_taxonomy(selected, config, target_date)
-
         cache = FundamentalCacheManager()
         cache.enable_batch_mode()
         analyzer = FundamentalAnalyzer(cache)
+
+        enriched_rebound = enrich_with_taxonomy(rebound_df, config, target_date)
+        vol_filtered, pre_filtered_avoid = hard_prefilter(enriched_rebound, {})
+        selected, skipped = prefilter_rebound_candidates(
+            vol_filtered,
+            cache=cache,
+            analyzer=analyzer,
+            max_candidates=max_candidates,
+        )
+        if skipped > 0:
+            print(f"[rebound] Python 100分制菁英預篩：保留前 {len(selected)} 檔進入 AI 審計（篩除 {skipped} 檔）。")
 
         with _rate_limit_finmind_http_requests(limiter, only_hosts=FINMIND_HOSTS):
             ai_results, ai_failures = await analyze_candidates(
@@ -2753,40 +2971,99 @@ async def run_rebound_pipeline(
             )
 
         analyzed = selected.loc[selected["stock_id"].isin(ai_results.keys())].reset_index(drop=True)
-
         if not analyzed.empty:
+            metrics_lookup = {
+                str(sid): await asyncio.to_thread(analyzer.get_hard_screen_metrics, str(sid))
+                for sid in ai_results
+            }
+            analyzed, financial_avoid = hard_prefilter(analyzed, metrics_lookup)
+            pre_filtered_avoid = [*pre_filtered_avoid, *financial_avoid]
+
+        if not analyzed.empty or pre_filtered_avoid:
+            audit_rejected: list[dict[str, str]] = []
+            audit_all_rejected = False
+            if bool(_cfg(config, "ai_picker_red_blue_audit", True)) and not analyzed.empty:
+                before_audit = analyzed
+                try:
+                    audit_model = get_vertex_batch_stage1_model()
+                    analyzed, audit_records, audit_rejected = await run_audit_stage(
+                        analyzed,
+                        config,
+                        target_date=target_date,
+                        daily_dir=daily_dir,
+                        analyzer=analyzer,
+                        model=audit_model,
+                        market_regime=market_regime,
+                        dry_run=dry_run,
+                        stage1_results=ai_results,
+                        use_vertex_batch=stage1_batch,
+                        poll_interval=batch_poll,
+                        selection_mode="rebound",
+                    )
+                    audit_all_rejected = analyzed.empty
+                    print(f"[rebound] Pass 1 紅藍軍審計：通過 {len(analyzed)} 檔、淘汰 {len(audit_rejected)} 檔。")
+                except Exception as error:  # noqa: BLE001
+                    analyzed = before_audit
+                    audit_records = {}
+                    print(f"[warn] [rebound] 紅藍軍審計失敗，退回未審計流程：{type(error).__name__}: {error}")
+
             dossiers = []
             for i, row in enumerate(analyzed.to_dict("records"), start=1):
                 sid = str(row["stock_id"])
                 snapshot_txt = str(ai_results[sid].get("snapshot") or "").strip()
                 if not snapshot_txt:
-                    snapshot_txt = str(analyzer.build_quant_snapshot(sid))
-                dossiers.append(
-                    build_dossier(
-                        i,
-                        row,
-                        snapshot_txt,
-                        str(ai_results[sid]["summary"]),
-                    )
+                    snapshot_txt = str(analyzer.build_quant_snapshot(sid, close=_parse_optional_num(row.get("close"))))
+                dossier = build_dossier(
+                    i,
+                    row,
+                    snapshot_txt,
+                    str(ai_results[sid]["summary"]),
                 )
+                if sid in audit_records:
+                    dossier += "\n- [D. 紅藍軍審計與反彈三層錨點選單]\n  " + json.dumps(
+                        audit_records[sid], ensure_ascii=False, default=str
+                    )
+                dossiers.append(dossier)
+
             rebound_context = (
-                "本批次為【型態 A：高點急跌回踩長均線（45MA/117MA）反彈清單】。"
-                "請特別針對「均值回歸反彈空間（目標 17MA 與 +12% 正乖離）」、「長均線支撐防守力道」、"
-                "「法人近 5 日是否趁急跌逢低承接（或連續大賣需降級排雷）」及「自由現金流 FCF 品質」進行嚴選。"
+                "本批次為【型態 A：高點急跌回踩長均線（45MA/117MA/189MA）雙劇本反彈清單（R1 觸線止穩 / R2 W底右腳預掛）】。"
+                "請擔任主動式基金 CIO 進行戰術沙盤推演：\n"
+                "1. 先診斷賣壓歸因（基本面惡化 vs 外資提款/法說避險錯殺）；\n"
+                "2. 結合 [D] 區三層結構錨點選單，在 `entry_zone_and_trigger` 規劃分批低接建倉劇本（嚴禁追高）；\n"
+                "3. 豁免『戰略擴產型負FCF（STRATEGIC_CAPEX_EXPANSION）』與『土洋對作/投信鎖碼護盤』，並寫出事件前後 If-Then 應變預案。"
             )
-            portfolio_meta = await run_portfolio_selection(
-                dossiers,
-                max_top=max_top,
-                model=portfolio_model,
-                market_regime=market_regime,
-                strategy_context=rebound_context,
-                selection_mode="rebound",
-                use_vertex_batch=stage2_batch,
-                poll_interval=batch_poll,
-            )
-            raw_text = str(getattr(portfolio_meta, "text", "") or "")
-            decision = parse_portfolio_json(raw_text, set(ai_results.keys()), max_top)
-            portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
+            if dossiers:
+                portfolio_meta = await run_portfolio_selection(
+                    dossiers,
+                    max_top=max_top,
+                    model=portfolio_model,
+                    market_regime=market_regime,
+                    strategy_context=rebound_context,
+                    selection_mode="rebound",
+                    use_vertex_batch=stage2_batch,
+                    poll_interval=batch_poll,
+                )
+                raw_text = str(getattr(portfolio_meta, "text", "") or "")
+                decision = parse_portfolio_json(raw_text, set(analyzed["stock_id"].astype(str)), max_top)
+                portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
+            else:
+                raw_text = ""
+                portfolio_model_version = ""
+                decision = {
+                    "market_light": str((market_regime or {}).get("light", "")),
+                    "market_comment": (
+                        NO_PICK_MESSAGE + "（型態 A Pass 1 紅藍軍審計全數淘汰）。"
+                        if audit_all_rejected
+                        else "今日型態 A 候選股皆未通過審計，建議觀望。"
+                    ),
+                    "top_picks": [],
+                    "watchlist": [],
+                    "avoid": [],
+                }
+            if decision is not None:
+                decision = enforce_sector_cap(decision, analyzed)
+                decision = apply_audit_to_decision(decision, audit_records, selection_mode="rebound")
+                decision = merge_pre_filtered_avoid(decision, [*pre_filtered_avoid, *audit_rejected])
 
             # 只要有經過 AI 分析，即確保所有反彈標的皆生成戰情室 HTML 並發布至 GitHub，且 war_room_url 寫入 00_Watchlist_Master
             if ai_results:
@@ -2838,6 +3115,7 @@ async def run_rebound_pipeline(
                     "skipped": skipped,
                     "failures": [{"stock_id": sid, "reason": r} for sid, r in ai_failures],
                     "decision": decision,
+                    "audit": audit_records,
                 }
                 _atomic_write_text(
                     daily_dir / f"{target_date.isoformat()}_rebound_ai_recommendations.json",
@@ -2856,6 +3134,7 @@ async def run_rebound_pipeline(
                 as_of=target_date,
                 market_light=market_light,
                 ai_results=ai_results if ai_results else None,
+                audit_records=audit_records if audit_records else None,
                 tab_name=tab_name,
                 replace_date=True,
             )

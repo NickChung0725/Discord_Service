@@ -4,6 +4,28 @@
 
 ---
 
+## [v6.0.0] - 2026-11-16
+### ✨ 新增功能 & 🔧 優化與修正 — SASD v6.0 型態 A 反彈雙劇本引擎、三層結構錨點、籌碼/基本面修復與紅藍軍全鏈路貫通
+* **修復 `01_Monthly_Revenue` 月增率 100 倍放大失真與戰略擴產負 FCF 豁免（[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)）**：
+  * 新增 `_normalize_monthly_revenue_pcts()`，於讀取月營收資料時以相鄰月份營收驗算 `mom_pct`，自動修正 Google Sheets 百分比格式導致的 100 倍放大誤差（如 `55.00%` 還原為 `0.55`），並同步套用於 `compute_fundamental_features()`、`build_markdown_context()` 與 `build_quant_snapshot()`。
+  * 新增 `_evaluate_fcf_capex_semantics()` 與 `FundamentalFeatureSummary.fcf_semantics`：當單季 `FCF < 0` 但同時滿足 `OCF/NI >= 90%`、`|CapEx| >= 0.8 × OCF` 且營收 YoY `>= 15%` 時，標註為 `STRATEGIC_CAPEX_EXPANSION`（戰略性資本支出擴產），禁止初篩與 AI 誤判扣分。
+* **升級雙劇本反彈掃描器與反彈確定性錨點選單（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)）**：
+  * `add_moving_averages()` 擴充純向量化 `K9`、`D9`（9 日 KD）與 `MACD_OSC`（12, 26, 9 柱狀體）。
+  * `classify_rebound_signal()` 支撐均線擴充至 `(45MA, 117MA, 189MA)`（含權值股深跌特例），並拆分為 **R1 (`REBOUND_TOUCH_HOLD`)**（當日回踩止穩 + 連跌 MACD 綠柱擴大且 KD 死叉防接刀）與 **R2 (`W_BOTTOM_PULLBACK_SETUP`)**（近 12 日觸及長均線左腳見底 + KD 金叉 + MACD 改善 + 逼近上壓量縮/上影線預掛右腳）。
+  * 新增 `round_tw_tick()`、`_snap_to_psychological_support()`（整數關卡 1% 內磁吸）與 `compute_rebound_trade_setup()`，產出買進區間、硬停損、TP1、風報比與三層結構錨點選單（積極防線 / 0.786 洗盤防線 / 極限左腳防線）。
+* **籌碼四象限土洋對作修正與 Python 100 分制反彈菁英預篩（[`quant/fundamental_cache.py`](/quant/fundamental_cache.py)、[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
+  * `_sync_chip_summary()` 提前讀取 TDCC 千張大戶資料，當三大法人 5D 賣超且融資增加、但 `投信 5D 買超 >= 500 張` 且 `(融資使用率 < 6% 或 千張大戶 >= 70%)` 時，標註為 `🛡️土洋對作/投信鎖碼護盤(投信買+大戶穩)`；`build_hard_warnings()` 同步豁免該情境。
+  * 新增 `prefilter_rebound_candidates()`（技術 25 + 籌碼 40 + 基本面 35 = 100 分制），篩選 Top 12 菁英標的進入 AI 審計。
+* **全鏈路貫通 `run_rebound_pipeline()` 紅藍軍審計、`Rebound_Watchlist` 擴充與晨報記憶歸因（[`quant/fundamental_config.py`](/quant/fundamental_config.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)、[`finmind_scanner.json`](/finmind_scanner.json)）**：
+  * `SHEET_SCHEMAS["Rebound_Watchlist"]` 與 `build_rebound_watchlist_rows()` 擴充 `rebound_subtype` 與 9 個確定性紅藍軍審計欄位（`Audit_Grade`、`Execution_Tactic`、`Ideal_Buy_Or_Ref`、`Chase_Limit_Price`、`Hard_Stop_Loss`、`TP1_Target_Or_POC`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers`），且於未啟動 AI 時亦自動填入 `compute_rebound_trade_setup()` 確定性點位。
+  * `taishin_portfolio_service.py` 的 `attribute_new_buy_to_pick()` 與 `build_fresh_top_picks_block()` 同步繼承 `Rebound_Watchlist` 之 `Hard_Stop_Loss`、`TP1_Target_Or_POC` 與 `Ideal_Buy_Or_Ref` 寫入 `05_Position_Thesis_Memory`。
+  * `get_hard_screen_metrics()` 補齊 `trust_net_buy_5d_lots` 與 `tdcc_1000_lots_pct`；`_score_rebound_candidate()` 加入日期排序、月營收正規化與 Stage 0 硬傷扣分；`finmind_scanner.json` 啟用 `rebound_auto_run_ai: true` 並設定 `rebound_ai_min_candidates: 1`、`rebound_prefilter_top_n: 12`。
+  * `run_audit_stage(..., selection_mode="rebound")` 串接 `compute_rebound_trade_setup()` 與三層錨點選單；`apply_audit_to_decision(..., selection_mode="rebound")` 保留 AI 規劃之分批買進與停利價，僅於缺漏時補齊 Python 確定性點位。
+  * `_apply_portfolio_prompt_overrides(..., selection_mode="rebound")` 直接注入反彈雙劇本、三層錨點分批建倉、賣壓歸因錯殺辨識與法說事件 If-Then 應變預案規則。
+* **新增單元測試（[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**。
+
+---
+
 ## [v5.9.3] - 2026-11-16
 ### ✨ 新增功能 & 🔧 優化與修正 — 紅藍軍審計 Vertex Batch 化、Stage 1 結論注入與單位/族群廣度資料斷鏈修復
 * **Pass 1 紅藍軍審計 (`RED_BLUE_AUDIT`) 升級支援 Vertex AI Batch 與 Stage 1 結論注入（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：

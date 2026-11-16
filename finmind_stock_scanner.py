@@ -70,17 +70,27 @@ REBOUND_CSV_COLUMNS = [
     "high_60d",
     "drop_amount",
     "drop_pct",
+    "rebound_subtype",
     "support_ma",
     "support_price",
     "support_gap_pct",
     "target_ma17",
     "potential_return_pct",
     "close_strength",
+    "K9",
+    "D9",
+    "MACD_OSC",
     "MA3",
     "MA17",
     "MA45",
     "MA117",
     "MA189",
+    "ideal_buy_zone_low",
+    "ideal_buy_zone_high",
+    "chase_limit_price",
+    "hard_stop_loss",
+    "tp1_price",
+    "deterministic_rr_ratio",
     "vol_lots",
     "vol_ma5_lots",
     "vol_ma20_lots",
@@ -328,6 +338,28 @@ def add_moving_averages(prices: pd.DataFrame) -> pd.DataFrame:
         result["vol_ma20_lots"] = (
             result["vol_lots"].rolling(window=20, min_periods=1).mean().round(0)
         )
+
+    # 9日 KD 與 MACD(12,26,9) 柱狀體（純向量化計算）
+    ema12 = result["close"].ewm(span=12, adjust=False).mean()
+    ema26 = result["close"].ewm(span=26, adjust=False).mean()
+    dif = ema12 - ema26
+    dea = dif.ewm(span=9, adjust=False).mean()
+    result["MACD_OSC"] = (dif - dea).round(4)
+
+    high_col = "high" if "high" in result.columns else ("max" if "max" in result.columns else None)
+    low_col = "low" if "low" in result.columns else ("min" if "min" in result.columns else None)
+    if high_col and low_col:
+        high_s = pd.to_numeric(result[high_col], errors="coerce")
+        low_s = pd.to_numeric(result[low_col], errors="coerce")
+        low_9 = low_s.rolling(window=9, min_periods=1).min()
+        high_9 = high_s.rolling(window=9, min_periods=1).max()
+        denom = (high_9 - low_9).replace(0.0, float("nan"))
+        rsv = ((result["close"] - low_9) / denom * 100.0).fillna(50.0).clip(0.0, 100.0)
+        result["K9"] = rsv.ewm(com=2, adjust=False).mean().round(2)
+        result["D9"] = result["K9"].ewm(com=2, adjust=False).mean().round(2)
+    else:
+        result["K9"] = float("nan")
+        result["D9"] = float("nan")
     return result
 
 
@@ -475,6 +507,145 @@ def compute_deterministic_trade_setup(
         "tp1_source": tp1_source,
         "deterministic_rr_ratio": rr_ratio,
         "rr_warning": rr_warning,
+    }
+
+
+def round_tw_tick(price: float) -> float:
+    """依台股升降單位規則將價格對齊至合法 Tick。"""
+    if price < 10.0:
+        step = 0.01
+    elif price < 50.0:
+        step = 0.05
+    elif price < 100.0:
+        step = 0.1
+    elif price < 500.0:
+        step = 0.5
+    elif price < 1000.0:
+        step = 1.0
+    else:
+        step = 5.0
+    return round(round(float(price) / step) * step, 2)
+
+
+def _snap_to_psychological_support(raw_price: float) -> float:
+    """台股整數心理關卡磁吸函數：若落在 50 元倍數（<100 則 10 元倍數）下方 1.0% 以內，向上吸附至關卡價。"""
+    if raw_price <= 0:
+        return raw_price
+    unit = 50.0 if raw_price >= 95.0 else 10.0
+    next_level = ((int(raw_price // unit)) + 1) * unit
+    gap_ratio = (next_level - raw_price) / next_level
+    if 0.0 < gap_ratio <= 0.01:
+        return round_tw_tick(next_level)
+    return round_tw_tick(raw_price)
+
+
+def compute_rebound_trade_setup(
+    prices: pd.DataFrame,
+    *,
+    support_ma: str | None = None,
+    support_price: float | None = None,
+    rebound_subtype: str | None = None,
+) -> dict[str, object] | None:
+    """計算型態 A 反彈專屬確定性點位與 3 層結構錨點選單 (SASD v6.0)。"""
+    frame = _normalize_ohlcv(prices)
+    atr = compute_atr(frame)
+    if atr is None or atr <= 0 or len(frame) < 15:
+        return None
+
+    close_t = float(frame["close"].iloc[-1])
+    ma17 = float(frame["close"].tail(17).mean())
+    ma45 = float(frame["close"].tail(45).mean()) if len(frame) >= 45 else ma17
+    ma117 = float(frame["close"].tail(117).mean()) if len(frame) >= 117 else ma45
+    ma189 = float(frame["close"].tail(189).mean()) if len(frame) >= 189 else ma117
+
+    ma_lookup = {"45MA": ma45, "117MA": ma117, "189MA": ma189}
+    resolved_ma_name = support_ma if support_ma in ma_lookup else None
+    p_ma = float(support_price) if (support_price is not None and support_price > 0) else 0.0
+    if p_ma <= 0:
+        if resolved_ma_name:
+            p_ma = ma_lookup[resolved_ma_name]
+        else:
+            # 自動挑選最貼近 close_t 且 <= close_t * 1.02 的長均線
+            candidates = [(name, val) for name, val in ma_lookup.items() if val > 0]
+            resolved_ma_name, p_ma = min(candidates, key=lambda item: abs(close_t - item[1]))
+
+    recent_12 = frame.tail(12)
+    l12_idx = recent_12["low"].idxmin()
+    l12 = float(recent_12.loc[l12_idx, "low"])
+    after_l12 = frame.loc[l12_idx:]
+    h_rebound = float(after_l12["high"].max()) if not after_l12.empty else float(recent_12["high"].max())
+    h_rebound = max(h_rebound, close_t, l12)
+
+    p_fib_30 = l12 + 0.30 * (h_rebound - l12)
+    p_fib_786 = l12 + 0.214 * (h_rebound - l12)
+    magnet_ma = _snap_to_psychological_support(p_ma)
+
+    buy_low = round_tw_tick(p_ma * 1.005)
+    buy_high = round_tw_tick(max(p_fib_30, magnet_ma, buy_low))
+    if rebound_subtype == "REBOUND_TOUCH_HOLD" and close_t < buy_low:
+        buy_low = round_tw_tick(min(close_t, p_ma * 1.005))
+        buy_high = round_tw_tick(max(close_t, magnet_ma))
+
+    entry_ref = round_tw_tick((buy_low + buy_high) / 2.0)
+    chase_limit = buy_high
+    hard_stop = round_tw_tick(min(l12 * 0.994, buy_low - 1.2 * atr))
+
+    poc = compute_volume_poc(frame)
+    overhead_candidates: list[tuple[float, str]] = []
+    if ma17 > buy_high * 1.02:
+        overhead_candidates.append((ma17, "MA17_RESISTANCE"))
+    if ma117 > buy_high * 1.02 and ma117 != p_ma:
+        overhead_candidates.append((ma117, "MA117_RESISTANCE"))
+    if poc is not None and poc > buy_high * 1.02:
+        overhead_candidates.append((poc, "VOLUME_POC_RESISTANCE"))
+
+    if overhead_candidates:
+        raw_tp1, tp1_source = min(overhead_candidates, key=lambda item: item[0])
+        tp1_price = round_tw_tick(raw_tp1)
+    else:
+        tp1_price = round_tw_tick(buy_high + 2.5 * atr)
+        tp1_source = "ATR_2_5X_REBOUND_TARGET"
+
+    risk = buy_high - hard_stop
+    rr_ratio: float | None = None
+    rr_warning = ""
+    if risk <= 0:
+        rr_warning = "POOR_RR_RATIO"
+    else:
+        rr_ratio = round((tp1_price - buy_high) / risk, 2)
+        if rr_ratio < RR_WARNING_THRESHOLD:
+            rr_warning = "POOR_RR_RATIO"
+
+    tier2_low = round_tw_tick(min(p_fib_786, buy_low * 0.985))
+    tier2_high = round_tw_tick(max(p_fib_786, buy_low * 0.992))
+    tier3_low = round_tw_tick(l12)
+    tier3_high = round_tw_tick(max(l12 * 1.015, hard_stop + 0.5 * atr))
+
+    return {
+        "signal_type": SIGNAL_STYLE_B_PULLBACK,
+        "rebound_subtype": rebound_subtype or "REBOUND_TOUCH_HOLD",
+        "support_ma": resolved_ma_name or "189MA",
+        "support_price": round(p_ma, 2),
+        "close_t": round(close_t, 2),
+        "ma17_t": round(ma17, 2),
+        "atr_14": round(atr, 2),
+        "left_foot_low_12d": round(l12, 2),
+        "rebound_high_12d": round(h_rebound, 2),
+        "volume_poc_60d": round(poc, 2) if poc is not None else None,
+        "entry_reference_price": entry_ref,
+        "ideal_buy_zone_low": buy_low,
+        "ideal_buy_zone_high": buy_high,
+        "chase_limit_price": chase_limit,
+        "hard_stop_loss": hard_stop,
+        "tp1_price": tp1_price,
+        "tp1_source": tp1_source,
+        "deterministic_rr_ratio": rr_ratio,
+        "rr_warning": rr_warning,
+        "anchor_tiers": {
+            "tier1_aggressive_support": f"{buy_low:.2f}~{buy_high:.2f}（{resolved_ma_name or '長均線'}與整數關卡）",
+            "tier2_steady_washout": f"{tier2_low:.2f}~{tier2_high:.2f}（0.786深度回檔/破線洗盤區）",
+            "tier3_extreme_left_foot": f"{tier3_low:.2f}~{tier3_high:.2f}（前波左腳低點防守區）",
+        },
     }
 
 
@@ -1319,19 +1490,23 @@ def _rebound_min_drop_amount(price: float) -> float | None:
     return 300.0
 
 
+def _ma_slope_non_negative(series: pd.Series, lookback: int = 5) -> bool:
+    valid = pd.to_numeric(series, errors="coerce").dropna()
+    if len(valid) < 2:
+        return True
+    prev_idx = max(0, len(valid) - 1 - lookback)
+    return float(valid.iloc[-1]) >= float(valid.iloc[prev_idx])
+
+
 def classify_rebound_signal(
     analyzed_prices: pd.DataFrame,
     *,
     lookback_days: int = REBOUND_LOOKBACK_DAYS,
 ) -> dict[str, object] | None:
-    """型態 A：高點回跌 10/30/100/300 元（且跌幅 >= 10%）回踩長均線（45MA/117MA）反彈篩選。
+    """型態 A（SASD v6.0 雙劇本引擎）：高點回跌 10/30/100/300 元（且跌幅 >= 10%）回踩或 W 底回測長均線（45MA/117MA/189MA）。
 
-    條件：
-    1. 長線護體：MA45 >= MA117 > MA189
-    2. 高點回跌門檻：近 60 個交易日最高價 (high_60d) 回跌金額達位階門檻，且跌幅 >= 10%
-    3. 下有長均線支撐：今日收盤價落在 45MA 或 117MA 的 -1.5% ~ +2.5% 區間內
-    4. 上有反彈空間：收盤價 < 17MA，且反彈至 17MA 的空間 ((MA17 - Close) / Close) >= 5%
-    5. K 線收盤強度濾網：收盤強度 (Close - Min) / (Max - Min) >= 0.55（排除長上影線假反彈）
+    - 劇本 R1 (REBOUND_TOUCH_HOLD)：當日回踩任一上揚長均線 (-1.5% ~ +2.5%) 止穩，收盤強度 >= 0.55，且非綠柱加速擴張+KD死叉接刀。
+    - 劇本 R2 (W_BOTTOM_PULLBACK_SETUP)：近 12 日曾觸及長均線見底、日 KD 金叉 (K9 > D9 且 K9 < 75)、MACD 動能收斂、反彈逼近上方壓力后量縮/留上影線，預掛右腳回測買點。
     """
     required_columns = ("MA3", "MA17", "MA45", "MA117", "MA189")
     if not set(required_columns).issubset(analyzed_prices.columns):
@@ -1348,11 +1523,17 @@ def classify_rebound_signal(
     if min(close, ma3, ma17, ma45, ma117, ma189) <= 0:
         return None
 
-    # 1. 長線護體：MA45 >= MA117 > MA189
-    if not (ma45 >= ma117 and ma117 > ma189):
+    # 1. 長線護體：MA45 >= MA117 > MA189 或權值股深跌特例 (MA117 > MA189 且 MA189 斜率 > 0 且收盤 > MA189 * 0.985)
+    ma189_valid = pd.to_numeric(usable["MA189"], errors="coerce").dropna()
+    ma189_slope_pos = len(ma189_valid) >= 2 and float(ma189_valid.iloc[-1]) > float(
+        ma189_valid.iloc[max(0, len(ma189_valid) - 6)]
+    )
+    standard_bull = ma45 >= ma117 and ma117 > ma189
+    deep_pullback_bull = ma117 > ma189 and ma189_slope_pos and close > (ma189 * 0.985)
+    if not (standard_bull or deep_pullback_bull):
         return None
 
-    # 2. 近 60 個交易日高點與回跌門檻（位階可用 close 或 high_60d 判定，此處若 close 達 30 元以上即依位階檢核）
+    # 2. 近 60 個交易日高點與回跌門檻
     min_drop_req = _rebound_min_drop_amount(close)
     if min_drop_req is None:
         return None
@@ -1372,32 +1553,7 @@ def classify_rebound_signal(
     if round(drop_amount, 4) < min_drop_req or round(drop_pct, 4) < 10.0:
         return None
 
-    # 3. 下有長均線支撐：今日收盤價落在 45MA 或 117MA 的 -1.5% ~ +2.5% 區間內
-    gap_45 = (close - ma45) / ma45 * 100.0
-    gap_117 = (close - ma117) / ma117 * 100.0
-    in_45 = REBOUND_SUPPORT_MIN_PCT <= round(gap_45, 2) <= REBOUND_SUPPORT_MAX_PCT
-    in_117 = REBOUND_SUPPORT_MIN_PCT <= round(gap_117, 2) <= REBOUND_SUPPORT_MAX_PCT
-    if not (in_45 or in_117):
-        return None
-
-    if in_45 and in_117:
-        if abs(gap_45) <= abs(gap_117):
-            support_ma, support_price, support_gap_pct = "45MA", ma45, gap_45
-        else:
-            support_ma, support_price, support_gap_pct = "117MA", ma117, gap_117
-    elif in_45:
-        support_ma, support_price, support_gap_pct = "45MA", ma45, gap_45
-    else:
-        support_ma, support_price, support_gap_pct = "117MA", ma117, gap_117
-
-    # 4. 上有反彈空間：收盤價低於 17MA，且反彈至 17MA 的空間 >= 5%
-    if close >= ma17:
-        return None
-    potential_return_pct = (ma17 - close) / close * 100.0
-    if round(potential_return_pct, 4) < REBOUND_MIN_RETURN_TO_MA17_PCT:
-        return None
-
-    # 5. K 線收盤強度濾網：(Close - Min) / (Max - Min) >= 0.55
+    # K 線收盤強度
     day_max = _parse_optional_float(latest.get("max"))
     day_min = _parse_optional_float(latest.get("min"))
     if day_max is not None and day_min is not None:
@@ -1407,16 +1563,120 @@ def classify_rebound_signal(
             close_strength = 1.0
         else:
             close_strength = 0.0
-        if round(close_strength, 4) < REBOUND_MIN_CLOSE_STRENGTH:
-            return None
     else:
         close_strength = 1.0
 
+    # 指標：K9, D9, MACD_OSC
+    k9 = _parse_optional_float(latest.get("K9"))
+    d9 = _parse_optional_float(latest.get("D9"))
+    osc_t = _parse_optional_float(latest.get("MACD_OSC"))
+    osc_prev = _parse_optional_float(usable.iloc[-2].get("MACD_OSC")) if len(usable) >= 2 else None
+    osc_prev2 = _parse_optional_float(usable.iloc[-3].get("MACD_OSC")) if len(usable) >= 3 else None
+
     vol_metrics = _extract_latest_volume_metrics(usable)
+    vol_lots_num = _parse_optional_float(vol_metrics.get("vol_lots"))
+    vol_ma5_num = _parse_optional_float(vol_metrics.get("vol_ma5_lots"))
+
+    support_candidates = [
+        ("45MA", ma45, _ma_slope_non_negative(usable["MA45"])),
+        ("117MA", ma117, _ma_slope_non_negative(usable["MA117"])),
+        ("189MA", ma189, _ma_slope_non_negative(usable["MA189"])),
+    ]
+
+    # 3A. 嘗試劇本 R1：REBOUND_TOUCH_HOLD（當日回踩支撐止穩）
+    r1_matches: list[tuple[str, float, float]] = []
+    for ma_name, ma_val, slope_ok in support_candidates:
+        if not slope_ok or ma_val <= 0:
+            continue
+        gap = (close - ma_val) / ma_val * 100.0
+        if REBOUND_SUPPORT_MIN_PCT <= round(gap, 2) <= REBOUND_SUPPORT_MAX_PCT:
+            r1_matches.append((ma_name, ma_val, gap))
+
+    rebound_subtype: str | None = None
+    support_ma = ""
+    support_price = 0.0
+    support_gap_pct = 0.0
+    potential_return_pct = (ma17 - close) / close * 100.0 if close > 0 else 0.0
+
+    if r1_matches and close < ma17 and round(potential_return_pct, 4) >= REBOUND_MIN_RETURN_TO_MA17_PCT:
+        if round(close_strength, 4) >= REBOUND_MIN_CLOSE_STRENGTH:
+            # 動能防接刀：拒絕在「連跌兩日以上且 MACD 綠柱負向擴大 + KD 死叉」時盲目接刀
+            prev_falling = len(usable) >= 3 and float(usable.iloc[-2]["close"]) < float(usable.iloc[-3]["close"])
+            falling_knife = (
+                prev_falling
+                and osc_t is not None
+                and osc_prev is not None
+                and osc_t < 0
+                and osc_prev < 0
+                and osc_t < osc_prev
+                and k9 is not None
+                and d9 is not None
+                and k9 < d9
+            )
+            if not falling_knife:
+                support_ma, support_price, support_gap_pct = min(r1_matches, key=lambda x: abs(x[2]))
+                rebound_subtype = "REBOUND_TOUCH_HOLD"
+
+    # 3B. 若未觸發 R1，嘗試劇本 R2：W_BOTTOM_PULLBACK_SETUP（W 底左腳完成，預掛右腳回測買點）
+    if rebound_subtype is None and len(usable) >= 3:
+        recent_12 = analyzed_prices.tail(12)
+        if "min" in recent_12.columns and recent_12["min"].notna().any():
+            l12 = float(pd.to_numeric(recent_12["min"], errors="coerce").dropna().min())
+        else:
+            l12 = float(pd.to_numeric(recent_12["close"], errors="coerce").dropna().min())
+
+        r2_matches: list[tuple[str, float, float]] = []
+        for ma_name, ma_val, slope_ok in support_candidates:
+            if not slope_ok or ma_val <= 0:
+                continue
+            l12_gap = (l12 - ma_val) / ma_val * 100.0
+            close_gap = (close - ma_val) / ma_val * 100.0
+            if l12_gap <= 2.0 and 2.5 < round(close_gap, 2) <= 12.0:
+                r2_matches.append((ma_name, ma_val, close_gap))
+
+        kd_bull = k9 is not None and d9 is not None and k9 > d9 and k9 < 75.0
+        osc_ref = osc_prev2 if osc_prev2 is not None else osc_prev
+        macd_improving = osc_t is not None and osc_ref is not None and osc_t > osc_ref
+
+        recent_3 = analyzed_prices.tail(3)
+        if "max" in recent_3.columns and recent_3["max"].notna().any():
+            high_3d = float(pd.to_numeric(recent_3["max"], errors="coerce").dropna().max())
+        else:
+            high_3d = float(pd.to_numeric(recent_3["close"], errors="coerce").dropna().max())
+
+        overhead_res = [r for r in (ma17, ma117) if r > close * 0.975]
+        near_resistance = any((abs(r - high_3d) / r * 100.0) < 2.5 or high_3d >= r * 0.975 for r in overhead_res)
+        pullback_clue = (
+            (vol_lots_num is not None and vol_ma5_num is not None and vol_lots_num < vol_ma5_num)
+            or close_strength < REBOUND_MIN_CLOSE_STRENGTH
+        )
+
+        if r2_matches and kd_bull and macd_improving and near_resistance and pullback_clue and close <= ma17 * 1.02:
+            # 挑選最貼近 L12 的長均線作為支撐基準
+            cand_ma, cand_val, cand_gap = min(r2_matches, key=lambda x: abs((l12 - x[1]) / x[1]))
+            # 以支撐均線價計算至上方壓力 (MA17) 的潛在空間 >= 5%
+            room_from_support = (ma17 - cand_val) / cand_val * 100.0
+            if round(room_from_support, 4) >= REBOUND_MIN_RETURN_TO_MA17_PCT:
+                support_ma, support_price, support_gap_pct = cand_ma, cand_val, cand_gap
+                potential_return_pct = room_from_support
+                rebound_subtype = "W_BOTTOM_PULLBACK_SETUP"
+
+    if rebound_subtype is None:
+        return None
+
     date_val = (
         latest["date"].strftime("%Y-%m-%d")
         if hasattr(latest["date"], "strftime")
         else str(latest["date"])[:10]
+    )
+    setup_info = (
+        compute_rebound_trade_setup(
+            analyzed_prices,
+            support_ma=support_ma,
+            support_price=support_price,
+            rebound_subtype=rebound_subtype,
+        )
+        or {}
     )
 
     return {
@@ -1425,17 +1685,27 @@ def classify_rebound_signal(
         "high_60d": round(high_60d, 2),
         "drop_amount": round(drop_amount, 2),
         "drop_pct": round(drop_pct, 2),
+        "rebound_subtype": rebound_subtype,
         "support_ma": support_ma,
         "support_price": round(support_price, 2),
         "support_gap_pct": round(support_gap_pct, 2),
         "target_ma17": round(ma17, 2),
         "potential_return_pct": round(potential_return_pct, 2),
         "close_strength": round(close_strength, 2),
+        "K9": round(k9, 2) if k9 is not None else "",
+        "D9": round(d9, 2) if d9 is not None else "",
+        "MACD_OSC": round(osc_t, 4) if osc_t is not None else "",
         "MA3": round(ma3, 2),
         "MA17": round(ma17, 2),
         "MA45": round(ma45, 2),
         "MA117": round(ma117, 2),
         "MA189": round(ma189, 2),
+        "ideal_buy_zone_low": setup_info.get("ideal_buy_zone_low", ""),
+        "ideal_buy_zone_high": setup_info.get("ideal_buy_zone_high", ""),
+        "chase_limit_price": setup_info.get("chase_limit_price", ""),
+        "hard_stop_loss": setup_info.get("hard_stop_loss", ""),
+        "tp1_price": setup_info.get("tp1_price", ""),
+        "deterministic_rr_ratio": setup_info.get("deterministic_rr_ratio", ""),
         "vol_lots": vol_metrics.get("vol_lots", ""),
         "vol_ma5_lots": vol_metrics.get("vol_ma5_lots", ""),
         "vol_ma20_lots": vol_metrics.get("vol_ma20_lots", ""),
@@ -2201,10 +2471,26 @@ def format_rebound_report(
         else:
             vol_str = ""
 
+        subtype_raw = str(getattr(row, "rebound_subtype", "") or "").strip()
+        subtype_badge = (
+            " [R2 W底右腳預掛]"
+            if subtype_raw == "W_BOTTOM_PULLBACK_SETUP"
+            else (" [R1 觸線止穩]" if subtype_raw == "REBOUND_TOUCH_HOLD" else "")
+        )
         sub_lines = [
-            f"   └ 踩 {row.support_ma} ({float(row.support_gap_pct):+.1f}%)"
+            f"   └ 踩 {row.support_ma} ({float(row.support_gap_pct):+.1f}%){subtype_badge}"
             f" ｜ 距 17MA +{float(row.potential_return_pct):.1f}%{vol_str}"
         ]
+        b_low = _parse_optional_float(getattr(row, "ideal_buy_zone_low", None))
+        b_high = _parse_optional_float(getattr(row, "ideal_buy_zone_high", None))
+        h_sl = _parse_optional_float(getattr(row, "hard_stop_loss", None))
+        tp1_v = _parse_optional_float(getattr(row, "tp1_price", None))
+        rr_v = _parse_optional_float(getattr(row, "deterministic_rr_ratio", None))
+        if b_low is not None and b_high is not None and h_sl is not None and tp1_v is not None:
+            rr_str = f" (RR {rr_v:.2f})" if rr_v is not None else ""
+            sub_lines.append(
+                f"   └ 🎯 預掛 {b_low:.2f}~{b_high:.2f} ｜ 🛡️ 硬停損 {h_sl:.2f} ｜ TP1 {tp1_v:.2f}{rr_str}"
+            )
         tax_line = _taxonomy_report_line(row.stock_id, taxonomy_map)
         if tax_line:
             sub_lines.append(tax_line)
@@ -3702,7 +3988,7 @@ def scan_rebound_from_prices(
         }
         try:
             working = group
-            if not set(("MA3", "MA17", "MA45", "MA117", "MA189")).issubset(working.columns):
+            if not set(("MA3", "MA17", "MA45", "MA117", "MA189", "K9", "D9", "MACD_OSC")).issubset(working.columns):
                 working = add_moving_averages(working)
             signal = classify_rebound_signal(working, lookback_days=lookback_days)
             if signal is not None:
@@ -3727,6 +4013,7 @@ def build_rebound_watchlist_rows(
     as_of: date | None = None,
     market_light: str = "🟡黃燈",
     ai_results: Mapping[str, Mapping[str, object]] | None = None,
+    audit_records: Mapping[str, Mapping[str, object]] | None = None,
     existing_master_map: Mapping[str, Mapping[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     """建立寫入 Google Sheets Rebound_Watchlist 的結構化列。"""
@@ -3754,6 +4041,37 @@ def build_rebound_watchlist_rows(
             ai_model_version = str(m_row.get("ai_model_version", "") or "")
             war_room_url = str(m_row.get("war_room_url", "") or "")
 
+        aud = (audit_records or {}).get(sid) or {}
+        b_low = _parse_optional_float(row.get("ideal_buy_zone_low"))
+        b_high = _parse_optional_float(row.get("ideal_buy_zone_high"))
+        default_ideal = (
+            f"{b_low:.2f}~{b_high:.2f}"
+            if (b_low is not None and b_high is not None and b_low != b_high)
+            else (f"{b_high:.2f}" if b_high is not None else "")
+        )
+        ideal_buy = str(aud.get("Ideal_Buy_Or_Ref") or default_ideal).strip()
+        chase_limit = aud.get("Chase_Limit_Price")
+        if chase_limit in (None, ""):
+            chase_limit = b_high if b_high is not None else ""
+        hard_sl = aud.get("Hard_Stop_Loss")
+        if hard_sl in (None, ""):
+            sl_val = _parse_optional_float(row.get("hard_stop_loss"))
+            hard_sl = sl_val if sl_val is not None else ""
+        tp1_target = aud.get("TP1_Target_Or_POC")
+        if tp1_target in (None, ""):
+            tp1_val = _parse_optional_float(row.get("tp1_price")) or _parse_optional_float(row.get("target_ma17"))
+            tp1_target = tp1_val if tp1_val is not None else ""
+        det_rr = aud.get("Deterministic_RR")
+        if det_rr in (None, ""):
+            rr_val = _parse_optional_float(row.get("deterministic_rr_ratio"))
+            det_rr = rr_val if rr_val is not None else ""
+        triggers_raw = aud.get("Invalidation_Triggers") or []
+        triggers_str = (
+            "；".join(str(t) for t in triggers_raw)
+            if isinstance(triggers_raw, (list, tuple))
+            else str(triggers_raw or "")
+        )
+
         rows.append(
             {
                 "pk_key": f"{scan_date_str}_{sid}",
@@ -3765,6 +4083,7 @@ def build_rebound_watchlist_rows(
                 "high_60d": round(float(row["high_60d"]), 2) if pd.notna(row.get("high_60d")) else "",
                 "drop_amount": round(float(row["drop_amount"]), 2) if pd.notna(row.get("drop_amount")) else "",
                 "drop_pct": round(float(row["drop_pct"]), 2) if pd.notna(row.get("drop_pct")) else "",
+                "rebound_subtype": str(row.get("rebound_subtype") or aud.get("Rebound_Subtype") or "").strip(),
                 "support_ma": str(row.get("support_ma", "")).strip(),
                 "support_price": round(float(row["support_price"]), 2) if pd.notna(row.get("support_price")) else "",
                 "target_ma17": round(float(row["target_ma17"]), 2) if pd.notna(row.get("target_ma17")) else "",
@@ -3778,6 +4097,15 @@ def build_rebound_watchlist_rows(
                 "ai_summary_json": ai_summary,
                 "ai_model_version": ai_model_version,
                 "war_room_url": war_room_url,
+                "Audit_Grade": str(aud.get("Audit_Grade") or "").strip(),
+                "Execution_Tactic": str(aud.get("Execution_Tactic") or "STYLE_B_PULLBACK_LIMIT").strip(),
+                "Ideal_Buy_Or_Ref": ideal_buy,
+                "Chase_Limit_Price": chase_limit,
+                "Hard_Stop_Loss": hard_sl,
+                "TP1_Target_Or_POC": tp1_target,
+                "Deterministic_RR": det_rr,
+                "Bear_Case_Warning": str(aud.get("Bear_Case_Warning") or "").strip(),
+                "Invalidation_Triggers": triggers_str,
             }
         )
     return rows
@@ -3789,6 +4117,7 @@ def sync_rebound_watchlist_to_gsheet(
     as_of: date | None = None,
     market_light: str = "🟡黃燈",
     ai_results: Mapping[str, Mapping[str, object]] | None = None,
+    audit_records: Mapping[str, Mapping[str, object]] | None = None,
     spreadsheet_id: str | None = None,
     credentials_path: str | None = None,
     tab_name: str = REBOUND_WATCHLIST_SHEET_NAME,
@@ -3882,6 +4211,7 @@ def sync_rebound_watchlist_to_gsheet(
         as_of=today,
         market_light=market_light,
         ai_results=ai_results,
+        audit_records=audit_records,
         existing_master_map=master_map,
     )
     merged_records = today_rows + prior_records

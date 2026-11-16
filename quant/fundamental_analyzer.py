@@ -284,12 +284,23 @@ def build_hard_warnings(metrics: dict) -> list[str]:
         warnings.append(
             f"最近一季本業虧損（營益率 {op_margin:.2f}%）且合約負債 {cl_text} < {HARD_MIN_CONTRACT_LIAB_YI:g} 億，無訂單保護"
         )
-    # v5.5.0 籌碼與融資斷頭風控硬傷
+    # v5.5.0 籌碼與融資斷頭風控硬傷（v6.0：若投信 5D 買超 >= 500 張且低融資使用率或千張大戶 >= 70%，屬土洋對作護盤，豁免）
     inst_5d = metrics.get("three_inst_net_5d_lots")
     m_chg_5d = metrics.get("margin_chg_5d_lots")
     m_util = metrics.get("margin_utilization_pct")
+    trust_5d = metrics.get("trust_net_buy_5d_lots")
+    tdcc_1000 = metrics.get("tdcc_1000_lots_pct")
+    is_trust_lock_exempt = (
+        trust_5d is not None
+        and trust_5d >= 500
+        and (
+            (m_util is not None and m_util < 6.0)
+            or (tdcc_1000 is not None and tdcc_1000 >= 70.0)
+        )
+    )
     if (
-        inst_5d is not None
+        not is_trust_lock_exempt
+        and inst_5d is not None
         and inst_5d < -500
         and m_chg_5d is not None
         and m_chg_5d > 500
@@ -439,6 +450,46 @@ def sanitize_stage1_json(summary_json: dict, latest_close: float | None = None) 
                 plan[key] = f"⚠️目標價未高於最新收盤 {latest_close:,.2f}，視為無效｜{text}"
     summary_json["trade_plan"] = plan
     return summary_json
+
+
+def _parse_pct_float(value: object) -> float | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.endswith("%"):
+            stripped = stripped[:-1].strip().replace(",", "")
+            return _to_float(stripped)
+    return _to_float(value)
+
+
+def _normalize_monthly_revenue_pcts(df_rev: pd.DataFrame) -> pd.DataFrame:
+    """修復 01_Monthly_Revenue 的 mom_pct / yoy_pct 格式失真（例如 Google Sheets 百分比格式導致 100 倍放大）。"""
+    if df_rev is None or df_rev.empty:
+        return df_rev
+    out = df_rev.copy()
+    sort_col = "rev_ym" if "rev_ym" in out.columns else ("raw_date" if "raw_date" in out.columns else None)
+    if sort_col:
+        out = out.sort_values(sort_col).reset_index(drop=True)
+
+    for col in ("mom_pct", "yoy_pct"):
+        if col in out.columns:
+            out[col] = out[col].map(_parse_pct_float)
+
+    if "revenue" in out.columns:
+        revs = pd.to_numeric(out["revenue"], errors="coerce")
+        if "mom_pct" not in out.columns:
+            out["mom_pct"] = float("nan")
+        for idx in range(1, len(out)):
+            cur_rev = revs.iloc[idx]
+            prev_rev = revs.iloc[idx - 1]
+            if pd.isna(cur_rev) or pd.isna(prev_rev) or float(prev_rev) <= 0:
+                continue
+            expected_mom = round(((float(cur_rev) - float(prev_rev)) / float(prev_rev)) * 100.0, 2)
+            stored_mom = _to_float(out.at[idx, "mom_pct"])
+            if stored_mom is None:
+                out.at[idx, "mom_pct"] = expected_mom
+            elif abs(stored_mom - expected_mom) > 1.0 and abs((stored_mom / 100.0) - expected_mom) <= 0.5:
+                out.at[idx, "mom_pct"] = round(stored_mom / 100.0, 2)
+    return out
 
 
 def _to_float(value: object) -> float | None:
@@ -1188,6 +1239,80 @@ def _evaluate_margin_trends(
     )
 
 
+def _evaluate_fcf_capex_semantics(
+    statements: list[dict[str, Any]],
+    revenue_yoy_pct: float | None = None,
+) -> _AutoDictResult:
+    """評估自由現金流品質與戰略性資本支出豁免 (SASD v6.0 Bug B 修復)。"""
+    if not statements:
+        return _AutoDictResult(
+            tag="FCF_UNAVAILABLE",
+            status="FCF_UNAVAILABLE",
+            fcf_yi=None,
+            ocf_yi=None,
+            capex_yi=None,
+            ocf_to_ni_pct=None,
+            is_strategic_capex=False,
+            summary_line="無季度現金流資料",
+        )
+    latest = statements[0]
+    fcf = _to_float(latest.get("fcf_亿元", latest.get("free_cf")))
+    ocf = _to_float(latest.get("ocf_亿元", latest.get("operating_cf")))
+    capex = _to_float(latest.get("capex_亿元", latest.get("capex")))
+    ocf_to_ni = _to_float(latest.get("ocf_to_ni_pct"))
+    qtr_rev_yoy = _to_float(latest.get("qtr_rev_yoy_pct"))
+    effective_yoy = revenue_yoy_pct if revenue_yoy_pct is not None else qtr_rev_yoy
+
+    if fcf is None:
+        return _AutoDictResult(
+            tag="FCF_UNAVAILABLE",
+            status="FCF_UNAVAILABLE",
+            fcf_yi=None,
+            ocf_yi=ocf,
+            capex_yi=capex,
+            ocf_to_ni_pct=ocf_to_ni,
+            is_strategic_capex=False,
+            summary_line="無單季 FCF 資料",
+        )
+
+    is_strategic = (
+        fcf < 0
+        and ocf is not None
+        and ocf > 0
+        and ocf_to_ni is not None
+        and ocf_to_ni >= 90.0
+        and capex is not None
+        and abs(capex) >= 0.8 * ocf
+        and effective_yoy is not None
+        and effective_yoy >= 15.0
+    )
+    if is_strategic:
+        tag = "STRATEGIC_CAPEX_EXPANSION"
+        summary_line = (
+            f"[{tag}] 【🔥 戰略性資本支出擴產：本業現金流極強 (OCF/NI {ocf_to_ni:.1f}%、"
+            f"OCF {ocf:.2f}億、CapEx {abs(capex):.2f}億)，負 FCF ({fcf:.2f}億) 係因應訂單爆發擴廠所致，視為長線利多】"
+        )
+    elif fcf >= 0:
+        tag = "POSITIVE_FCF"
+        ocf_str = f"{ocf_to_ni:.1f}%" if ocf_to_ni is not None else "N/A"
+        summary_line = f"[{tag}] 單季 FCF +{fcf:.2f} 億（OCF/NI {ocf_str}），現金流健康"
+    else:
+        tag = "NEGATIVE_FCF_WATCH"
+        ocf_str = f"{ocf_to_ni:.1f}%" if ocf_to_ni is not None else "N/A"
+        summary_line = f"[{tag}] 單季 FCF {fcf:.2f} 億（OCF/NI {ocf_str}），需檢視資本支出或營運資金佔用"
+
+    return _AutoDictResult(
+        tag=tag,
+        status=tag,
+        fcf_yi=fcf,
+        ocf_yi=ocf,
+        capex_yi=capex,
+        ocf_to_ni_pct=ocf_to_ni,
+        is_strategic_capex=is_strategic,
+        summary_line=summary_line,
+    )
+
+
 @dataclass
 class FundamentalFeatureSummary:
     stock_id: str
@@ -1200,6 +1325,7 @@ class FundamentalFeatureSummary:
     forward_valuation: _AutoDictResult
     prompt_block: str
     paid_in_capital_twd: float = 0.0
+    fcf_semantics: _AutoDictResult | None = None
 
     def to_prompt_block(self) -> str:
         return self.prompt_block
@@ -1270,8 +1396,13 @@ def compute_fundamental_features(
         else _infer_last_q4_yoy_from_statements(statements)
     )
 
+    rev_input = (
+        _normalize_monthly_revenue_pcts(monthly_revenues)
+        if isinstance(monthly_revenues, pd.DataFrame)
+        else (monthly_revenues or [])
+    )
     rev_res = _analyze_revenue_momentum(
-        monthly_revenues or [],
+        rev_input,
         last_q4_yoy_pct=resolved_q4_yoy,
         prev_quarter_revenue=prev_quarter_revenue,
         config=config,
@@ -1285,6 +1416,10 @@ def compute_fundamental_features(
         statements,
         revenue_yoy_pct=rev_yoy_for_margin,
         config=config,
+    )
+    fcf_res = _evaluate_fcf_capex_semantics(
+        statements,
+        revenue_yoy_pct=rev_yoy_for_margin,
     )
 
     if trailing_pe is None and latest_close_price and latest_close_price > 0 and statements:
@@ -1312,6 +1447,7 @@ def compute_fundamental_features(
         f"- 營收動能診斷：{rev_res['summary_line']}",
         f"- 本季達成進度：{rev_res['qtd_line']}",
         f"- 三率獲利品質：{margin_res['summary_line']}",
+        f"- 現金流與擴產定性：{fcf_res['summary_line']}",
         f"- 前瞻估值對齊：{val_res['summary_line']}",
     ]
     prompt_block = "\n".join(lines)
@@ -1326,6 +1462,7 @@ def compute_fundamental_features(
         forward_valuation=val_res,
         prompt_block=prompt_block,
         paid_in_capital_twd=float(paid_in_capital_twd or 0.0),
+        fcf_semantics=fcf_res,
     )
 
 
@@ -1819,8 +1956,9 @@ class FundamentalAnalyzer:
             if not show.empty:
                 parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
-        # Table 5: monthly revenue momentum (統一將原始元轉為億元 + Stale Data Guard 資料新鮮度檢查)
+        # Table 5: monthly revenue momentum (統一將原始元轉為億元 + Stale Data Guard + Bug A 100x 修正)
         if not df_rev.empty:
+            df_rev = _normalize_monthly_revenue_pcts(df_rev)
             cols = ["rev_ym", "revenue", "mom_pct", "yoy_pct", "raw_date"]
             show = df_rev[[c for c in cols if c in df_rev.columns]].copy()
             show = self._scale_cols_to_yi(show, ("revenue",))
@@ -2061,9 +2199,11 @@ class FundamentalAnalyzer:
             "op_margin_pct": None,
             "contract_liab": None,
             "three_inst_net_5d_lots": None,
+            "trust_net_buy_5d_lots": None,
             "margin_chg_5d_lots": None,
             "margin_utilization_pct": None,
             "est_margin_maint_pct": None,
+            "tdcc_1000_lots_pct": None,
         }
         try:
             prices = self._find_latest_prices_csv_for_stock(stock_id)
@@ -2099,9 +2239,11 @@ class FundamentalAnalyzer:
                     chip_df = chip_df.sort_values("raw_date")
                 latest_chip = chip_df.iloc[-1].to_dict()
                 metrics["three_inst_net_5d_lots"] = _to_float(latest_chip.get("three_inst_net_5d_lots"))
+                metrics["trust_net_buy_5d_lots"] = _to_float(latest_chip.get("trust_net_buy_5d_lots"))
                 metrics["margin_chg_5d_lots"] = _to_float(latest_chip.get("margin_chg_5d_lots"))
                 metrics["margin_utilization_pct"] = _to_float(latest_chip.get("margin_utilization_pct"))
                 metrics["est_margin_maint_pct"] = _to_float(latest_chip.get("est_margin_maint_pct"))
+                metrics["tdcc_1000_lots_pct"] = _to_float(latest_chip.get("tdcc_1000_lots_pct"))
         except Exception:  # noqa: BLE001
             logger.debug("hard-screen chip metrics unavailable for %s", stock_id, exc_info=True)
         return metrics
@@ -2875,7 +3017,7 @@ class FundamentalAnalyzer:
             return f"{number:,.{dec}f}{suf}"
 
         wide_df = _history("05_AI_Metrics_Wide")
-        rev_df = _history("01_Monthly_Revenue")
+        rev_df = _normalize_monthly_revenue_pcts(_history("01_Monthly_Revenue"))
         wide = wide_df.iloc[-1].to_dict() if not wide_df.empty else {}
         revenue = rev_df.iloc[-1].to_dict() if not rev_df.empty else {}
         chip = _latest("07_Chip_Summary")

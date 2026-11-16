@@ -304,6 +304,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "high_60d",
         "drop_amount",
         "drop_pct",
+        "rebound_subtype",
         "support_ma",
         "support_price",
         "target_ma17",
@@ -313,6 +314,15 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
         "ai_summary_json",
         "ai_model_version",
         "war_room_url",
+        "Audit_Grade",
+        "Execution_Tactic",
+        "Ideal_Buy_Or_Ref",
+        "Chase_Limit_Price",
+        "Hard_Stop_Loss",
+        "TP1_Target_Or_POC",
+        "Deterministic_RR",
+        "Bear_Case_Warning",
+        "Invalidation_Triggers",
     ],
 }
 

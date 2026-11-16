@@ -1374,12 +1374,20 @@ def build_fresh_top_picks_block(picks_bundle: Mapping[str, Any] | None, max_pick
                     sid = clean_leading_zero_code(row.get("stock_id") or "")
                     sname = str(row.get("stock_name") or "").strip()
                     close_p = row.get("close_price", "")
-                    sup_ma = row.get("support_ma", "45/117MA")
+                    sup_ma = row.get("support_ma", "45/117/189MA")
                     sup_p = row.get("support_price", "")
-                    t_ma17 = row.get("target_ma17", "")
+                    t_ma17 = row.get("TP1_Target_Or_POC") or row.get("target_ma17", "")
                     pot_ret = row.get("potential_return_pct", "")
+                    ideal_buy = str(row.get("Ideal_Buy_Or_Ref") or "").strip()
+                    hard_sl = row.get("Hard_Stop_Loss", "")
+                    extra_setup = (
+                        f"｜🎯 預掛 `{ideal_buy}` / 🛡️ 硬停損 `{hard_sl}`"
+                        if ideal_buy or hard_sl not in ("", None)
+                        else ""
+                    )
                     lines.append(
-                        f"  {idx}. **`{sid} {sname}`**（收盤 `{close_p}` 回踩 `{sup_ma}` 支撐 `{sup_p}`｜反彈目標 17MA `{t_ma17}` 空間 `+{pot_ret}%`）"
+                        f"  {idx}. **`{sid} {sname}`**（收盤 `{close_p}` 回踩 `{sup_ma}` 支撐 `{sup_p}`"
+                        f"｜反彈目標 `{t_ma17}` 空間 `+{pot_ret}%`{extra_setup}）"
                     )
 
     return "\n".join(lines) if lines else "- 暫無昨晚最新 AI 嚴選或型態 A 反彈紀錄。"
@@ -2815,7 +2823,10 @@ def match_entry_to_picks(
         support_px = _to_float(reb.get("support_price"), 0.0)
         support_ma = str(reb.get("support_ma") or "45MA/117MA").strip()
 
-        tp1 = target_ma17 if target_ma17 > base_px else extract_first_price(reb_plan.get("target_price_1"))
+        tp1 = (
+            _to_float(reb.get("TP1_Target_Or_POC"), 0.0)
+            or (target_ma17 if target_ma17 > base_px else extract_first_price(reb_plan.get("target_price_1")))
+        )
         if tp1 <= 0 and base_px > 0:
             tp1 = round(base_px * 1.07, 2)
 
@@ -2826,7 +2837,7 @@ def match_entry_to_picks(
             else:
                 tp2 = round(tp1 * 1.08, 2)
 
-        sl = extract_first_price(reb_plan.get("stop_loss_price"))
+        sl = _to_float(reb.get("Hard_Stop_Loss"), 0.0) or extract_first_price(reb_plan.get("stop_loss_price"))
         if sl <= 0:
             sl = round(support_px * 0.97, 2) if support_px > 0 else round(base_px * 0.95, 2)
 
@@ -2835,9 +2846,15 @@ def match_entry_to_picks(
             + (f"｜{reb_verdict}" if reb_verdict else "")
         )
         invalidation = str(
-            reb_plan.get("invalidation") or f"帶量實質跌破 {support_ma} 支撐 ({sl} 元) 反彈失敗無條件停損"
+            reb.get("Invalidation_Triggers")
+            or reb_plan.get("invalidation")
+            or f"帶量實質跌破 {support_ma} 支撐 ({sl} 元) 反彈失敗無條件停損"
         ).strip()
         war_url = str(reb.get("war_room_url") or pub_war_room).strip()
+        det_sl = _to_float(reb.get("Hard_Stop_Loss"), 0.0)
+        det_tp1 = _to_float(reb.get("TP1_Target_Or_POC"), 0.0)
+        chase_lim = _to_float(reb.get("Chase_Limit_Price"), 0.0)
+        det_rr = _to_float(reb.get("Deterministic_RR"), 0.0)
 
         return {
             "entry_source": "REBOUND_WATCHLIST",
@@ -2851,6 +2868,15 @@ def match_entry_to_picks(
             "entry_thesis": thesis[:220],
             "invalidation_rule": invalidation[:220],
             "war_room_url": war_url,
+            "Audit_Grade": str(reb.get("Audit_Grade") or "").strip(),
+            "Execution_Tactic": str(reb.get("Execution_Tactic") or "STYLE_B_PULLBACK_LIMIT").strip(),
+            "Ideal_Buy_Or_Ref": str(reb.get("Ideal_Buy_Or_Ref") or "").strip(),
+            "Chase_Limit_Price": round(chase_lim, 2) if chase_lim > 0 else "",
+            "Hard_Stop_Loss": round(det_sl, 2) if det_sl > 0 else round(sl, 2),
+            "TP1_Target_Or_POC": round(det_tp1, 2) if det_tp1 > 0 else round(tp1, 2),
+            "Deterministic_RR": round(det_rr, 2) if det_rr > 0 else "",
+            "Bear_Case_Warning": str(reb.get("Bear_Case_Warning") or "").strip(),
+            "Invalidation_Triggers": str(reb.get("Invalidation_Triggers") or "").strip(),
         }
 
     return None

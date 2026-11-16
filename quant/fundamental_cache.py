@@ -1235,18 +1235,7 @@ class FundamentalCacheManager:
             except Exception as e:
                 logger.debug("est_margin_maint_pct calculation skipped for %s: %s", stock_id, e)
 
-        # 4) 資法人對作四象限標籤 (chip_quadrant_tag)
-        three_inst_5 = round(foreign_5 + trust_5 + dealer_5, 1)
-        if three_inst_5 > 0 and margin_chg_5d_lots <= 0:
-            chip_quadrant_tag = "🟢法人鎖碼(法人買+融資減)"
-        elif three_inst_5 > 0 and margin_chg_5d_lots > 0:
-            chip_quadrant_tag = "🟡人氣齊聚(資法人同買)"
-        elif three_inst_5 < 0 and margin_chg_5d_lots > 0:
-            chip_quadrant_tag = "🔴散戶接刀/主力出貨(法人賣+融資增)"
-        else:
-            chip_quadrant_tag = "⚡籌碼雙退/清洗浮額(法人賣+融資減)"
-
-        # 5) TDCC 集保大戶股權分散表 (官方免費 Open Data)
+        # 4) TDCC 集保大戶股權分散表 (官方免費 Open Data，提前計算以供四象限標籤判定土洋對作)
         tdcc_date = ""
         tdcc_400_lots_pct = float("nan")
         tdcc_1000_lots_pct = float("nan")
@@ -1274,6 +1263,22 @@ class FundamentalCacheManager:
                         tdcc_1000_lots_diff_pct = round(tdcc_1000_lots_pct - float(prev_vals.iloc[-1]), 2)
         except Exception as exc:  # noqa: BLE001
             logger.warning("TDCC opendata enrichment skipped for %s: %s", stock_id, exc)
+
+        # 5) 資法人對作四象限標籤 (chip_quadrant_tag)
+        three_inst_5 = round(foreign_5 + trust_5 + dealer_5, 1)
+        low_margin_util = pd.notna(margin_utilization_pct) and float(margin_utilization_pct) < 6.0
+        high_tdcc_lock = pd.notna(tdcc_1000_lots_pct) and float(tdcc_1000_lots_pct) >= 70.0
+        if three_inst_5 > 0 and margin_chg_5d_lots <= 0:
+            chip_quadrant_tag = "🟢法人鎖碼(法人買+融資減)"
+        elif three_inst_5 > 0 and margin_chg_5d_lots > 0:
+            chip_quadrant_tag = "🟡人氣齊聚(資法人同買)"
+        elif three_inst_5 < 0 and margin_chg_5d_lots > 0:
+            if trust_5 >= 500 and (low_margin_util or high_tdcc_lock):
+                chip_quadrant_tag = "🛡️土洋對作/投信鎖碼護盤(投信買+大戶穩)"
+            else:
+                chip_quadrant_tag = "🔴散戶接刀/主力出貨(法人賣+融資增)"
+        else:
+            chip_quadrant_tag = "⚡籌碼雙退/清洗浮額(法人賣+融資減)"
 
         row = {
             "pk_key": f"{stock_id}_{trade_week}",
