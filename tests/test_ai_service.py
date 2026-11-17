@@ -2,60 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from datetime import datetime, timezone
 from unittest.mock import Mock, patch
 
 import tests  # noqa: F401
 import ai_service
-import weather_service
-
-
-class WeatherReportTests(unittest.TestCase):
-    def test_formats_today_weather_in_traditional_chinese(self) -> None:
-        weather_data = {
-            "current": {
-                "weather_code": 2,
-                "temperature_2m": 27.4,
-                "apparent_temperature": 31.1,
-                "relative_humidity_2m": 78,
-                "wind_speed_10m": 12.3,
-                "precipitation": 0.2,
-            },
-            "daily": {
-                "time": ["2026-10-11"],
-                "weather_code": [61],
-                "temperature_2m_max": [30.0],
-                "temperature_2m_min": [24.5],
-                "precipitation_probability_max": [60],
-                "sunrise": ["2026-10-11T05:48"],
-                "sunset": ["2026-10-11T17:34"],
-            },
-        }
-        taipei_now = datetime(2026, 10, 11, 0, 0, tzinfo=timezone.utc)
-
-        report = weather_service.format_weather_report(weather_data, now=taipei_now)
-
-        self.assertIn("台北今日天氣", report)
-        self.assertIn("（2026-10-11）", report)
-        self.assertIn("多雲時晴", report)
-        self.assertIn("最高 30.0°C／最低 24.5°C", report)
-        self.assertIn("降雨機率：60%", report)
-        self.assertIn("日出 05:48｜日落 17:34", report)
-
-    def test_weather_fetch_uses_taipei_and_raises_for_http_errors(self) -> None:
-        response = Mock()
-        response.json.return_value = {"current": {}, "daily": {}}
-        with patch("weather_service.requests.get", return_value=response) as get_request:
-            result = weather_service._fetch_weather_data()
-
-        self.assertEqual(result, {"current": {}, "daily": {}})
-        self.assertEqual(get_request.call_args.kwargs["params"]["timezone"], "Asia/Taipei")
-        self.assertEqual(get_request.call_args.kwargs["params"]["latitude"], 25.033)
-        response.raise_for_status.assert_called_once()
-
-    def test_invalid_weather_data_fails_explicitly(self) -> None:
-        with self.assertRaisesRegex(ValueError, "incomplete or invalid"):
-            weather_service.format_weather_report({"current": {}, "daily": {}})
 
 
 class GoogleAiStudioTests(unittest.TestCase):

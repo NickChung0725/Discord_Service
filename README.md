@@ -1,6 +1,6 @@
 # Discord_Service — 個人智慧生活與台股量化分析助理
 
-這是一個部署於 **Google Cloud Platform (GCP) Compute Engine** 的全方位 Discord 機器人與台股自動化量化分析服務。系統整合了 **FinMind 台股技術面與基本面數據**、**Google Sheets 12 分頁智慧快取資料庫**、**台新證券 Nova API 個人帳務、AI 建倉記憶與開盤作戰中心 (獨立 Google Sheet 5 分頁)**、**隔夜美股與國際情勢自動觀測**、**Plotly 互動式看盤與財報戰情室自動發布 (GitHub Pages)**、**Google Gemini AI 雙層模型智慧診斷** 以及 **Open-Meteo 每日氣象推播**，透過 `systemd` 實現 24 小時常駐與每日自動化選股及帳務排程。
+這是一個部署於 **Google Cloud Platform (GCP) Compute Engine** 的全方位 Discord 機器人與台股自動化量化分析服務。系統整合了 **FinMind 台股技術面與基本面數據**、**Google Sheets 12 分頁智慧快取資料庫**、**台新證券 Nova API 個人帳務、AI 建倉記憶與開盤作戰中心 (獨立 Google Sheet 5 分頁)**、**隔夜美股與國際情勢自動觀測**、**Plotly 互動式看盤與財報戰情室自動發布 (GitHub Pages)** 以及 **Google Gemini AI 雙層模型智慧診斷**，透過 `systemd` 實現 24 小時常駐與每日自動化選股及帳務排程。
 
 ---
 
@@ -8,8 +8,6 @@
 
 | 時間 / 頻率 | 任務名稱 | 觸發機制 | 執行內容與產出 |
 | :--- | :--- | :--- | :--- |
-| **每 6 小時** | **伺服器存活心跳** | `bot_server.py` (`scheduled_task`) | 向 `GCP_VM_SERVER_CHANNEL_ID` 發送系統時間心跳通知，確認 GCP VM 與 Bot 正常運作。 |
-| **每日 08:00** | **台北早安氣象報** | `bot_server.py` (`daily_weather_task`) | 串接 Open-Meteo API，自動推播當日台北即時溫度、體感、高低溫、降雨機率與紫外線指數至 `ANNOUNCE_CHANNEL_ID`。 |
 | **週一至週五 08:15** | **台新盤前隔夜美股與嚴選持股開盤作戰晨報** | `systemd` (`taishin-morning-brief.timer`) | **SASD v5.2.0 法人級開盤作戰中心 (`morning-brief`)**：<br>1. **隔夜美股與國際總經環境 (`taishin/macro_context.py`)**：抓取費半 (`^SOX`)、那指 (`^IXIC`)、標普 (`^GSPC`)、台積電 ADR (`TSM`)、輝達 (`NVDA`)、`^VIX` 恐慌指數與美元台幣 (`TWD=X`) 漲跌，搭配近 48h 國際財經要聞判定 `RISK_ON` / `NEUTRAL` / `RISK_OFF`<br>2. **鎖定初始目標價 ＋ 風格 B 分批移動停利**：讀取 `05_Position_Thesis_Memory` 鎖定之買進當時 `initial_tp1` / `initial_tp2` / `initial_sl`（杜絕目標價每日漂移），計算「觸及 TP1 先出 50%（單張自動建議盤中零股賣 500 股）＋ 單向棘輪移動停利 (`trailing_stop`)」，呼叫付費版 `VERTEX_STAGE2_MODEL` 產出開盤掛單作戰指令並更新 `02_Portfolio_Holdings`（若無嚴選記憶持股則自動切換 **0-Token 純 Python 省流快報**；非嚴選股如 `0050` 僅列出 `📦 帳面損益觀察`）。 |
 | **週一至週五 13:15** | **0050 每週不定期定額智慧尋底評估** | `systemd` (`taishin-dca-0050.timer`) | **SASD v5.1.0 0050 智慧尋底引擎**：<br>1. 檢查本週 (`YYYY-Www`) 是否已買入 `0050`<br>2. **週一至週四**：若出現「跌破 17MA 負乖離 <= -1.5%」、「回踩 45MA 季線」、「RSI(14) <= 40 或 KD_K <= 30」、「近 10 日高點回落 >= 2.5%」任一低點訊號，立即觸發買進訊號<br>3. **週五 13:15**：若週一至週四皆未觸發，強制執行本週保底定投（依 `dip_score` 0~100 動態調整 `0.6x ~ 1.5x` 股數）<br>4. 預設 `TAISHIN_ENABLE_TRADING=false` 僅寫入 `04_DCA_0050_Tracker` 並推播 Discord 買入建議；開啟 `TAISHIN_ENABLE_TRADING=true` 且帶入 `--confirm-live-order` 時才呼叫 `sdk.stock.place_order` 下盤中零股 (`MarketType.IntradayOdd`)。 |
 | **週一至週五 19:00** | **第一階段：台股五線均線＋微結構流動性護欄＋雙核心大盤路由＋盤後審計回填** | `systemd` (`finmind-scan.timer`) | **全市場動態掃描與微結構審計回填（SASD v5.7.0）**：`industries=["ALL"]`，先以 TWSE/TPEx 盤後快照做 Stage 1「雙軌量能守門員」，對通過者呼叫 FinMind 日線並強制通過 **20 日成交金額中位數 ≥ 5,000 萬護欄**（`passes_liquidity_median_guard`，防單日爆量殭屍股）與**除權息跳空前複權回溯補償**（`compensate_ex_dividend_gaps`，消除假死叉與假套牢區）。篩選符合 `MA3 >= 各線`、`MA45 > MA117 > MA189` 且處於 `17/45MA 即將金叉 (-1.5%~0%)` 或 `剛金叉起漲 (0%~+2.5%)` 之強勢股，並同步啟動**加權（TAIEX）＋櫃買（OTC）＋外資台指期雙核心紅綠燈路由器（`RegimeRouter`）**：<br>1. 產出本地 CSV：`daily/{date}_prices.csv`、`daily/{date}_alignment_signals.csv`、`daily/{date}_failures.csv` 與含 `regime_quota` 之 `daily/{date}_market_regime.json`<br>2. 同步至 Google Sheets `MA_Signal_Tracker`（設定鍵：`sync_alignment_to_gsheet`）<br>3. **無未來函數事後審計回填（`run_signal_audit_backfill`）**：自動以最新日線回填 `data/signal_audit.db`（`Open_{T+1} + 0.5%` 摩擦成本、停損優先悲觀認定、`REJECT_TRAP` 錯殺率）並同步至 Google Sheets 輔助表 `Signal_Audit_Log`<br>4. 推播手機/LINE 雙行卡片版均線快報至 `ALIGNMENT_SIGNALS_CHANNEL_ID`。 |
@@ -25,7 +23,6 @@
 | :--- | :--- | :--- |
 | **`/stock_ai`** | `symbol` (單股如 `2357` 或多股如 `2357,2330`，最多 4 檔)<br>`prompt` (選填，特定問題)<br>`force_refresh` (選填，預設 `False`)<br>`tier` (選填：`標準 (3.8 Flash)`〔預設〕或 `大師 (ARGON)`〔強制走 Vertex AI Stage1：`VERTEX_STAGE1_MODEL`〕) | **【📊 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）】**<br>• **手機好讀一鍵複製**：以純文字 Markdown 發送（長按 1 秒即可複製轉傳他人）。<br>• **單股體質診斷（SASD v4.0 Step 1~7，先審計後評分）**：包含 0~100 體質評分、1~4 點動態亮點與風險、趨勢標籤，並附 **交易計畫 Embed**（戰術定位、進場觸發條件、第一/二目標價、嚴格停損價、紅軍失效退場條件）；日量 < 300 張或本業虧損無合約負債者以「🚨 系統硬傷警示」注入診斷（軟性警示，不擋股票）、三率/CCC/FCF 拆解、股利與法人籌碼、表 7 均線與量能結構、法說展望真實性佐證；並在首行顯示 **分析模型：{response.model_version}**。<br>• **二合一戰情室網頁**：發布全新戰情室 (`charts/{stock_id}_fund.html`)，內嵌**近半年技術面 K 線與均線 (17/45/117/189MA) + 成交量 + KD + MACD**，以及**基本面六大財務趨勢圖（每張圖正上方皆有獨立圖例與白話名詞小抄）**；戰情室頁面亦顯示「分析模型」。<br>• **多股橫向比較 (`2357,2330`)**：改走付費 Vertex AI（Stage1：`VERTEX_STAGE1_MODEL`）進行橫向比較與結論輸出（同樣顯示「分析模型」）。<br>• **專題追問 (`prompt`)**：改走付費 Vertex AI（Stage1：`VERTEX_STAGE1_MODEL`）針對使用者問題引用財報數字精準解答（同樣顯示「分析模型」）。 |
 | **`/ai`** | `prompt` (問題內容) | **【Gemini AI 萬用問答】**<br>呼叫 Google Gemini 模型回答各式投資、程式或日常問題（超過 2,000 字自動分段回覆）。 |
-| **`/weather`** | 無 | **【台北即時天氣查詢】**<br>即時查詢 Open-Meteo 台北地區氣溫、體感、天氣狀況、風速、降雨機率與今日紫外線。 |
 | **`/card`** | 無 | **【系統狀態卡片】** 顯示機器人名稱、API 延遲 (ms) 與伺服器成員數。 |
 | **`/ping`** | 無 | **【連線延遲測試】** 回應 `Pong! 🏓` 與毫秒延遲（或在頻道直接輸入文字 `ping`）。 |
 | **`/say`** | `message` | **【文字複誦】** 讓機器人代為發送指定訊息。 |
@@ -76,7 +73,7 @@
 
 ```text
 Discord_Service/
-├── bot_server.py                # [常駐主入口] 綁定伺服器 (Guild) 之 Discord 機器人入口（含 Slash 指令、08:00 天氣與 6h 心跳排程）
+├── bot_server.py                # [常駐主入口] 綁定伺服器 (Guild) 之 Discord 機器人入口（含 Slash 指令）
 ├── finmind_stock_scanner.py     # [量化主入口] 19:00 五線順勢掃描、21:30 AI 選股、22:00 型態A反彈掃描、大盤紅綠燈與 CLI 入口
 ├── taishin_portfolio_service.py # [帳務主入口] 08:15 開盤作戰晨報、13:15 0050 定投、22:45 建倉記憶歸因同步、歷史回補與 CLI 入口
 ├── .agent/skills/               # [Antigravity 本地專屬技能]
@@ -84,7 +81,6 @@ Discord_Service/
 ├── services/                    # [Discord 指令與共用外部服務層]
 │   ├── __init__.py
 │   ├── ai_service.py            # 雙軌 AI 服務：免費版 Google AI Studio 與付費版 Vertex AI 呼叫封裝與 /ai 指令
-│   ├── weather_service.py       # Open-Meteo 台北即時與預報天氣抓取、格式化與 /weather 指令
 │   ├── github_uploader.py       # 透過 GitHub Contents API 將 HTML 圖表與戰情室上傳至 GitHub Pages
 │   ├── stock_ai_command.py      # /stock_ai 指令註冊（單股診斷、專題問答、多股比較與戰情室互動按鈕）
 │   └── bot.py                   # /stock 技術面 K 線指令註冊與獨立啟動入口
@@ -121,7 +117,7 @@ Discord_Service/
 │   ├── finmind-rebound-ai.timer      # 週一至週五 22:00 定時器
 │   ├── taishin-memory-sync.service   # 22:45 台新盤後對帳單同步與嚴選建倉記憶自動歸因服務
 │   └── taishin-memory-sync.timer     # 週一至週五 22:45 定時器
-├── tests/                       # [單元測試] 涵蓋氣象/AI、均線與反彈掃描、大盤紅綠燈、財報快取、AI 選股與台新模組之自動化測試
+├── tests/                       # [單元測試] 涵蓋 AI、均線與反彈掃描、大盤紅綠燈、財報快取、AI 選股與台新模組之自動化測試
 ├── pyproject.toml               # [套件定義] uv 專案依賴設定檔
 ├── uv.lock                      # [套件鎖定] uv 環境版本鎖定檔
 ├── CHANGELOG.md                 # [變更日誌] 記錄每次功能迭代與架構演進歷史
@@ -137,10 +133,8 @@ Discord_Service/
 BOT_TOKEN=你的_Discord_Bot_Token
 DISCORD_TOKEN=你的_Discord_Bot_Token
 GUILD_ID=你的_Discord_伺服器_ID
-ANNOUNCE_CHANNEL_ID=每日08:00天氣推播頻道ID
 STOCK_CHANNEL_ID=每日21:30_AI嚴選股票推播頻道ID
 ALIGNMENT_SIGNALS_CHANNEL_ID=每日19:00均線訊號與22:00反彈清單推播頻道ID
-GCP_VM_SERVER_CHANNEL_ID=每6小時心跳通知頻道ID
 
 # 2. 雙軌 AI 設定（Google AI Studio 免費版 ＋ GCP Vertex AI 付費版）
 # 2-1. Google AI Studio（免費版：用於 /ai、/stock_ai 與單股基本面財報診斷）

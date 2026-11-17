@@ -1,4 +1,4 @@
-"""Discord Bot slash commands and shared external service integrations (AI, Weather, GitHub Pages)."""
+"""Discord Bot slash commands and shared external service integrations (AI, GitHub Pages)."""
 
 from __future__ import annotations
 

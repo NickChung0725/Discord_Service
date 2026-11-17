@@ -188,7 +188,6 @@ graph TB
 
 | 排程時間 (CST) | Systemd Timer / Service | 執行入口與核心職責 | 標準化 Discord 報表標題（無時間前綴） |
 | :--- | :--- | :--- | :--- |
-| **08:00** | `discordbot.service` | 台北早安氣象推播 (`weather_service.py`) | `🌤️ **台北今日天氣**` |
 | **08:15** | `taishin-morning-brief.timer` | 盤前隔夜美股與波段持股開盤作戰指令 (`taishin_portfolio_service.py morning-brief`) | `☀️ 【台新證券 盤前開盤作戰晨報】` |
 | **13:15** | `taishin-dca-0050.timer` | 0050 每週智慧尋底定投評估 (`taishin_portfolio_service.py eval-dca-0050`) | `📈 【0050 每週智慧尋底定投評估】` |
 | **19:00** | `finmind-scan.timer` | 全市場日K、均線、大盤紅綠燈與融資水位掃描 (`finmind_stock_scanner.py`) | `📊 【台股盤後量化掃描快報】` |
@@ -206,9 +205,7 @@ sequenceDiagram
     participant AI as Gemini / Vertex AI Batch
     participant DC as Discord 戰情室頻道
 
-    Note over Timer,DC: 【盤前階段】08:00 - 08:15
-    Timer->>Core: 08:00 觸發早安氣象排程
-    Core->>DC: 推播台北今日天氣、降雨機率與穿搭建議
+    Note over Timer,DC: 【盤前階段】08:15
     Timer->>Core: 08:15 觸發開盤作戰晨報 (taishin-morning-brief)
     Core->>Data: 抓取隔夜美股 (^SOX, TSM, NVDA, VIX) 與台新庫存/交割款
     Core->>Cache: 讀取 02_Holdings (含189MA) 與 05_Thesis_Memory
@@ -446,7 +443,7 @@ flowchart TD
 ### 5.3 投研時間與系統維運效益
 
 * **每日節省 2.5 小時人工研究時間**：原本需人工翻閱數十檔股票財報、計算三率與現金流、繪製均線圖與核對台新交割款的工作，全部壓縮為 Discord 頻道中可一鍵點開的 Plotly 互動圖表與精煉作戰摘要。
-* **全自動無狀態恢復**：透過 `systemd` Timer 與 `bot_server.py` 6 小時心跳監控，即使 GCP VM 重啟或網路瞬斷，排程與快取皆能自動銜接。
+* **全自動無狀態恢復**：透過 `systemd` Timer 排程機制，即使 GCP VM 重啟或網路瞬斷，排程與快取皆能自動銜接。
 
 ---
 

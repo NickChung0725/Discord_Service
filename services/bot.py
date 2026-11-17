@@ -20,7 +20,6 @@ for _sub in (_ROOT, _ROOT / "services", _ROOT / "quant", _ROOT / "taishin"):
         sys.path.insert(0, str(_sub))
 
 from ai_service import register_ai_command
-from weather_service import register_weather_command
 from chart_generator import (
     InvalidStockIDError,
     StockNotFoundError,
@@ -80,7 +79,6 @@ intents = discord.Intents.default()
 bot = StockBot(command_prefix="!", intents=intents)
 register_stock_command(bot.tree)
 register_ai_command(bot.tree)
-register_weather_command(bot.tree)
 
 
 if __name__ == "__main__":

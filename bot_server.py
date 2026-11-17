@@ -1,17 +1,13 @@
 import discord
 from discord import app_commands
-from discord.ext import tasks
 import random
 import os
-import logging
-from datetime import datetime, time as datetime_time, timedelta, timezone
+from datetime import datetime
 from dotenv import load_dotenv
 import services  # noqa: F401 - registers services/, quant/, taishin/ on sys.path
 from ai_service import register_ai_command
-from weather_service import get_weather_report, register_weather_command
 from stock_ai_command import register_stock_ai_command
 
-logger = logging.getLogger(__name__)
 load_dotenv()
 
 # ================= 參數設定區 =================
@@ -20,10 +16,7 @@ def get_env_int(key: str) -> int | None:
     return int(val.strip()) if val and val.strip().isdigit() else None
 
 GUILD_ID = get_env_int("GUILD_ID")       # 你的伺服器 ID
-ANNOUNCE_CHANNEL_ID = get_env_int("ANNOUNCE_CHANNEL_ID")  # 想定時推播的文字頻道 ID
 STOCK_CHANNEL_ID = get_env_int("STOCK_CHANNEL_ID")
-gcp_vm_server_CHANNEL_ID = get_env_int("GCP_VM_SERVER_CHANNEL_ID")  # gcp-vm-server 文字頻道 ID
-TAIPEI_TIMEZONE = timezone(timedelta(hours=8))
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
@@ -64,66 +57,13 @@ class MyClient(discord.Client):
 client = MyClient()
 register_stock_ai_command(client.tree)
 register_ai_command(client.tree)
-register_weather_command(client.tree)
 
-# 4. 背景定時排程任務（每 6 小時觸發一次）
-@tasks.loop(hours=6)
-async def scheduled_task():
-    channel = client.get_channel(gcp_vm_server_CHANNEL_ID)
-    if channel:
-        current_time = datetime.now().strftime("%H:%M:%S")
-        # 示範在終端機記錄排程狀態，若需在頻道推播可取消下方註解：
-        print(f"[排程記錄] 背景任務運作中，當前時間：{current_time}")
-        await channel.send(f"⏰ 定時心跳通知：當前系統時間為 {current_time}")
-
-
-@tasks.loop(time=datetime_time(hour=8, minute=0, tzinfo=TAIPEI_TIMEZONE))
-async def daily_weather_task():
-    try:
-        report = await get_weather_report()
-    except Exception:
-        logger.exception("Failed to fetch Taipei weather for the daily report.")
-        report = "⚠️ 今日台北天氣資料取得失敗，請稍後再試。"
-
-    channel = client.get_channel(ANNOUNCE_CHANNEL_ID)
-    if channel is None:
-        try:
-            channel = await client.fetch_channel(ANNOUNCE_CHANNEL_ID)
-        except discord.NotFound:
-            logger.exception("Configured weather announcement channel was not found.")
-            return
-        except discord.HTTPException:
-            logger.exception("Failed to fetch the configured weather announcement channel.")
-            return
-
-    try:
-        await channel.send(report)
-    except discord.HTTPException:
-        logger.exception("Failed to post the daily weather report.")
-
-
-@scheduled_task.before_loop
-async def before_scheduled_task():
-    # 等待機器人完全連線登入後再開始跑排程
-    await client.wait_until_ready()
-
-
-@daily_weather_task.before_loop
-async def before_daily_weather_task():
-    await client.wait_until_ready()
-
-
-# 5. 上線事件
+# 4. 上線事件
 @client.event
 async def on_ready():
     print(f"🚀 機器人已上線：{client.user}")
-    # 啟動背景排程
-    if not scheduled_task.is_running():
-        scheduled_task.start()
-    if not daily_weather_task.is_running():
-        daily_weather_task.start()
 
-# 6. 即時聊天訊息監聽事件
+# 5. 即時聊天訊息監聽事件
 @client.event
 async def on_message(message: discord.Message):
     # 忽略機器人自己的發言

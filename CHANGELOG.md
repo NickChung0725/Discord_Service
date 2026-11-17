@@ -4,6 +4,17 @@
 
 ---
 
+## [v6.0.2] - 2026-11-17
+### 🔧 優化與修正 — 移除早期測試用伺服器心跳與台北天氣功能
+* **移除伺服器 6 小時心跳與台北天氣排程／指令（[`bot_server.py`](/bot_server.py)、[`services/bot.py`](/services/bot.py)、[`services/__init__.py`](/services/__init__.py)、[`.env.example`](/.env.example)）**：
+  * 刪除 `services/weather_service.py`（Open-Meteo 氣象抓取與 `/weather` 指令）。
+  * 移除 `bot_server.py` 的 `scheduled_task`（每 6 小時心跳通知）、`daily_weather_task`（每日 08:00 天氣推播）及 `register_weather_command` 註冊與未使用之 `ANNOUNCE_CHANNEL_ID`、`GCP_VM_SERVER_CHANNEL_ID` 設定。
+  * 移除 `services/bot.py` 中的 `register_weather_command`。
+  * 將 `tests/test_ai_weather.py` 移除氣象測試並更名為 [`tests/test_ai_service.py`](/tests/test_ai_service.py)。
+  * 同步更新 [`README.md`](/README.md) 與 [`discord_service_sasd.md`](/discord_service_sasd.md)。
+
+---
+
 ## [v6.0.1] - 2026-11-17
 ### 🔧 優化與修正 — `/stock_ai` 模型選項動態化與 BigQuery `task_type` 全來源精準區分
 * **BigQuery AI 日誌 `task_type` 全來源區分（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)、[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)、[`services/stock_ai_command.py`](/services/stock_ai_command.py)）**：
