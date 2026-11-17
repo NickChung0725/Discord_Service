@@ -15,13 +15,21 @@
 
 ---
 
-## [v6.0.1] - 2026-11-17
-### 🔧 優化與修正 — `/stock_ai` 模型選項動態化與 BigQuery `task_type` 全來源精準區分
+## [v6.1.0] - 2026-11-17
+### ✨ 新增功能 & 🔧 優化與修正 — SASD v6.1 三階段專職分工（「績優股選拔」與「戰略回檔低接＋雙層籌碼分配」徹底解耦）
+* **重構盤後 AI 選股為三階段 Vertex AI Batch 專職分工架構（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：
+  * **AI #1 (`STAGE1_DIAGNOSIS`)**：移除 `PROMPT_TEMPLATES["full_diagnosis"]` 中因 17MA 短線下彎而抹殺基本面體質評分並強制歸入觀望避開之條款，讓 21:30 順勢、22:00 反彈與 `/stock_ai` 能完美共用單股財報快取。
+  * **AI #2 (`run_quality_selection` — 跨股績優股選拔委員會）**：以 `gemini-4-argon`（Vertex AI Batch 單一跨股請求，`AI_PICK_QUALITY_SELECT` / `REBOUND_QUALITY_SELECT`）取代原本單股盲砍的 `RED_BLUE_AUDIT`，純看基本面三率/FCF（45%）、法說未來性與話題催化劑（35%）及法人大戶底氣（20%），豁免大盤紅燈與短線乖離，精選出 Top 3~5 檔真績優股，並修復重複注入 `【基本面與前瞻估值審計摘要】` 之問題。
+  * **AI #3 (`run_strategic_entry_planner` — 戰略低接點位與雙層籌碼分配軍師）**：僅針對 AI #2 入選的 Top 3~5 檔績優股，依 21:30 順勢版（`strategic_layout_trend`）與 22:00 反彈版（`strategic_layout_rebound`，17MA 為上方 TP1 反壓）兩套專屬戰術 Prompt，產出 **第一層（建議總持倉水位 `recommended_total_exposure_pct` ＋ 各股資金權重 `Allocation_Weight_Pct`）** 與 **第二層（嚴禁現價追高之第 1 批 30% 試單、第 2 批 40% 核心、第 3 批 30% 黃金坑回檔掛單價與觸發條件）**。
+* **新增 20 日逐日價量均線指標籌碼合一表與「三大大量支撐定位器」（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`quant/fundamental_cache.py`](/quant/fundamental_cache.py)）**：
+  * `add_momentum_indicators()` 擴充純向量化 `RSI14`、`MACD_DIF`、`MACD_DEA` 與布林通道（`BB_MID`、`BB_UPPER`、`BB_LOWER`）。
+  * `FundamentalCacheManager` 新增 `_save_daily_chip_history()` 與 `get_daily_chip_history()`，保留近 60 日逐日三大法人與個股融資融券明細至本地快取 `finmind_reports/.state/daily_chips/{stock_id}.csv`。
+  * 新增 `build_strategic_tech_and_chip_package()` 與 `build_market_daily_trend_block()`，自動組裝個股「近 20 日 OHLC+影線+成交量+五線歷史均線+KD/RSI14/MACD+三大法人+個股融資逐日對齊大表」、提煉「三大大量支撐定位器（60日分價量 POC/VAH/VAL 與現價下方最大量支撐區 Lower Support POC #1/#2、近60日爆量紅K/長下影承接防守低點、投信/外資 20d/60d 買超加權成本均價 VWAP）」、未回補跳空缺口、五線均線未來 5 日扣抵價、基本面價值鐵底價、台股大盤近 10 日趨勢與隔夜美股七大指標（`SOX/IXIC/GSPC/TSM/NVDA/VIX/TWD`）。
+  * `SHEET_SCHEMAS["AI_Daily_Picks"]` 與 `SHEET_SCHEMAS["Rebound_Watchlist"]` 擴充 `Allocation_Weight_Pct`、`Tier1_Entry_Plan`、`Tier2_Entry_Plan`、`Tier3_Entry_Plan` 四欄（由 `ensure_workbook_schema()` 自動於試算表尾端新增）。
 * **BigQuery AI 日誌 `task_type` 全來源區分（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)、[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)、[`services/stock_ai_command.py`](/services/stock_ai_command.py)）**：
-  * 21:30 順勢選股（`run_pipeline`）改寫入 `AI_PICK_TAXONOMY`、`AI_PICK_STAGE1_DIAGNOSIS` / `AI_PICK_STAGE1_GROUNDING`、`AI_PICK_RED_BLUE_AUDIT`、`AI_PICK_STAGE2_PORTFOLIO`。
-  * 22:00 型態 A 反彈選股（`run_rebound_pipeline`）改寫入 `REBOUND_TAXONOMY`、`REBOUND_STAGE1_DIAGNOSIS` / `REBOUND_STAGE1_GROUNDING`、`REBOUND_RED_BLUE_AUDIT`、`REBOUND_STAGE2_PORTFOLIO`。
-  * Discord `/stock_ai` 即時指令改寫入 `STOCK_AI_CMD_DIAGNOSIS`（單股完整診斷）、`STOCK_AI_CMD_QUERY`（單股專題追問）、`STOCK_AI_CMD_COMPARE`（多股比較）與 `STOCK_AI_CMD_TAXONOMY`（產業補齊），解決排程與即時指令在 BigQuery 混雜難以歸因之問題。
-  * [`README.md`](/README.md) 補充「AI 選股執行步驟與 BigQuery `task_type` 對照表」；[`tests/test_bq_ai_logging.py`](/tests/test_bq_ai_logging.py) 新增對應單元測試。
+  * 21:30 順勢選股寫入 `AI_PICK_TAXONOMY`、`AI_PICK_STAGE1_DIAGNOSIS` / `AI_PICK_STAGE1_GROUNDING`、`AI_PICK_QUALITY_SELECT`、`AI_PICK_STRATEGIC_LAYOUT`。
+  * 22:00 型態 A 反彈選股寫入 `REBOUND_TAXONOMY`、`REBOUND_STAGE1_DIAGNOSIS` / `REBOUND_STAGE1_GROUNDING`、`REBOUND_QUALITY_SELECT`、`REBOUND_STRATEGIC_LAYOUT`。
+  * Discord `/stock_ai` 即時指令改寫入 `STOCK_AI_CMD_DIAGNOSIS`、`STOCK_AI_CMD_QUERY`、`STOCK_AI_CMD_COMPARE` 與 `STOCK_AI_CMD_TAXONOMY`。
 * **`/stock_ai` `tier` 選項與說明文字改由 `.env` 模型設定動態產生（[`services/stock_ai_command.py`](/services/stock_ai_command.py)）**：
   * 移除寫死的 `"標準 (3.8 Flash)"` 與 `"大師 (ARGON)"`，改於註冊指令時讀取 `get_stage1_model()`（`STAGE1_MODEL`）與 `get_vertex_stage1_model()`（`VERTEX_STAGE1_MODEL`），動態組合 `標準 (<model>)` 與 `大師 (<model>)` 顯示名稱（內部值分別為 `"standard"` / `"master"`），並確保不超過 Discord 100 字元上限。
 * **新增單元測試（[`tests/test_stock_ai_command.py`](/tests/test_stock_ai_command.py)）**。

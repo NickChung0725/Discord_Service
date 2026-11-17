@@ -534,6 +534,20 @@ def build_dossier(index: int, row: Mapping[str, object], snapshot: str, summary:
     )
 
 
+def _supported_kwargs(fn: object, extra: Mapping[str, object]) -> dict[str, object]:
+    """僅傳入目標函式簽章明確支援（或含 **kwargs）的選填參數，確保相容精簡版測試替身。"""
+    import inspect
+
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return {}
+    params = sig.parameters
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return dict(extra)
+    return {k: v for k, v in extra.items() if k in params}
+
+
 async def analyze_candidates(
     frame: pd.DataFrame,
     cache: FundamentalCacheManager,
@@ -580,8 +594,10 @@ async def analyze_candidates(
                 stock_id,
                 force_ai=force_ai,
                 publish_war_room=publish_all,
-                task_type=online_task_type,
-                taxonomy_task_type=taxonomy_task_type,
+                **_supported_kwargs(
+                    analyzer.run_full_diagnosis,
+                    {"task_type": online_task_type, "taxonomy_task_type": taxonomy_task_type},
+                ),
             )
             snapshot = await asyncio.to_thread(
                 analyzer.build_quant_snapshot,
@@ -642,7 +658,10 @@ async def _analyze_candidates_batch(
                 stock_id,
                 force_ai=force_ai,
                 publish_war_room=publish_all,
-                taxonomy_task_type=taxonomy_task_type,
+                **_supported_kwargs(
+                    analyzer.prepare_diagnosis_context,
+                    {"taxonomy_task_type": taxonomy_task_type},
+                ),
             )
             if prep["cached"] is True:
                 report = prep["report"]
@@ -1770,9 +1789,11 @@ async def run_audit_stage(
             except Exception as error:  # noqa: BLE001
                 print(f"[warn] {sid} 基本面語意特徵計算失敗（略過）：{error}")
 
-        # 強制注入 Stage 1 已算妥之量化財務快照與單股財報診斷結論，徹底消除 Pass 1 盲審
+        # 強制注入 Stage 1 已算妥之量化財務快照與單股財報診斷結論，徹底消除 Pass 1 盲審（並去除重複之基本面與前瞻估值審計摘要）
         s1_entry = (stage1_results or {}).get(sid) or {}
         s1_snap = str(s1_entry.get("snapshot") or "").strip()
+        if s1_snap and fund_block and "【基本面與前瞻估值審計摘要" in s1_snap:
+            s1_snap = s1_snap.split("【基本面與前瞻估值審計摘要", 1)[0].rstrip(" -\n")
         s1_sum = str(s1_entry.get("summary") or "").strip()
         s1_extra_lines: list[str] = []
         if s1_snap:
@@ -2126,17 +2147,694 @@ def format_audit_lines(pick: Mapping[str, object]) -> list[str]:
         return []
     lines = [
         f"審計：{audit.get('Audit_Grade')}｜戰術：{audit.get('Execution_Tactic')}"
-        f"｜風報比 {audit.get('Deterministic_RR')}｜追價上限 {audit.get('Chase_Limit_Price')}"
-        f"｜建倉參考 {audit.get('Ideal_Buy_Or_Ref')}"
+        + (
+            f"｜建議資金權重 {audit.get('Allocation_Weight_Pct')}%"
+            if audit.get("Allocation_Weight_Pct") not in (None, "")
+            else f"｜風報比 {audit.get('Deterministic_RR')}"
+        )
+        + f"｜追價上限 {audit.get('Chase_Limit_Price')}"
+        + f"｜建倉參考 {audit.get('Ideal_Buy_Or_Ref')}"
     ]
     if audit.get("Swap_Banner"):
         lines.insert(0, str(audit["Swap_Banner"]))
+    t1 = str(audit.get("Tier1_Entry_Plan") or "").strip()
+    t2 = str(audit.get("Tier2_Entry_Plan") or "").strip()
+    t3 = str(audit.get("Tier3_Entry_Plan") or "").strip()
+    if t1 or t2 or t3:
+        if t1:
+            lines.append(f"🎯 {t1}")
+        if t2:
+            lines.append(f"🛡️ {t2}")
+        if t3:
+            lines.append(f"💎 {t3}")
     if audit.get("Bear_Case_Warning"):
         lines.append(f"頭號風險：{audit['Bear_Case_Warning']}")
     triggers = audit.get("Invalidation_Triggers") or []
     if triggers:
         lines.append("失效砍倉：" + "；".join(str(t) for t in triggers))
     return lines
+
+
+# --------------------------------------------------------------------------- #
+# SASD v6.1：三階段專職分工（AI#2 跨股績優股選拔 ➔ AI#3 戰略低接點位與雙層籌碼分配）
+# --------------------------------------------------------------------------- #
+_QUALITY_LENS_TREND = (
+    "1. 【21:30 順勢強勢股視角 — 成長動能真實性驗證】：本批候選股處於均線多頭排列，請優先檢驗股價轉強背後是否有『實質本業三率擴張、前瞻 EPS 爆發與訂單能見度』支撐，剔除無業績支撐之純題材炒作股。\n"
+    "2. 【選股與擇時解耦】：完全豁免今日短線正乖離偏大、現價風報比偏低或大盤紅黃燈，只要公司基本面與未來性頂尖，必須選入 `quality_picks`，交由下一關 AI #3 計算回測均線與大量支撐區之三階低接掛單價！"
+)
+
+_QUALITY_LENS_REBOUND = (
+    "1. 【22:00 型態 A 反彈視角 — 急跌賣壓歸因（錯殺 vs 基本面崩壞）】：本批候選股剛從高點急跌 10~30% 回踩長均線（45/117/189MA），請優先辨識是否為『大盤系統性修正或外資短線提款造成之流動性錯殺（且投信或千張大戶逆勢鎖碼）』，剔除掉單或毛利崩跌之價值陷阱。\n"
+    "2. 【豁免 17MA 下彎與戰略擴產負 FCF】：回踩長均線之反彈股 17MA 必為下彎，且高成長股投入 CapEx 擴產（`STRATEGIC_CAPEX_EXPANSION`）屬良性資本支出，只要公司基本面與未來性頂尖，必須選入 `quality_picks`，交由下一關 AI #3 規劃長均線右腳與破線洗盤三階低接價！"
+)
+
+
+def parse_quality_selection_json(raw: str, valid_ids: set[str], max_top: int) -> dict | None:
+    """解析 AI #2 (`quality_selection`) 回傳之結構化 JSON。"""
+    text = _extract_json_text((raw or "").strip())
+    data: dict | None = None
+    try:
+        loaded = json.loads(text)
+        if isinstance(loaded, dict):
+            data = loaded
+    except json.JSONDecodeError:
+        repaired = re.sub(r",(\s*[\]}])", r"\1", text)
+        try:
+            loaded = json.loads(repaired)
+            if isinstance(loaded, dict):
+                data = loaded
+        except json.JSONDecodeError:
+            data = None
+    if data is None:
+        return None
+
+    seen: set[str] = set()
+    qp_out: list[dict] = []
+    raw_qp = data.get("quality_picks") if isinstance(data.get("quality_picks"), list) else data.get("top_picks", [])
+    if isinstance(raw_qp, list):
+        for item in raw_qp:
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("stock_id", "")).strip()
+            if not sid or sid not in valid_ids or sid in seen:
+                continue
+            seen.add(sid)
+            qp_out.append(
+                {
+                    "rank": len(qp_out) + 1,
+                    "stock_id": sid,
+                    "stock_name": str(item.get("stock_name", "")).strip(),
+                    "sector": str(item.get("sector", "")).strip(),
+                    "quality_score": _parse_optional_num(item.get("quality_score") or item.get("score")) or 80,
+                    "quality_grade": str(item.get("quality_grade") or "S_TIER_CORE").strip(),
+                    "outlook_verdict": str(item.get("outlook_verdict") or "高度可信").strip(),
+                    "fundamental_moat_and_catalysts": str(
+                        item.get("fundamental_moat_and_catalysts") or item.get("bull_thesis") or ""
+                    ).strip(),
+                    "chip_and_institutional_backing": str(
+                        item.get("chip_and_institutional_backing") or ""
+                    ).strip(),
+                    "fundamental_invalidation": str(
+                        item.get("fundamental_invalidation") or item.get("bear_case_and_invalidation") or ""
+                    ).strip(),
+                }
+            )
+            if len(qp_out) >= max_top:
+                break
+
+    def _clean_sub(items_obj: object) -> list[dict]:
+        out_list: list[dict] = []
+        if not isinstance(items_obj, list):
+            return out_list
+        for it in items_obj:
+            if not isinstance(it, dict):
+                continue
+            sid = str(it.get("stock_id", "")).strip()
+            if not sid or sid not in valid_ids or sid in seen:
+                continue
+            seen.add(sid)
+            out_list.append(
+                {
+                    "stock_id": sid,
+                    "stock_name": str(it.get("stock_name", "")).strip(),
+                    "reason": str(it.get("reason", "")).strip(),
+                }
+            )
+        return out_list
+
+    return {
+        "selection_summary": str(data.get("selection_summary") or data.get("market_comment") or "").strip(),
+        "quality_picks": qp_out,
+        "watchlist": _clean_sub(data.get("watchlist")),
+        "avoid": _clean_sub(data.get("avoid")),
+    }
+
+
+async def run_quality_selection(
+    dossiers: list[str],
+    *,
+    max_top: int,
+    model: str | None = None,
+    selection_mode: str = "trend",
+    use_vertex_batch: bool = True,
+    poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
+    task_type: str = "AI_PICK_QUALITY_SELECT",
+) -> object:
+    """SASD v6.1 AI #2：跨股績優股選拔委員會（選股與擇時解耦，挑出 Top 3~5 真績優股）。"""
+    lens = _QUALITY_LENS_REBOUND if (selection_mode or "").strip().lower() == "rebound" else _QUALITY_LENS_TREND
+    prompt = (
+        PROMPT_TEMPLATES["quality_selection"]
+        .replace("{max_top}", str(max_top))
+        .replace("{MODE_SPECIFIC_LENS}", lens)
+        + "\n\n==================================================\n"
+        + f"【今日候選基本面與籌碼資料卡（共 {len(dossiers)} 檔）】\n\n"
+        + "\n\n".join(dossiers)
+    )
+    resolved_model = model or (get_vertex_batch_stage2_model() if use_vertex_batch else get_vertex_stage2_model())
+    if use_vertex_batch:
+        batch_res = await run_vertex_batch_requests(
+            {"QUALITY_SELECT_STAGE2": prompt},
+            model=resolved_model,
+            job_prefix="stage2_quality_select",
+            poll_interval_seconds=poll_interval,
+            tag="quality_select_batch",
+            task_type=task_type,
+            stock_ids={"QUALITY_SELECT_STAGE2": "PORTFOLIO"},
+        )
+        meta = batch_res.get("QUALITY_SELECT_STAGE2")
+        if meta is None:
+            raise RuntimeError("Vertex Batch 未回傳 AI #2 績優股選拔結果")
+        return meta
+    return await ask_vertex_ai_with_meta(
+        prompt,
+        model=resolved_model,
+        tag="quality_select",
+        task_type=task_type,
+        stock_id="PORTFOLIO",
+        custom_id=f"{task_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        blocking_bq_log=True,
+    )
+
+
+def parse_strategic_layout_json(raw: str, valid_ids: set[str], max_top: int) -> dict | None:
+    """解析 AI #3 (`strategic_layout_trend` / `strategic_layout_rebound`) 回傳之結構化 JSON。"""
+    text = _extract_json_text((raw or "").strip())
+    data: dict | None = None
+    try:
+        loaded = json.loads(text)
+        if isinstance(loaded, dict):
+            data = loaded
+    except json.JSONDecodeError:
+        repaired = re.sub(r",(\s*[\]}])", r"\1", text)
+        try:
+            loaded = json.loads(repaired)
+            if isinstance(loaded, dict):
+                data = loaded
+        except json.JSONDecodeError:
+            data = None
+    if data is None:
+        return None
+
+    raw_picks = data.get("strategic_picks") if isinstance(data.get("strategic_picks"), list) else data.get("top_picks", [])
+    seen: set[str] = set()
+    picks_out: list[dict] = []
+    if isinstance(raw_picks, list):
+        for item in raw_picks:
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("stock_id", "")).strip()
+            if not sid or sid not in valid_ids or sid in seen:
+                continue
+            seen.add(sid)
+            picks_out.append(
+                {
+                    "rank": len(picks_out) + 1,
+                    "stock_id": sid,
+                    "stock_name": str(item.get("stock_name", "")).strip(),
+                    "sector": str(item.get("sector", "")).strip(),
+                    "score": _parse_optional_num(item.get("score")) or 85,
+                    "allocation_weight_pct": _parse_optional_num(item.get("allocation_weight_pct")) or round(100.0 / max(1, len(valid_ids)), 0),
+                    "tactical_type": str(item.get("tactical_type") or "🎯 績優股三階回檔低接").strip(),
+                    "current_tech_and_chip_diagnosis": str(
+                        item.get("current_tech_and_chip_diagnosis") or ""
+                    ).strip(),
+                    "tier1_entry": str(item.get("tier1_entry") or "").strip(),
+                    "tier2_entry": str(item.get("tier2_entry") or "").strip(),
+                    "tier3_entry": str(item.get("tier3_entry") or "").strip(),
+                    "weighted_avg_entry_price": str(item.get("weighted_avg_entry_price") or "").strip(),
+                    "chase_limit_price": str(item.get("chase_limit_price") or "").strip(),
+                    "target_price_1": str(item.get("target_price_1") or "").strip(),
+                    "target_price_2": str(item.get("target_price_2") or "").strip(),
+                    "stop_loss_price": str(item.get("stop_loss_price") or "").strip(),
+                    "invalidation_rule": str(item.get("invalidation_rule") or "").strip(),
+                }
+            )
+            if len(picks_out) >= max_top:
+                break
+
+    exp_pct = _parse_optional_num(data.get("recommended_total_exposure_pct"))
+    return {
+        "market_light": str(data.get("market_light", "")).strip(),
+        "recommended_total_exposure_pct": int(exp_pct) if exp_pct is not None else None,
+        "market_comment": str(data.get("market_comment", "")).strip(),
+        "strategic_picks": picks_out,
+    }
+
+
+async def run_strategic_entry_planner(
+    strategic_blocks: list[str],
+    *,
+    model: str | None = None,
+    market_regime: Mapping[str, object] | None = None,
+    macro_block: str = "",
+    market_daily_block: str = "",
+    selection_mode: str = "trend",
+    use_vertex_batch: bool = True,
+    poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
+    task_type: str = "AI_PICK_STRATEGIC_LAYOUT",
+) -> object:
+    """SASD v6.1 AI #3：專職針對入選之 Top 3~5 績優股，結合 20日逐日價量均線指標籌碼表、大量支撐定位器、台股與美股多指數，規劃三階回檔低接點位與雙層資金配置。"""
+    template_key = (
+        "strategic_layout_rebound"
+        if (selection_mode or "").strip().lower() == "rebound"
+        else "strategic_layout_trend"
+    )
+    market_light_str = (
+        str(market_regime.get("summary") or market_regime.get("light") or "🟡黃燈")
+        if market_regime
+        else "🟡黃燈"
+    )
+    prompt = (
+        PROMPT_TEMPLATES[template_key]
+        + "\n\n==================================================\n"
+        + "【一、隔夜美股與國際總經環境（費半 SOX / 那指 IXIC / 標普 GSPC / 台積電 ADR / NVDA / VIX / 台幣匯率）】\n"
+        + (macro_block.strip() or "（無國際盤快取資料）")
+        + "\n\n==================================================\n"
+        + "【二、台股大盤雙指數氣候與近 10 交易日價量、均線及大盤整體融資趨勢】\n"
+        + f"- 大盤即時狀態：{market_light_str}\n"
+        + (market_daily_block.strip() or "")
+        + "\n\n==================================================\n"
+        + f"【三、入選 Top 績優股（共 {len(strategic_blocks)} 檔）— 20日逐日價量均線指標籌碼合一表 ＋ 三大大量支撐定位器】\n\n"
+        + "\n\n---\n\n".join(strategic_blocks)
+    )
+    resolved_model = model or (get_vertex_batch_stage2_model() if use_vertex_batch else get_vertex_stage2_model())
+    if use_vertex_batch:
+        batch_res = await run_vertex_batch_requests(
+            {"STRATEGIC_LAYOUT_STAGE3": prompt},
+            model=resolved_model,
+            job_prefix="stage3_strategic_layout",
+            poll_interval_seconds=poll_interval,
+            tag="strategic_layout_batch",
+            task_type=task_type,
+            stock_ids={"STRATEGIC_LAYOUT_STAGE3": "PORTFOLIO"},
+        )
+        meta = batch_res.get("STRATEGIC_LAYOUT_STAGE3")
+        if meta is None:
+            raise RuntimeError("Vertex Batch 未回傳 AI #3 戰略進場布局結果")
+        return meta
+    return await ask_vertex_ai_with_meta(
+        prompt,
+        model=resolved_model,
+        tag="strategic_layout",
+        task_type=task_type,
+        stock_id="PORTFOLIO",
+        custom_id=f"{task_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        blocking_bq_log=True,
+    )
+
+
+async def execute_v61_quality_and_strategic_pipeline(
+    analyzed: pd.DataFrame,
+    config: Mapping[str, object],
+    *,
+    target_date: date,
+    daily_dir: Path,
+    cache: FundamentalCacheManager,
+    analyzer: FundamentalAnalyzer,
+    stage1_results: Mapping[str, Mapping[str, object]],
+    market_regime: Mapping[str, object] | None,
+    max_top: int,
+    model: str | None,
+    use_vertex_batch: bool,
+    poll_interval: float,
+    selection_mode: str = "trend",
+    dry_run: bool = False,
+) -> tuple[dict | None, dict[str, dict[str, object]], str, str]:
+    """SASD v6.1 雙階段跨股決策管線：
+    1. AI #2 (`run_quality_selection`)：從 Stage 1 合格候選股中選出 Top 3~5 檔真績優股（選股與擇時解耦）。
+    2. Python 戰略武器庫組裝：為入選之 Top 3~5 檔提取 20日逐日價量均線指標籌碼合一表、三大大量支撐定位器、台股大盤10日趨勢與美股七大指標。
+    3. AI #3 (`run_strategic_entry_planner`)：規劃雙層資金配置（總倉位% + 各股權重%）與三階金字塔回檔低接掛單（30%/40%/30%）。
+    """
+    from finmind_stock_scanner import (
+        align_news_with_price_action,
+        build_market_daily_trend_block,
+        build_strategic_tech_and_chip_package,
+        compensate_ex_dividend_gaps,
+        fetch_news_excerpt,
+    )
+    from taishin.macro_context import fetch_macro_context
+    from taxonomy_service import build_sector_metrics_from_prices
+    from taishin_portfolio_service import evaluate_candidate_exposure, load_portfolio_exposure_inputs
+
+    is_rebound = (selection_mode or "").strip().lower() == "rebound"
+    q_task_type = "REBOUND_QUALITY_SELECT" if is_rebound else "AI_PICK_QUALITY_SELECT"
+    s_task_type = "REBOUND_STRATEGIC_LAYOUT" if is_rebound else "AI_PICK_STRATEGIC_LAYOUT"
+
+    prices = _load_prices_for_audit(daily_dir, target_date)
+    holdings, holding_prices = await asyncio.to_thread(
+        load_portfolio_exposure_inputs, daily_dir, _taxonomy_sector_resolver(config)
+    )
+    close_map: dict[str, float] = {}
+    if prices is not None and not prices.empty:
+        u_metrics = build_sector_metrics_from_prices(prices)
+        close_map = {sid: float(m["close"]) for sid, m in u_metrics.items() if float(m.get("close", 0)) > 0}
+
+    sector_pe_lookup: dict[str, float] = {}
+    if hasattr(analyzer, "compute_cross_sectional_pe_map") and close_map:
+        try:
+            sector_pe_lookup = await asyncio.to_thread(analyzer.compute_cross_sectional_pe_map, close_map)
+        except Exception:  # noqa: BLE001
+            sector_pe_lookup = {}
+
+    # Step 1: 組裝 AI #2 績優股選拔資料卡（去重、附加近期新聞反應）
+    quality_dossiers: list[str] = []
+    for idx, row in enumerate(analyzed.to_dict("records"), start=1):
+        sid = str(row["stock_id"])
+        raw_stock_prices = (
+            prices.loc[prices["stock_id"] == sid] if prices is not None and not prices.empty else pd.DataFrame()
+        )
+        news_list: list[dict[str, object]] = []
+        if not raw_stock_prices.empty:
+            try:
+                from fundamental_analyzer import filter_and_clean_rss
+
+                raw_news = await asyncio.to_thread(analyzer._fetch_yahoo_stock_rss, sid)  # noqa: SLF001
+                cleaned_news = filter_and_clean_rss(raw_news, is_guidance=False, max_age_days=14, sort_by_date=True)
+                recent_news = _filter_recent_rss_news(
+                    cleaned_news, raw_stock_prices, trading_days=5, target_date=target_date
+                )
+                news_list = await asyncio.to_thread(
+                    align_news_with_price_action,
+                    recent_news[:AUDIT_NEWS_MAX_ITEMS],
+                    raw_stock_prices,
+                    excerpt_fetcher=lambda url: fetch_news_excerpt(url, timeout=3.0),
+                )
+            except Exception:  # noqa: BLE001
+                news_list = []
+
+        snap_txt = str(stage1_results.get(sid, {}).get("snapshot") or "").strip()
+        sum_txt = str(stage1_results.get(sid, {}).get("summary") or "").strip()
+        dossier = build_dossier(idx, row, snap_txt, sum_txt)
+        if news_list:
+            n_lines = [
+                f"  - [{n.get('pub_date', '')[:16]}] {n.get('title', '')} ➔ {n.get('reaction_tag', '')}"
+                for n in news_list
+            ]
+            dossier += "\n- [D. 近期重大新聞與市場量價真實反應]\n" + "\n".join(n_lines)
+        quality_dossiers.append(dossier)
+
+    valid_ids = set(analyzed["stock_id"].astype(str))
+    q_meta = await run_quality_selection(
+        quality_dossiers,
+        max_top=max_top,
+        model=model,
+        selection_mode=selection_mode,
+        use_vertex_batch=use_vertex_batch,
+        poll_interval=poll_interval,
+        task_type=q_task_type,
+    )
+    q_raw = str(getattr(q_meta, "text", "") or "")
+    q_model_ver = str(getattr(q_meta, "model_version", "") or "")
+    q_parsed = parse_quality_selection_json(q_raw, valid_ids, max_top)
+    if q_parsed is None:
+        return None, {}, q_raw, q_model_ver
+
+    # 同產業最多 2 檔控管
+    temp_dec = {
+        "top_picks": q_parsed["quality_picks"],
+        "watchlist": q_parsed["watchlist"],
+        "avoid": q_parsed["avoid"],
+    }
+    temp_dec = enforce_sector_cap(temp_dec, analyzed)
+    quality_picks = temp_dec["top_picks"]
+    watchlist_items = temp_dec["watchlist"]
+    avoid_items = temp_dec["avoid"]
+
+    if not quality_picks:
+        empty_decision = {
+            "market_light": str((market_regime or {}).get("light", "")),
+            "market_comment": q_parsed.get("selection_summary") or (NO_PICK_MESSAGE + "（AI #2 績優股選拔無合格標的）。"),
+            "top_picks": [],
+            "watchlist": watchlist_items,
+            "avoid": avoid_items,
+        }
+        return empty_decision, {}, q_raw, q_model_ver
+
+    # Step 2: 為入選之 Top 3~5 績優股組裝「20日逐日價量均線指標籌碼大表 ＋ 三大大量支撐定位器 ＋ 台美股總經」
+    try:
+        macro_ctx = await asyncio.to_thread(fetch_macro_context, as_of=target_date)
+        macro_block = str(macro_ctx.get("prompt_block") or "")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] 抓取隔夜美股總經環境失敗（略過）：{exc}")
+        macro_block = ""
+
+    benchmark_id = str(_cfg(config, "market_benchmark_id", "0050"))
+    market_daily_block = build_market_daily_trend_block(
+        prices,
+        benchmark_id=benchmark_id,
+        margin_history_path=daily_dir.parent / ".state" / "market_margin_history.json",
+        days=10,
+    )
+
+    row_map = _row_lookup(analyzed)
+    strategic_blocks: list[str] = []
+    tech_packages: dict[str, dict[str, object]] = {}
+    exposures_by_sid: dict[str, object] = {}
+    enable_ex_div = bool(_cfg(config, "enable_ex_dividend_compensation", True))
+
+    for q_item in quality_picks:
+        sid = str(q_item["stock_id"])
+        row = row_map.get(sid, {})
+        sname = str(row.get("stock_name") or q_item.get("stock_name") or "")
+        sub_ind = str(row.get("sub_industry") or row.get("industry_category") or "")
+
+        raw_stock_prices = (
+            prices.loc[prices["stock_id"] == sid].copy()
+            if prices is not None and not prices.empty
+            else pd.DataFrame()
+        )
+        div_df: pd.DataFrame | None = None
+        if hasattr(analyzer, "cache"):
+            try:
+                div_df = await asyncio.to_thread(
+                    analyzer.cache._read_stock_rows,  # noqa: SLF001
+                    analyzer.cache._get_worksheet("06_Dividend_Policy"),  # noqa: SLF001
+                    sid,
+                )
+            except Exception:  # noqa: BLE001
+                div_df = None
+
+        prices_for_tech = raw_stock_prices
+        if not raw_stock_prices.empty and enable_ex_div and div_df is not None and not div_df.empty:
+            try:
+                prices_for_tech = compensate_ex_dividend_gaps(raw_stock_prices, div_df)
+            except Exception:  # noqa: BLE001
+                prices_for_tech = raw_stock_prices
+
+        daily_chip_df = await asyncio.to_thread(cache.get_daily_chip_history, sid, 60)
+
+        feat_obj = None
+        if hasattr(analyzer, "compute_fundamental_features"):
+            try:
+                feat_obj = await asyncio.to_thread(
+                    analyzer.compute_fundamental_features,
+                    sid,
+                    close=_parse_optional_num(row.get("close")),
+                    stock_name=sname,
+                    sub_industry=sub_ind,
+                    sector_pe_lookup=sector_pe_lookup,
+                )
+            except Exception:  # noqa: BLE001
+                feat_obj = None
+        fwd_val = getattr(feat_obj, "forward_valuation", {}) if feat_obj is not None else {}
+        fwd_eps = _parse_optional_num(fwd_val.get("implied_core_forward_eps")) if isinstance(fwd_val, Mapping) else None
+        peer_pe = _parse_optional_num(fwd_val.get("sector_median_pe")) if isinstance(fwd_val, Mapping) else None
+        ann_div: float | None = None
+        if div_df is not None and not div_df.empty and "cash_dividend" in div_df.columns:
+            div_vals = pd.to_numeric(div_df["cash_dividend"], errors="coerce").dropna()
+            if not div_vals.empty:
+                ann_div = float(div_vals.iloc[-1])
+
+        pkg = build_strategic_tech_and_chip_package(
+            sid,
+            sname,
+            prices_for_tech,
+            daily_chip_df=daily_chip_df,
+            forward_eps=fwd_eps,
+            peer_median_pe=peer_pe,
+            annual_cash_dividend=ann_div,
+            selection_mode=selection_mode,
+        )
+        tech_packages[sid] = pkg
+
+        exposure = evaluate_candidate_exposure(
+            candidate_id=sid,
+            candidate_name=sname,
+            candidate_sector=sub_ind,
+            holdings=holdings,
+            candidate_prices=raw_stock_prices,
+            holding_prices=holding_prices,
+        )
+        exposures_by_sid[sid] = exposure
+        exp_status = _exposure_field(exposure, "exposure_status", "OPEN")
+
+        block_lines = [
+            f"### 🏆 【入選績優股 #{q_item['rank']}】{sid} {sname}（{sub_ind}｜AI#2 體質評級：{q_item['quality_grade']}｜體質分：{q_item['quality_score']}｜法說展望：{q_item['outlook_verdict']}）",
+            f"- **AI #2 績優選拔核心理由**：{q_item['fundamental_moat_and_catalysts']}",
+            f"- **AI #2 法人與大戶底氣**：{q_item['chip_and_institutional_backing']}",
+            f"- **台新帳戶庫存共伴曝險**：{exp_status}（同產業持股：{list(_exposure_field(exposure, 'same_sector_holdings', []) or [])}｜最高相關持股：{_exposure_field(exposure, 'max_corr_holding_id')} 相關係數 {_exposure_field(exposure, 'max_corr_value', 0.0)}）",
+            str(pkg.get("prompt_block") or ""),
+        ]
+        strategic_blocks.append("\n".join(block_lines))
+
+    # Step 3: 呼叫 AI #3 (`run_strategic_entry_planner`) 產出雙層資金權重與三階回檔低接點位
+    s_meta = await run_strategic_entry_planner(
+        strategic_blocks,
+        model=model,
+        market_regime=market_regime,
+        macro_block=macro_block,
+        market_daily_block=market_daily_block,
+        selection_mode=selection_mode,
+        use_vertex_batch=use_vertex_batch,
+        poll_interval=poll_interval,
+        task_type=s_task_type,
+    )
+    s_raw = str(getattr(s_meta, "text", "") or "")
+    s_model_ver = str(getattr(s_meta, "model_version", "") or q_model_ver)
+    qp_ids = {str(it["stock_id"]) for it in quality_picks}
+    s_parsed = parse_strategic_layout_json(s_raw, qp_ids, max_top)
+
+    q_by_sid = {str(it["stock_id"]): it for it in quality_picks}
+    s_by_sid = (
+        {str(it["stock_id"]): it for it in s_parsed.get("strategic_picks", [])}
+        if isinstance(s_parsed, dict)
+        else {}
+    )
+
+    top_picks_final: list[dict] = []
+    audit_records: dict[str, dict[str, object]] = {}
+    default_w = round(100.0 / max(1, len(quality_picks)), 0)
+
+    for rank_idx, q_item in enumerate(quality_picks, start=1):
+        sid = str(q_item["stock_id"])
+        s_item = s_by_sid.get(sid) or {}
+        pkg = tech_packages.get(sid) or {}
+        exposure = exposures_by_sid.get(sid)
+        swap = _exposure_field(exposure, "exposure_status") == "SECTOR_OR_CORR_FULL_SWAP_ONLY"
+
+        w_pct = s_item.get("allocation_weight_pct")
+        if w_pct in (None, ""):
+            w_pct = default_w
+        t1_plan = str(s_item.get("tier1_entry") or f"【第1批 30% 試單】{pkg.get('tier1_default', '')}").strip()
+        t2_plan = str(s_item.get("tier2_entry") or f"【第2批 40% 核心】{pkg.get('tier2_default', '')}").strip()
+        t3_plan = str(s_item.get("tier3_entry") or f"【第3批 30% 黃金坑】{pkg.get('tier3_default', '')}").strip()
+        avg_entry = str(s_item.get("weighted_avg_entry_price") or pkg.get("close_t") or "").strip()
+        chase_lim = s_item.get("chase_limit_price") or pkg.get("chase_limit_price") or ""
+        tp1_str = str(s_item.get("target_price_1") or f"{pkg.get('tp1_price', '')}（Python 確定性目標）").strip()
+        tp2_str = str(s_item.get("target_price_2") or "").strip()
+        sl_str = str(s_item.get("stop_loss_price") or f"{pkg.get('hard_stop_loss', '')}（Python 結構硬停損）").strip()
+        tech_diag = str(s_item.get("current_tech_and_chip_diagnosis") or "").strip()
+        inv_rule = str(s_item.get("invalidation_rule") or q_item.get("fundamental_invalidation") or "").strip()
+
+        ideal_summary = f"預估均價 {avg_entry}（權重 {w_pct}%）" if avg_entry else f"權重 {w_pct}% 三階低接"
+        tactic_code = "PORTFOLIO_SWAP_ONLY" if swap else "STRATEGIC_3TIER_PULLBACK"
+
+        audit_rec = {
+            "Audit_Grade": str(q_item.get("quality_grade") or "S_TIER_CORE"),
+            "Execution_Tactic": tactic_code,
+            "Allocation_Weight_Pct": w_pct,
+            "Tier1_Entry_Plan": t1_plan,
+            "Tier2_Entry_Plan": t2_plan,
+            "Tier3_Entry_Plan": t3_plan,
+            "Ideal_Buy_Or_Ref": ideal_summary,
+            "Chase_Limit_Price": chase_lim,
+            "Hard_Stop_Loss": pkg.get("hard_stop_loss") or sl_str,
+            "TP1_Target_Or_POC": pkg.get("tp1_price") or tp1_str,
+            "Deterministic_RR": "",
+            "Bear_Case_Warning": tech_diag,
+            "Invalidation_Triggers": [inv_rule] if inv_rule else [],
+            "Exposure_Status": _exposure_field(exposure, "exposure_status", "OPEN"),
+            "Swap_Banner": format_swap_banner(exposure) if swap else "",
+        }
+        audit_records[sid] = audit_rec
+
+        bull_combined = q_item.get("fundamental_moat_and_catalysts", "")
+        if q_item.get("chip_and_institutional_backing"):
+            bull_combined += f"｜籌碼底氣：{q_item['chip_and_institutional_backing']}"
+        if tech_diag:
+            bull_combined += f"｜技術與支撐定位：{tech_diag}"
+
+        entry_combined = f"資金權重 {w_pct}%｜預估加權成本 {avg_entry}｜嚴禁追高上限 {chase_lim}"
+        top_picks_final.append(
+            {
+                "rank": rank_idx,
+                "stock_id": sid,
+                "stock_name": str(q_item.get("stock_name") or ""),
+                "sector": str(q_item.get("sector") or ""),
+                "score": int(_parse_optional_num(s_item.get("score") or q_item.get("quality_score")) or 85),
+                "tactical_type": str(s_item.get("tactical_type") or "🎯 績優股三階回檔低接"),
+                "entry_zone_and_trigger": entry_combined,
+                "target_price_1": tp1_str,
+                "target_price_2": tp2_str,
+                "stop_loss_price": sl_str,
+                "outlook_verdict": str(q_item.get("outlook_verdict") or "高度可信"),
+                "bull_thesis": bull_combined,
+                "bear_case_and_invalidation": inv_rule,
+                "audit": audit_rec,
+            }
+        )
+
+    rec_exp_pct = s_parsed.get("recommended_total_exposure_pct") if isinstance(s_parsed, dict) else None
+    m_comment = (
+        str(s_parsed.get("market_comment") or "")
+        if isinstance(s_parsed, dict)
+        else ""
+    ) or str(q_parsed.get("selection_summary") or "")
+    if rec_exp_pct is not None and f"{rec_exp_pct}%" not in m_comment:
+        m_comment = f"【建議總持倉水位：{rec_exp_pct}%】{m_comment}"
+
+    final_decision = {
+        "market_light": (
+            str(s_parsed.get("market_light") or "") if isinstance(s_parsed, dict) else ""
+        )
+        or str((market_regime or {}).get("light", "🟡黃燈")),
+        "recommended_total_exposure_pct": rec_exp_pct,
+        "market_comment": m_comment,
+        "top_picks": top_picks_final,
+        "watchlist": watchlist_items,
+        "avoid": avoid_items,
+    }
+
+    # 訊號留痕寫入 signal_audit.db
+    if bool(_cfg(config, "enable_signal_audit", False)) and not dry_run and top_picks_final:
+        try:
+            from signal_audit_service import SignalAuditStore
+
+            store = SignalAuditStore(_resolve_audit_db_path(config, daily_dir.parent))
+            light_txt = str((market_regime or {}).get("light") or "")
+            regime_str = (
+                "GREEN_BULL"
+                if "🟢" in light_txt
+                else ("RED_DEFENSIVE" if "🔴" in light_txt else "YELLOW_ROTATION")
+            )
+            for pick_it in top_picks_final:
+                sid = str(pick_it["stock_id"])
+                pkg = tech_packages.get(sid) or {}
+                close_v = _parse_optional_num(pkg.get("close_t")) or 0.0
+                if close_v <= 0:
+                    continue
+                store.record_signal(
+                    {
+                        "signal_id": f"{target_date.isoformat()}_{sid}",
+                        "signal_date": target_date.isoformat(),
+                        "stock_id": sid,
+                        "stock_name": str(pick_it.get("stock_name") or ""),
+                        "sub_industry": str(pick_it.get("sector") or ""),
+                        "market_regime": regime_str,
+                        "signal_type": "STYLE_B_PULLBACK",
+                        "audit_grade": str(audit_records[sid].get("Audit_Grade") or "S_TIER_CORE"),
+                        "execution_tactic": str(audit_records[sid].get("Execution_Tactic") or "STRATEGIC_3TIER_PULLBACK"),
+                        "close_t": close_v,
+                        "chase_limit_price": _parse_optional_num(pkg.get("chase_limit_price")) or close_v,
+                        "hard_stop_loss": _parse_optional_num(pkg.get("hard_stop_loss")) or round(close_v * 0.92, 2),
+                        "tp1_price": _parse_optional_num(pkg.get("tp1_price")) or round(close_v * 1.10, 2),
+                        "deterministic_rr": 2.0,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] 訊號留痕寫入失敗（略過）：{exc}")
+
+    return final_decision, audit_records, s_raw or q_raw, s_model_ver
 
 
 # --------------------------------------------------------------------------- #
@@ -2489,6 +3187,10 @@ def build_pick_rows(
             "Deterministic_RR": _audit_cell("Deterministic_RR"),
             "Bear_Case_Warning": _audit_cell("Bear_Case_Warning"),
             "Invalidation_Triggers": triggers_str,
+            "Allocation_Weight_Pct": _audit_cell("Allocation_Weight_Pct"),
+            "Tier1_Entry_Plan": _audit_cell("Tier1_Entry_Plan"),
+            "Tier2_Entry_Plan": _audit_cell("Tier2_Entry_Plan"),
+            "Tier3_Entry_Plan": _audit_cell("Tier3_Entry_Plan"),
         }
 
     for pick in decision["top_picks"]:
@@ -2623,63 +3325,37 @@ async def run_pipeline(
     if len(analyzed) < before_trim:
         print(f"Stage 2 候選 {before_trim} 檔 > {STAGE2_TRIM_THRESHOLD}，依 Stage 1 評分保留前 {len(analyzed)} 檔。")
 
-    # SASD v5.4.0 Pass 1：紅藍軍審計（確定性點位 + 庫存曝險 + 新聞量價對齊），允許全數淘汰。
+    # SASD v6.1 三階段專職分工：AI #2 跨股績優股選拔 (QUALITY_SELECT) ➔ AI #3 戰略回檔低接與雙層籌碼分配 (STRATEGIC_LAYOUT)
     audit_records: dict[str, dict[str, object]] = {}
-    audit_all_rejected = False
-    if bool(_cfg(config, "ai_picker_red_blue_audit", True)) and not analyzed.empty:
-        before_audit = analyzed
-        try:
-            audit_model = get_vertex_batch_stage1_model()
-            analyzed, audit_records, audit_rejected = await run_audit_stage(
-                analyzed,
-                config,
-                target_date=target_date,
-                daily_dir=daily_dir,
-                analyzer=analyzer,
-                model=audit_model,
-                market_regime=market_regime,
-                dry_run=dry_run,
-                stage1_results=results,
-                use_vertex_batch=stage1_batch,
-                poll_interval=batch_poll,
-                task_type="AI_PICK_RED_BLUE_AUDIT",
-            )
-            pre_filtered_avoid = [*pre_filtered_avoid, *audit_rejected]
-            audit_all_rejected = analyzed.empty
-            print(f"Pass 1 紅藍軍審計：通過 {len(analyzed)} 檔、淘汰 {len(audit_rejected)} 檔。")
-        except Exception as error:  # noqa: BLE001
-            analyzed = before_audit
-            audit_records = {}
-            print(f"[warn] 紅藍軍審計失敗，退回未審計流程：{type(error).__name__}: {error}")
-
-    dossiers = []
-    for i, row in enumerate(analyzed.to_dict("records"), start=1):
-        sid = str(row["stock_id"])
-        dossier = build_dossier(i, row, str(results[sid]["snapshot"]), str(results[sid]["summary"]))
-        if sid in audit_records:
-            dossier += "\n- [D. 紅藍軍審計與 Python 確定性點位]\n  " + json.dumps(
-                audit_records[sid], ensure_ascii=False, default=str
-            )
-        dossiers.append(dossier)
-    portfolio_meta = None
     raw_text = ""
-    if dossiers:
+    portfolio_model_version = ""
+    decision: dict | None = None
+    if not analyzed.empty:
         try:
-            portfolio_meta = await run_portfolio_selection(
-                dossiers,
-                max_top=max_top,
-                model=portfolio_model,
-                market_regime=market_regime,
-                selection_mode="trend",
-                strategy_context=AUDIT_FINALIZER_CONTEXT if audit_records else "",
-                use_vertex_batch=stage2_batch,
-                poll_interval=batch_poll,
-                task_type="AI_PICK_STAGE2_PORTFOLIO",
+            decision, audit_records, raw_text, portfolio_model_version = (
+                await execute_v61_quality_and_strategic_pipeline(
+                    analyzed,
+                    config,
+                    target_date=target_date,
+                    daily_dir=daily_dir,
+                    cache=cache,
+                    analyzer=analyzer,
+                    stage1_results=results,
+                    market_regime=market_regime,
+                    max_top=max_top,
+                    model=portfolio_model,
+                    use_vertex_batch=stage2_batch,
+                    poll_interval=batch_poll,
+                    selection_mode="trend",
+                    dry_run=dry_run,
+                )
             )
-            raw_text = str(getattr(portfolio_meta, "text", "") or "")
+            print(
+                f"SASD v6.1 績優股選拔與戰略低接布局完成：入選 Top {len((decision or {}).get('top_picks', []))} 檔。"
+            )
         except Exception as error:  # noqa: BLE001
             message = (
-                f"❌ {target_date.isoformat()} AI 彙總選股失敗"
+                f"❌ {target_date.isoformat()} AI 績優股選拔與戰略布局失敗"
                 f"（Vertex AI 模型 `{portfolio_model}` 呼叫異常，為確保決策品質未降級至免費版）："
                 f"{type(error).__name__}: {error}"
             )
@@ -2687,28 +3363,16 @@ async def run_pipeline(
             if post_discord:
                 post_messages_to_discord([message], channel_id, bot_token)
             return 1
-        decision = parse_portfolio_json(raw_text, set(analyzed["stock_id"].astype(str)), max_top)
     else:
         decision = {
             "market_light": str((market_regime or {}).get("light", "")),
-            "market_comment": (
-                NO_PICK_MESSAGE + "（Pass 1 紅藍軍審計全數淘汰）。"
-                if audit_all_rejected
-                else "今日候選股皆被 Stage 0 硬性排雷攔截，無符合條件之進場標的。"
-            ),
+            "market_comment": "今日候選股皆被 Stage 0 硬性排雷攔截，無符合條件之進場標的。",
             "top_picks": [],
             "watchlist": [],
             "avoid": [],
         }
     if decision is not None:
-        decision = enforce_sector_cap(decision, analyzed)
-        decision = apply_audit_to_decision(decision, audit_records)
-        if bool(_cfg(config, "enable_dual_index_regime_router", False)):
-            rq_map = (market_regime or {}).get("regime_quota")
-            if isinstance(rq_map, Mapping):
-                decision = enforce_regime_quotas(decision, audit_records, rq_map, frame=selected_all)
         decision = merge_pre_filtered_avoid(decision, pre_filtered_avoid)
-    portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
 
     # 只要有經過 AI 分析，即確保所有完成深度分析的標的皆已生成戰情室 HTML 並發布至 GitHub，
     # 且 war_room_url 確實寫入 00_Watchlist_Master（供後續寫入 AI_Daily_Picks 與 Discord 連結使用）。
@@ -3019,92 +3683,46 @@ async def run_rebound_pipeline(
             pre_filtered_avoid = [*pre_filtered_avoid, *financial_avoid]
 
         if not analyzed.empty or pre_filtered_avoid:
-            audit_rejected: list[dict[str, str]] = []
-            audit_all_rejected = False
-            if bool(_cfg(config, "ai_picker_red_blue_audit", True)) and not analyzed.empty:
-                before_audit = analyzed
+            raw_text = ""
+            portfolio_model_version = ""
+            decision: dict | None = None
+            if not analyzed.empty:
                 try:
-                    audit_model = get_vertex_batch_stage1_model()
-                    analyzed, audit_records, audit_rejected = await run_audit_stage(
-                        analyzed,
-                        config,
-                        target_date=target_date,
-                        daily_dir=daily_dir,
-                        analyzer=analyzer,
-                        model=audit_model,
-                        market_regime=market_regime,
-                        dry_run=dry_run,
-                        stage1_results=ai_results,
-                        use_vertex_batch=stage1_batch,
-                        poll_interval=batch_poll,
-                        selection_mode="rebound",
-                        task_type="REBOUND_RED_BLUE_AUDIT",
+                    decision, audit_records, raw_text, portfolio_model_version = (
+                        await execute_v61_quality_and_strategic_pipeline(
+                            analyzed,
+                            config,
+                            target_date=target_date,
+                            daily_dir=daily_dir,
+                            cache=cache,
+                            analyzer=analyzer,
+                            stage1_results=ai_results,
+                            market_regime=market_regime,
+                            max_top=max_top,
+                            model=portfolio_model,
+                            use_vertex_batch=stage2_batch,
+                            poll_interval=batch_poll,
+                            selection_mode="rebound",
+                            dry_run=dry_run,
+                        )
                     )
-                    audit_all_rejected = analyzed.empty
-                    print(f"[rebound] Pass 1 紅藍軍審計：通過 {len(analyzed)} 檔、淘汰 {len(audit_rejected)} 檔。")
+                    print(
+                        f"[rebound] SASD v6.1 績優股選拔與戰略低接布局完成：入選 Top {len((decision or {}).get('top_picks', []))} 檔。"
+                    )
                 except Exception as error:  # noqa: BLE001
-                    analyzed = before_audit
-                    audit_records = {}
-                    print(f"[warn] [rebound] 紅藍軍審計失敗，退回未審計流程：{type(error).__name__}: {error}")
-
-            dossiers = []
-            for i, row in enumerate(analyzed.to_dict("records"), start=1):
-                sid = str(row["stock_id"])
-                snapshot_txt = str(ai_results[sid].get("snapshot") or "").strip()
-                if not snapshot_txt:
-                    snapshot_txt = str(analyzer.build_quant_snapshot(sid, close=_parse_optional_num(row.get("close"))))
-                dossier = build_dossier(
-                    i,
-                    row,
-                    snapshot_txt,
-                    str(ai_results[sid]["summary"]),
-                )
-                if sid in audit_records:
-                    dossier += "\n- [D. 紅藍軍審計與反彈三層錨點選單]\n  " + json.dumps(
-                        audit_records[sid], ensure_ascii=False, default=str
-                    )
-                dossiers.append(dossier)
-
-            rebound_context = (
-                "本批次為【型態 A：高點急跌回踩長均線（45MA/117MA/189MA）雙劇本反彈清單（R1 觸線止穩 / R2 W底右腳預掛）】。"
-                "請擔任主動式基金 CIO 進行戰術沙盤推演：\n"
-                "1. 先診斷賣壓歸因（基本面惡化 vs 外資提款/法說避險錯殺）；\n"
-                "2. 結合 [D] 區三層結構錨點選單，在 `entry_zone_and_trigger` 規劃分批低接建倉劇本（嚴禁追高）；\n"
-                "3. 豁免『戰略擴產型負FCF（STRATEGIC_CAPEX_EXPANSION）』與『土洋對作/投信鎖碼護盤』，並寫出事件前後 If-Then 應變預案。"
-            )
-            if dossiers:
-                portfolio_meta = await run_portfolio_selection(
-                    dossiers,
-                    max_top=max_top,
-                    model=portfolio_model,
-                    market_regime=market_regime,
-                    strategy_context=rebound_context,
-                    selection_mode="rebound",
-                    use_vertex_batch=stage2_batch,
-                    poll_interval=batch_poll,
-                    task_type="REBOUND_STAGE2_PORTFOLIO",
-                )
-                raw_text = str(getattr(portfolio_meta, "text", "") or "")
-                decision = parse_portfolio_json(raw_text, set(analyzed["stock_id"].astype(str)), max_top)
-                portfolio_model_version = str(getattr(portfolio_meta, "model_version", "") or "")
+                    print(f"[warn] [rebound] AI #2/#3 執行異常（保留量化清單與戰情室發布）：{type(error).__name__}: {error}")
+                    decision = None
+                    raw_text = f"AI #2/#3 呼叫異常（{type(error).__name__}: {error}）"
             else:
-                raw_text = ""
-                portfolio_model_version = ""
                 decision = {
                     "market_light": str((market_regime or {}).get("light", "")),
-                    "market_comment": (
-                        NO_PICK_MESSAGE + "（型態 A Pass 1 紅藍軍審計全數淘汰）。"
-                        if audit_all_rejected
-                        else "今日型態 A 候選股皆未通過審計，建議觀望。"
-                    ),
+                    "market_comment": "今日型態 A 候選股皆被 Stage 0 硬性排雷攔截，建議觀望。",
                     "top_picks": [],
                     "watchlist": [],
                     "avoid": [],
                 }
             if decision is not None:
-                decision = enforce_sector_cap(decision, analyzed)
-                decision = apply_audit_to_decision(decision, audit_records, selection_mode="rebound")
-                decision = merge_pre_filtered_avoid(decision, [*pre_filtered_avoid, *audit_rejected])
+                decision = merge_pre_filtered_avoid(decision, pre_filtered_avoid)
 
             # 只要有經過 AI 分析，即確保所有反彈標的皆生成戰情室 HTML 並發布至 GitHub，且 war_room_url 寫入 00_Watchlist_Master
             if ai_results:

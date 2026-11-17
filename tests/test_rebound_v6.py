@@ -279,3 +279,137 @@ class ReboundV6Tests(unittest.TestCase):
         self.assertEqual(r["TP1_Target_Or_POC"], 626.0)
         self.assertEqual(r["Audit_Grade"], "A_TIER_PULLBACK")
 
+    def test_v61_strategic_tech_and_chip_package_and_support_locator(self) -> None:
+        from finmind_stock_scanner import build_market_daily_trend_block, build_strategic_tech_and_chip_package
+
+        dates = pd.date_range("2026-08-01", periods=65, freq="B")
+        closes = [2500.0 + i * 4.0 for i in range(65)]
+        opens = [c - 10.0 for c in closes]
+        highs = [c + 20.0 for c in closes]
+        lows = [c - 30.0 for c in closes]
+        vols = [2_500_000] * 65
+        vols[-10] = 6_500_000  # High-volume bullish support bar
+        df_p = pd.DataFrame(
+            {
+                "stock_id": ["3017"] * 65,
+                "date": dates,
+                "open": opens,
+                "max": highs,
+                "min": lows,
+                "close": closes,
+                "Trading_Volume": vols,
+            }
+        )
+        df_chip = pd.DataFrame(
+            {
+                "date": [d.strftime("%Y-%m-%d") for d in dates[-25:]],
+                "foreign_net_lots": [120.0] * 25,
+                "trust_net_lots": [350.0] * 25,
+                "dealer_net_lots": [-10.0] * 25,
+                "margin_chg_lots": [-25.0] * 25,
+                "margin_balance_lots": [2900.0] * 25,
+            }
+        )
+        pkg = build_strategic_tech_and_chip_package(
+            "3017",
+            "奇鋐",
+            df_p,
+            daily_chip_df=df_chip,
+            forward_eps=115.0,
+            peer_median_pe=20.0,
+            annual_cash_dividend=20.88,
+            selection_mode="trend",
+        )
+        block = str(pkg["prompt_block"])
+        self.assertIn("Python 大量支撐定位器", block)
+        self.assertIn("下檔大量支撐區 #1", block)
+        self.assertIn("法人買超持倉成本錨點 (VWAP)", block)
+        self.assertIn("近 20 個交易日「價、量、五線歷史均線、KD/RSI/MACD、三大法人、融資」逐日對齊明細表", block)
+        self.assertIsNotNone(pkg["trust_vwap_20d"])
+        self.assertIsNotNone(pkg["foreign_vwap_20d"])
+
+        df_mkt = df_p.copy()
+        df_mkt["stock_id"] = "0050"
+        mkt_block = build_market_daily_trend_block(df_mkt, benchmark_id="0050", days=10)
+        self.assertIn("台股大盤基準 (0050) 近 10 交易日", mkt_block)
+
+    def test_v61_quality_selection_and_strategic_entry_planner_batch(self) -> None:
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        from quant.alignment_ai_picker import (
+            parse_quality_selection_json,
+            parse_strategic_layout_json,
+            run_quality_selection,
+            run_strategic_entry_planner,
+        )
+
+        q_json = (
+            '{"selection_summary": "散熱龍頭基本面強勁", '
+            '"quality_picks": [{"rank": 1, "stock_id": "3017", "stock_name": "奇鋐", '
+            '"sector": "散熱", "quality_score": 92, "quality_grade": "S_TIER_CORE", '
+            '"outlook_verdict": "高度可信", "fundamental_moat_and_catalysts": "三率連增", '
+            '"chip_and_institutional_backing": "投信鎖碼", "fundamental_invalidation": "營收衰退"}], '
+            '"watchlist": [], "avoid": []}'
+        )
+        s_json = (
+            '{"market_light": "🟡黃燈", "recommended_total_exposure_pct": 60, '
+            '"market_comment": "美股費半穩健，建議總倉位60%分批低接", '
+            '"strategic_picks": [{"rank": 1, "stock_id": "3017", "stock_name": "奇鋐", '
+            '"sector": "散熱", "score": 90, "allocation_weight_pct": 50, '
+            '"tactical_type": "🎯 強勢股拉回三階低接", '
+            '"current_tech_and_chip_diagnosis": "等待回測17MA與投信成本區", '
+            '"tier1_entry": "【第1批 30% 試單】2,680~2,700元（回踩17MA）", '
+            '"tier2_entry": "【第2批 40% 核心】2,600~2,630元（投信成本與大量區）", '
+            '"tier3_entry": "【第3批 30% 黃金坑】2,500~2,540元（季線防守）", '
+            '"weighted_avg_entry_price": "2,612.00", "chase_limit_price": "2,720.00", '
+            '"target_price_1": "2,950.00", "target_price_2": "3,200.00", '
+            '"stop_loss_price": "2,420.00", "invalidation_rule": "跌破季線且投信連賣"}]}'
+        )
+        with patch(
+            "quant.alignment_ai_picker.run_vertex_batch_requests",
+            new=AsyncMock(return_value={"QUALITY_SELECT_STAGE2": SimpleNamespace(text=q_json)}),
+        ) as mock_q_batch:
+            asyncio.run(
+                run_quality_selection(
+                    ["dossier 3017"],
+                    max_top=5,
+                    selection_mode="trend",
+                    use_vertex_batch=True,
+                    task_type="AI_PICK_QUALITY_SELECT",
+                )
+            )
+            _, q_kwargs = mock_q_batch.call_args
+            self.assertEqual(q_kwargs["task_type"], "AI_PICK_QUALITY_SELECT")
+
+        parsed_q = parse_quality_selection_json(q_json, {"3017"}, 5)
+        self.assertIsNotNone(parsed_q)
+        self.assertEqual(parsed_q["quality_picks"][0]["stock_id"], "3017")
+
+        with patch(
+            "quant.alignment_ai_picker.run_vertex_batch_requests",
+            new=AsyncMock(return_value={"STRATEGIC_LAYOUT_STAGE3": SimpleNamespace(text=s_json)}),
+        ) as mock_s_batch:
+            asyncio.run(
+                run_strategic_entry_planner(
+                    ["strategic block 3017"],
+                    macro_block="SOX +1.5%",
+                    market_daily_block="TAIEX 10d table",
+                    selection_mode="rebound",
+                    use_vertex_batch=True,
+                    task_type="REBOUND_STRATEGIC_LAYOUT",
+                )
+            )
+            s_args, s_kwargs = mock_s_batch.call_args
+            self.assertEqual(s_kwargs["task_type"], "REBOUND_STRATEGIC_LAYOUT")
+            prompt_sent = s_args[0]["STRATEGIC_LAYOUT_STAGE3"]
+            self.assertIn("17MA 是上方反壓（TP1），絕非支撐", prompt_sent)
+            self.assertIn("SOX +1.5%", prompt_sent)
+
+        parsed_s = parse_strategic_layout_json(s_json, {"3017"}, 5)
+        self.assertIsNotNone(parsed_s)
+        self.assertEqual(parsed_s["recommended_total_exposure_pct"], 60)
+        self.assertEqual(parsed_s["strategic_picks"][0]["allocation_weight_pct"], 50)
+        self.assertIn("2,680~2,700", parsed_s["strategic_picks"][0]["tier1_entry"])
+
+

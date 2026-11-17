@@ -1314,9 +1314,94 @@ class FundamentalCacheManager:
 
         out = pd.DataFrame([row])
         out = out[[c for c in SHEET_SCHEMAS["07_Chip_Summary"] if c in out.columns]].copy()
+        try:
+            self._save_daily_chip_history(stock_id, df_inst, df_margin)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Daily chip history save skipped for %s: %s", stock_id, exc)
         full = self._stitch_simple(df_sheet, out, key_col="pk_key")
         delta = self._delta_by_content(df_sheet, full, key_col="pk_key")
         return full, delta, warnings
+
+    def _daily_chip_cache_path(self, stock_id: str) -> Path:
+        base_dir = Path("finmind_reports/.state/daily_chips")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        return base_dir / f"{stock_id.strip()}.csv"
+
+    def _save_daily_chip_history(
+        self,
+        stock_id: str,
+        df_inst: pd.DataFrame | None,
+        df_margin: pd.DataFrame | None,
+    ) -> pd.DataFrame:
+        foreign_names = ("Foreign_Investor", "Foreign_Dealer_Self")
+        trust_names = ("Investment_Trust",)
+        dealer_names = ("Dealer_self", "Dealer_Hedging", "Dealer")
+
+        inst_daily = pd.DataFrame(columns=["date", "foreign_net_lots", "trust_net_lots", "dealer_net_lots"])
+        if df_inst is not None and not df_inst.empty and {"date", "name", "buy", "sell"}.issubset(df_inst.columns):
+            work = df_inst.copy()
+            work["date"] = work["date"].astype(str)
+            work["net_lots"] = (
+                pd.to_numeric(work["buy"], errors="coerce").fillna(0.0)
+                - pd.to_numeric(work["sell"], errors="coerce").fillna(0.0)
+            ) / 1000.0
+            f_s = work[work["name"].isin(foreign_names)].groupby("date")["net_lots"].sum().round(1)
+            t_s = work[work["name"].isin(trust_names)].groupby("date")["net_lots"].sum().round(1)
+            d_s = work[work["name"].isin(dealer_names)].groupby("date")["net_lots"].sum().round(1)
+            all_dates = sorted(set(work["date"].unique()))
+            inst_daily = pd.DataFrame({"date": all_dates})
+            inst_daily["foreign_net_lots"] = inst_daily["date"].map(f_s).fillna(0.0)
+            inst_daily["trust_net_lots"] = inst_daily["date"].map(t_s).fillna(0.0)
+            inst_daily["dealer_net_lots"] = inst_daily["date"].map(d_s).fillna(0.0)
+
+        margin_daily = pd.DataFrame(columns=["date", "margin_chg_lots", "margin_balance_lots"])
+        if df_margin is not None and not df_margin.empty and "date" in df_margin.columns:
+            m_work = df_margin.copy().sort_values("date").drop_duplicates(subset=["date"], keep="last").reset_index(drop=True)
+            m_work["date"] = m_work["date"].astype(str)
+            m_work["margin_balance_lots"] = pd.to_numeric(m_work.get("MarginPurchaseTodayBalance"), errors="coerce")
+            m_work["margin_chg_lots"] = m_work["margin_balance_lots"].diff().round(1)
+            margin_daily = m_work[["date", "margin_chg_lots", "margin_balance_lots"]]
+
+        if inst_daily.empty and margin_daily.empty:
+            return pd.DataFrame()
+        merged = pd.merge(inst_daily, margin_daily, on="date", how="outer").sort_values("date").reset_index(drop=True)
+        path = self._daily_chip_cache_path(stock_id)
+        merged.to_csv(path, index=False, encoding="utf-8")
+        return merged
+
+    def get_daily_chip_history(self, stock_id: str, days: int = 60, *, max_stale_days: int = 1) -> pd.DataFrame:
+        """SASD v6.1：取得個股近 days 日逐日三大法人買賣超與融資餘額/增減明細（優先讀當日有效快取，逾期則重抓）。"""
+        path = self._daily_chip_cache_path(stock_id)
+        today = _today_in_taipei()
+        if path.is_file():
+            try:
+                mtime_date = datetime.fromtimestamp(path.stat().st_mtime, tz=TAIPEI_TZ).date()
+                cached = pd.read_csv(path, dtype={"date": str})
+                if not cached.empty and "date" in cached.columns and (today - mtime_date).days <= max_stale_days:
+                    return cached.tail(days).reset_index(drop=True)
+            except Exception:  # noqa: BLE001
+                pass
+        start_date = (today - timedelta(days=max(days + 15, 65))).isoformat()
+        try:
+            df_inst = self._finmind.get_data(
+                dataset="TaiwanStockInstitutionalInvestorsBuySell",
+                data_id=stock_id,
+                start_date=start_date,
+                end_date=today.isoformat(),
+            )
+        except Exception:  # noqa: BLE001
+            df_inst = None
+        try:
+            df_margin = self._finmind.get_data(
+                dataset="TaiwanStockMarginPurchaseShortSale",
+                data_id=stock_id,
+                start_date=start_date,
+                end_date=today.isoformat(),
+            )
+        except Exception:  # noqa: BLE001
+            df_margin = None
+        saved = self._save_daily_chip_history(stock_id, df_inst, df_margin)
+        return saved.tail(days).reset_index(drop=True) if not saved.empty else pd.DataFrame()
 
     def _update_watchlist_master(
         self,

@@ -335,7 +335,24 @@ def add_momentum_indicators(prices: pd.DataFrame) -> pd.DataFrame:
     ema26 = result["close"].ewm(span=26, adjust=False).mean()
     dif = ema12 - ema26
     dea = dif.ewm(span=9, adjust=False).mean()
+    result["MACD_DIF"] = dif.round(4)
+    result["MACD_DEA"] = dea.round(4)
     result["MACD_OSC"] = (dif - dea).round(4)
+
+    delta = result["close"].diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / 14.0, min_periods=1, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / 14.0, min_periods=1, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0.0, float("nan"))
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    result["RSI14"] = rsi.fillna(50.0).clip(0.0, 100.0).round(2)
+
+    bb_mid = result["close"].rolling(window=20, min_periods=5).mean()
+    bb_std = result["close"].rolling(window=20, min_periods=5).std(ddof=0).fillna(0.0)
+    result["BB_MID"] = bb_mid.round(2)
+    result["BB_UPPER"] = (bb_mid + 2.0 * bb_std).round(2)
+    result["BB_LOWER"] = (bb_mid - 2.0 * bb_std).round(2)
 
     high_col = "high" if "high" in result.columns else ("max" if "max" in result.columns else None)
     low_col = "low" if "low" in result.columns else ("min" if "min" in result.columns else None)
@@ -677,6 +694,390 @@ def compute_rebound_trade_setup(
             "tier3_extreme_left_foot": f"{tier3_low:.2f}~{tier3_high:.2f}（前波左腳低點防守區）",
         },
     }
+
+
+def _classify_candle_shadow(open_p: float, high_p: float, low_p: float, close_p: float) -> str:
+    rng = high_p - low_p
+    if rng <= 0:
+        return "一字/平盤"
+    body = abs(close_p - open_p)
+    upper = high_p - max(open_p, close_p)
+    lower = min(open_p, close_p) - low_p
+    if lower >= rng * 0.42 and lower > upper * 1.3:
+        return "🛡️長下影承接"
+    if upper >= rng * 0.42 and upper > lower * 1.3:
+        return "⚠️長上影壓力"
+    if close_p > open_p and body >= rng * 0.65:
+        return "🔥實體長紅"
+    if close_p < open_p and body >= rng * 0.65:
+        return "🌧️實體長黑"
+    return "一般震盪"
+
+
+def build_strategic_tech_and_chip_package(
+    stock_id: str,
+    stock_name: str,
+    prices: pd.DataFrame,
+    *,
+    daily_chip_df: pd.DataFrame | None = None,
+    forward_eps: float | None = None,
+    peer_median_pe: float | None = None,
+    annual_cash_dividend: float | None = None,
+    selection_mode: str = "trend",
+) -> dict[str, object]:
+    """SASD v6.1：為 AI #3 組裝單一績優股之「20日逐日價量均線指標籌碼合一表」與「三大大量支撐定位器 + 60/120日結構錨點」。"""
+    norm = _normalize_ohlcv(prices)
+    if norm.empty:
+        return {"prompt_block": f"### {stock_id} {stock_name}（無日線資料）"}
+
+    enriched = add_momentum_indicators(norm)
+    for period in MOVING_AVERAGE_PERIODS:
+        col = f"MA{period}"
+        if col not in enriched.columns or enriched[col].isna().all():
+            enriched[col] = enriched["close"].rolling(window=period, min_periods=1).mean()
+        else:
+            enriched[col] = pd.to_numeric(enriched[col], errors="coerce").fillna(
+                enriched["close"].rolling(window=period, min_periods=1).mean()
+            )
+    if "vol_lots" not in enriched.columns:
+        vol_s = pd.to_numeric(enriched["volume"], errors="coerce").fillna(0.0)
+        is_shares = "Trading_Volume" in prices.columns or ("vol_lots" not in prices.columns and vol_s.max() > 500_000)
+        enriched["vol_lots"] = (vol_s / 1000.0).round(0) if is_shares else vol_s.round(0)
+    else:
+        enriched["vol_lots"] = pd.to_numeric(enriched["vol_lots"], errors="coerce").fillna(0.0).round(0)
+    enriched["vol_ma5_lots"] = enriched["vol_lots"].rolling(window=5, min_periods=1).mean().round(0)
+    enriched["vol_ma20_lots"] = enriched["vol_lots"].rolling(window=20, min_periods=1).mean().round(0)
+    enriched["date_str"] = enriched["date"].dt.strftime("%Y-%m-%d")
+    enriched["pct_chg"] = (enriched["close"].pct_change() * 100.0).fillna(0.0).round(2)
+
+    # 合併逐日三大法人與融資明細
+    chip_cols = ["foreign_net_lots", "trust_net_lots", "dealer_net_lots", "margin_chg_lots", "margin_balance_lots"]
+    if daily_chip_df is not None and not daily_chip_df.empty and "date" in daily_chip_df.columns:
+        c_df = daily_chip_df.copy()
+        c_df["date_str"] = pd.to_datetime(c_df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        c_df = c_df.dropna(subset=["date_str"]).drop_duplicates(subset=["date_str"], keep="last")
+        keep_c = ["date_str", *[c for c in chip_cols if c in c_df.columns]]
+        enriched = pd.merge(enriched, c_df[keep_c], on="date_str", how="left")
+    for c in chip_cols:
+        if c not in enriched.columns:
+            enriched[c] = float("nan")
+        enriched[c] = pd.to_numeric(enriched[c], errors="coerce")
+
+    close_t = float(enriched["close"].iloc[-1])
+    atr = compute_atr(enriched) or round(close_t * 0.03, 2)
+    w60 = enriched.tail(60).copy()
+    w120 = enriched.tail(120).copy()
+
+    # 1) 三大大量支撐定位器 (High-Volume Support Locator)
+    # 1A. 60日分價量表 (Volume Profile: POC / VAH / VAL + 現價下方最大量支撐區 Lower Support POC #1 & #2)
+    poc_60d = compute_volume_poc(w60) or close_t
+    w60["typical_price"] = (w60["high"] + w60["low"] + w60["close"]) / 3.0
+    total_v60 = float(w60["vol_lots"].sum()) or 1.0
+    p_min_60, p_max_60 = float(w60["low"].min()), float(w60["high"].max())
+    n_bins = 12
+    lower_support_nodes: list[str] = []
+    vah_60d, val_60d = round_tw_tick(p_max_60), round_tw_tick(p_min_60)
+    if p_max_60 > p_min_60 and len(w60) >= 5:
+        bin_edges = [p_min_60 + i * (p_max_60 - p_min_60) / n_bins for i in range(n_bins + 1)]
+        bin_vols: list[tuple[float, float, float, float]] = []
+        for b_idx in range(n_bins):
+            b_lo, b_hi = bin_edges[b_idx], bin_edges[b_idx + 1]
+            b_mid = (b_lo + b_hi) / 2.0
+            mask = (w60["typical_price"] >= b_lo) & (
+                w60["typical_price"] <= b_hi if b_idx == n_bins - 1 else w60["typical_price"] < b_hi
+            )
+            v_sum = float(w60.loc[mask, "vol_lots"].sum())
+            bin_vols.append((b_lo, b_hi, b_mid, v_sum))
+        sorted_bins = sorted(bin_vols, key=lambda x: x[3], reverse=True)
+        acc_v = 0.0
+        va_lows, va_highs = [], []
+        for b_lo, b_hi, _b_mid, v_sum in sorted_bins:
+            va_lows.append(b_lo)
+            va_highs.append(b_hi)
+            acc_v += v_sum
+            if acc_v >= total_v60 * 0.70:
+                break
+        if va_lows and va_highs:
+            val_60d = round_tw_tick(min(va_lows))
+            vah_60d = round_tw_tick(max(va_highs))
+        below_bins = [b for b in sorted_bins if b[0] <= close_t * 1.01 and b[3] > 0]
+        for rank_i, (b_lo, b_hi, _b_mid, v_sum) in enumerate(below_bins[:2], start=1):
+            share_pct = round(v_sum / total_v60 * 100.0, 1)
+            lower_support_nodes.append(
+                f"下檔大量支撐區 #{rank_i}：{round_tw_tick(b_lo):.2f}~{round_tw_tick(b_hi):.2f} 元"
+                f"（累計 {int(v_sum):,} 張，佔60日量 {share_pct}%）"
+            )
+    if not lower_support_nodes:
+        lower_support_nodes.append(f"現價處於近60日底部區（60日最低 {round_tw_tick(p_min_60):.2f} 元）")
+
+    # 1B. 近60日前3大「爆量紅K／長下影線承接日」防守低點
+    bull_mask = (w60["vol_lots"] >= w60["vol_ma20_lots"] * 1.2) & (
+        (w60["close"] >= w60["open"])
+        | ((w60[["open", "close"]].min(axis=1) - w60["low"]) >= (w60["high"] - w60["low"]) * 0.38)
+    )
+    bull_bars = w60.loc[bull_mask].nlargest(3, "vol_lots")
+    if bull_bars.empty:
+        bull_bars = w60.nlargest(3, "vol_lots")
+    key_bullish_bars: list[str] = []
+    for _, brow in bull_bars.iterrows():
+        f_txt = f"，外資{brow['foreign_net_lots']:+.0f}張" if pd.notna(brow.get("foreign_net_lots")) else ""
+        t_txt = f"，投信{brow['trust_net_lots']:+.0f}張" if pd.notna(brow.get("trust_net_lots")) else ""
+        key_bullish_bars.append(
+            f"[{brow['date_str']}] 爆量 {int(brow['vol_lots']):,} 張（20MA量 {int(brow['vol_ma20_lots']):,} 張）"
+            f"｜鐵板防守低點 {float(brow['low']):.2f} 元 ～ 收盤 {float(brow['close']):.2f} 元{t_txt}{f_txt}"
+        )
+
+    # 1C. 投信／外資近20日與60日買超加權成本均價 (Institutional VWAP) 與最大買超日
+    def _calc_inst_vwap(df_window: pd.DataFrame, col_name: str) -> float | None:
+        sub = df_window.dropna(subset=[col_name]).loc[lambda d: d[col_name] > 0]
+        if sub.empty:
+            return None
+        w_sum = float(sub[col_name].sum())
+        if w_sum <= 0:
+            return None
+        typ = (sub["high"] + sub["low"] + sub["close"]) / 3.0
+        return round_tw_tick(float((typ * sub[col_name]).sum() / w_sum))
+
+    w20 = enriched.tail(20).copy()
+    trust_vwap_20 = _calc_inst_vwap(w20, "trust_net_lots")
+    trust_vwap_60 = _calc_inst_vwap(w60, "trust_net_lots")
+    foreign_vwap_20 = _calc_inst_vwap(w20, "foreign_net_lots")
+    foreign_vwap_60 = _calc_inst_vwap(w60, "foreign_net_lots")
+
+    top_inst_days: list[str] = []
+    if w60["trust_net_lots"].notna().any() or w60["foreign_net_lots"].notna().any():
+        w60["inst_buy_score"] = w60["trust_net_lots"].fillna(0.0) * 1.5 + w60["foreign_net_lots"].fillna(0.0)
+        top_inst = w60.loc[w60["inst_buy_score"] > 0].nlargest(3, "inst_buy_score")
+        for _, irow in top_inst.iterrows():
+            t_v = 0.0 if pd.isna(irow.get("trust_net_lots")) else float(irow["trust_net_lots"])
+            f_v = 0.0 if pd.isna(irow.get("foreign_net_lots")) else float(irow["foreign_net_lots"])
+            top_inst_days.append(
+                f"[{irow['date_str']}] 區間 {float(irow['low']):.2f}~{float(irow['close']):.2f} 元"
+                f"（投信 {t_v:+.0f} 張 / 外資 {f_v:+.0f} 張）"
+            )
+
+    # 2) 近60/120日高低點、黃金分割回檔、未回補跳空缺口、均線斜率與未來5日扣抵價、基本面價值鐵底
+    h60_idx, l60_idx = w60["high"].idxmax(), w60["low"].idxmin()
+    h60_val, h60_date = float(w60.loc[h60_idx, "high"]), str(w60.loc[h60_idx, "date_str"])
+    l60_val, l60_date = float(w60.loc[l60_idx, "low"]), str(w60.loc[l60_idx, "date_str"])
+    h120_val = float(w120["high"].max())
+    l120_val = float(w120["low"].min())
+    span_60 = max(h60_val - l60_val, 0.01)
+    fib_236 = round_tw_tick(h60_val - 0.236 * span_60)
+    fib_382 = round_tw_tick(h60_val - 0.382 * span_60)
+    fib_500 = round_tw_tick(h60_val - 0.500 * span_60)
+    fib_618 = round_tw_tick(h60_val - 0.618 * span_60)
+    fib_786 = round_tw_tick(h60_val - 0.786 * span_60)
+
+    # 未回補跳空缺口 (Unfilled Gaps in 60d)
+    unfilled_up_gaps: list[str] = []
+    unfilled_down_gaps: list[str] = []
+    w60_reset = w60.reset_index(drop=True)
+    for idx in range(1, len(w60_reset)):
+        prev_hi = float(w60_reset.loc[idx - 1, "high"])
+        prev_lo = float(w60_reset.loc[idx - 1, "low"])
+        cur_lo = float(w60_reset.loc[idx, "low"])
+        cur_hi = float(w60_reset.loc[idx, "high"])
+        g_date = str(w60_reset.loc[idx, "date_str"])
+        subsequent = w60_reset.iloc[idx + 1 :]
+        if cur_lo > prev_hi * 1.003:
+            min_after = float(subsequent["low"].min()) if not subsequent.empty else cur_lo
+            if min_after > prev_hi:
+                unfilled_up_gaps.append(f"[{g_date} 向上突破缺口支撐] {prev_hi:.2f}~{cur_lo:.2f} 元")
+        elif cur_hi < prev_lo * 0.997:
+            max_after = float(subsequent["high"].max()) if not subsequent.empty else cur_hi
+            if max_after < prev_lo:
+                unfilled_down_gaps.append(f"[{g_date} 向下跳空缺口反壓] {cur_hi:.2f}~{prev_lo:.2f} 元")
+
+    # 五線均線斜率與未來5日扣抵價
+    last_r = enriched.iloc[-1]
+    ma_deduction_parts: list[str] = []
+    for p in (3, 17, 45, 117, 189):
+        ma_v = float(last_r.get(f"MA{p}") or close_t)
+        bias_pct = (close_t - ma_v) / ma_v * 100.0 if ma_v > 0 else 0.0
+        prev5_idx = max(0, len(enriched) - 6)
+        ma_prev5 = float(enriched.iloc[prev5_idx].get(f"MA{p}") or ma_v)
+        slope5 = (ma_v - ma_prev5) / ma_prev5 * 100.0 if ma_prev5 > 0 else 0.0
+        if p >= 5 and len(enriched) >= p:
+            ded_idx = min(len(enriched) - 1, max(0, len(enriched) - p + 4))
+            ded_price = float(enriched.iloc[ded_idx]["close"])
+            ded_txt = f"/5日後扣抵{ded_price:.2f}"
+        else:
+            ded_txt = ""
+        ma_deduction_parts.append(
+            f"MA{p}={ma_v:.2f}(乖離{bias_pct:+.1f}%/5日斜率{slope5:+.1f}%{ded_txt})"
+        )
+
+    # 基本面價值鐵底參考價
+    val_floors: list[str] = []
+    if forward_eps and forward_eps > 0:
+        conservative_pe = max(10.0, (peer_median_pe or 16.0) * 0.78)
+        pe_floor = round_tw_tick(forward_eps * conservative_pe)
+        val_floors.append(f"本業前瞻EPS保守估值底({conservative_pe:.1f}x PE)={pe_floor:.2f}元")
+    if annual_cash_dividend and annual_cash_dividend > 0:
+        div_4pct_floor = round_tw_tick(annual_cash_dividend / 0.04)
+        val_floors.append(f"4%殖利率保護價={div_4pct_floor:.2f}元")
+
+    # 3) 組裝近 20 個交易日「價、量、五線均線、KD/RSI/MACD、三大法人、融資」合一逐日大表
+    table_lines = [
+        "| 日期 | 開盤 | 最高 | 最低 | 收盤 | 漲跌% | K棒特徵 | 量(張)/20MA量 | MA3 | MA17 | MA45 | MA117 | MA189 | K9/D9 | RSI14 | MACD柱 | 外資(張) | 投信(張) | 融資增減(餘額) |",
+        "|:---|---:|---:|---:|---:|---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for _, r in w20.iterrows():
+        c_tag = _classify_candle_shadow(float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
+        f_str = f"{r['foreign_net_lots']:+.0f}" if pd.notna(r.get("foreign_net_lots")) else "-"
+        t_str = f"{r['trust_net_lots']:+.0f}" if pd.notna(r.get("trust_net_lots")) else "-"
+        if pd.notna(r.get("margin_chg_lots")) and pd.notna(r.get("margin_balance_lots")):
+            m_str = f"{r['margin_chg_lots']:+.0f}({int(r['margin_balance_lots'])})"
+        elif pd.notna(r.get("margin_balance_lots")):
+            m_str = f"-({int(r['margin_balance_lots'])})"
+        else:
+            m_str = "-"
+        table_lines.append(
+            f"| {r['date_str']} | {float(r['open']):.2f} | {float(r['high']):.2f} | {float(r['low']):.2f} | "
+            f"{float(r['close']):.2f} | {float(r['pct_chg']):+.2f}% | {c_tag} | "
+            f"{int(r['vol_lots'])}/{int(r['vol_ma20_lots'])} | {float(r['MA3']):.2f} | {float(r['MA17']):.2f} | "
+            f"{float(r['MA45']):.2f} | {float(r['MA117']):.2f} | {float(r['MA189']):.2f} | "
+            f"{float(r['K9']):.1f}/{float(r['D9']):.1f} | {float(r['RSI14']):.1f} | {float(r['MACD_OSC']):+.2f} | "
+            f"{f_str} | {t_str} | {m_str} |"
+        )
+
+    # 預設三階回檔錨點供 Python 兜底與 AI #3 參考
+    if (selection_mode or "").strip().lower() == "rebound":
+        base_setup = compute_rebound_trade_setup(enriched) or {}
+        anchor_tiers = base_setup.get("anchor_tiers") or {}
+        t1_ref = str(anchor_tiers.get("tier1_aggressive_support") or f"{round_tw_tick(close_t * 0.98):.2f}")
+        t2_ref = str(anchor_tiers.get("tier2_steady_washout") or f"{fib_618:.2f}~{fib_500:.2f}")
+        t3_ref = str(anchor_tiers.get("tier3_extreme_left_foot") or f"{l60_val:.2f}~{fib_786:.2f}")
+        chase_lim = float(base_setup.get("chase_limit_price") or round_tw_tick(close_t))
+        hard_sl = float(base_setup.get("hard_stop_loss") or round_tw_tick(l60_val * 0.98))
+        tp1_def = float(base_setup.get("tp1_price") or round_tw_tick(float(last_r["MA17"])))
+    else:
+        ma17_v = float(last_r["MA17"])
+        ma45_v = float(last_r["MA45"])
+        ma117_v = float(last_r["MA117"])
+        t1_low = round_tw_tick(min(close_t * 0.985, max(ma17_v, fib_236)))
+        t1_high = round_tw_tick(min(close_t * 0.995, max(t1_low, close_t - 0.3 * atr)))
+        t2_low = round_tw_tick(min(ma17_v, fib_382))
+        t2_high = round_tw_tick(max(ma17_v, fib_382))
+        t3_low = round_tw_tick(min(ma45_v, fib_618))
+        t3_high = round_tw_tick(max(ma45_v, fib_500))
+        t1_ref = f"{min(t1_low, t1_high):.2f}~{max(t1_low, t1_high):.2f}（回測5MA~17MA/0.236回檔量縮區）"
+        t2_ref = f"{t2_low:.2f}~{t2_high:.2f}（回測17MA與0.382黃金分割核心支撐區）"
+        t3_ref = f"{t3_low:.2f}~{t3_high:.2f}（大盤急殺回測45MA季線/0.618黃金坑防守區）"
+        chase_lim = round_tw_tick(min(close_t, ma17_v * 1.06))
+        hard_sl = round_tw_tick(min(ma45_v * 0.97, ma117_v, close_t - 2.2 * atr))
+        tp1_def = round_tw_tick(max(h60_val, close_t + 2.5 * atr))
+
+    prompt_lines = [
+        f"#### 📌 【{stock_id} {stock_name} — 技術、籌碼與大量支撐定位全覽】",
+        f"- **最新收盤**：{close_t:.2f} 元｜ATR(14)：{atr:.2f} 元｜布林通道(20,2)：上軌 {float(last_r['BB_UPPER']):.2f} / 中軌 {float(last_r['BB_MID']):.2f} / 下軌 {float(last_r['BB_LOWER']):.2f}",
+        f"- **五線均線位階、斜率與未來5日扣抵價**：{' ｜ '.join(ma_deduction_parts)}",
+        f"- **動能指標現況**：K9={float(last_r['K9']):.2f}, D9={float(last_r['D9']):.2f}｜RSI(14)={float(last_r['RSI14']):.2f}｜MACD_DIF={float(last_r['MACD_DIF']):+.3f}, DEA={float(last_r['MACD_DEA']):+.3f}, OSC柱={float(last_r['MACD_OSC']):+.3f}",
+        "- **🎯 【Python 大量支撐定位器（一眼看出下檔鐵板支撐價位）】**：",
+        f"  1. **60日分價量密集區 (Volume Profile)**：全區最大量 POC={round_tw_tick(poc_60d):.2f} 元｜70%籌碼密集區 VAL={val_60d:.2f} ~ VAH={vah_60d:.2f} 元｜" + "；".join(lower_support_nodes),
+        "  2. **近60日關鍵爆量紅K／長下影承接防守價**：" + ("；".join(key_bullish_bars) if key_bullish_bars else "無明顯爆量紅K"),
+        (
+            f"  3. **法人買超持倉成本錨點 (VWAP)**：投信 20日成本={f'{trust_vwap_20:.2f}元' if trust_vwap_20 else '無買超'} / 60日成本={f'{trust_vwap_60:.2f}元' if trust_vwap_60 else '無買超'}"
+            f"｜外資 20日成本={f'{foreign_vwap_20:.2f}元' if foreign_vwap_20 else '無買超'} / 60日成本={f'{foreign_vwap_60:.2f}元' if foreign_vwap_60 else '無買超'}"
+            + (f"｜法人大買日區間：{'；'.join(top_inst_days)}" if top_inst_days else "")
+        ),
+        (
+            f"- **📐 波段高低點與黃金分割回檔位**：近60日高點 {h60_val:.2f}({h60_date}) ～ 低點 {l60_val:.2f}({l60_date})"
+            f"（120日高低：{h120_val:.2f}~{l120_val:.2f}）｜回檔 0.236={fib_236:.2f} / 0.382={fib_382:.2f} / 0.500={fib_500:.2f} / 0.618={fib_618:.2f} / 0.786={fib_786:.2f}"
+        ),
+        (
+            "- **🕳️ 近60日未回補跳空缺口**："
+            + ("；".join(unfilled_up_gaps[-2:] + unfilled_down_gaps[-2:]) if (unfilled_up_gaps or unfilled_down_gaps) else "無未回補缺口")
+        ),
+        "- **🛡️ 基本面價值鐵底參考**：" + (" ｜ ".join(val_floors) if val_floors else "依長均線與前波低點防守"),
+        f"- **🧭 Python 預設三階回檔低接參考區（禁止現價 {close_t:.2f} 追高）**：第1批(30%) {t1_ref}｜第2批(40%) {t2_ref}｜第3批(30%) {t3_ref}｜硬停損參考 {hard_sl:.2f}｜TP1參考 {tp1_def:.2f}",
+        "- **📊 近 20 個交易日「價、量、五線歷史均線、KD/RSI/MACD、三大法人、融資」逐日對齊明細表**：",
+        *table_lines,
+    ]
+
+    return {
+        "stock_id": stock_id,
+        "close_t": round(close_t, 2),
+        "atr_14": round(atr, 2),
+        "poc_60d": round_tw_tick(poc_60d),
+        "val_60d": val_60d,
+        "vah_60d": vah_60d,
+        "lower_support_nodes": lower_support_nodes,
+        "key_bullish_bars": key_bullish_bars,
+        "trust_vwap_20d": trust_vwap_20,
+        "foreign_vwap_20d": foreign_vwap_20,
+        "tier1_default": t1_ref,
+        "tier2_default": t2_ref,
+        "tier3_default": t3_ref,
+        "chase_limit_price": chase_lim,
+        "hard_stop_loss": hard_sl,
+        "tp1_price": tp1_def,
+        "prompt_block": "\n".join(prompt_lines),
+    }
+
+
+def build_market_daily_trend_block(
+    prices: pd.DataFrame | None,
+    *,
+    benchmark_id: str = "0050",
+    margin_history_path: Path = Path("finmind_reports/.state/market_margin_history.json"),
+    days: int = 10,
+) -> str:
+    """SASD v6.1：組裝台股大盤基準近 10 日「收盤、漲跌%、成交量、五線均線、大盤整體融資餘額与增減」逐日趨勢表。"""
+    margin_map: dict[str, dict[str, object]] = {}
+    if margin_history_path.is_file():
+        try:
+            raw_m = json.loads(margin_history_path.read_text(encoding="utf-8"))
+            if isinstance(raw_m, dict):
+                margin_map = raw_m
+        except Exception:  # noqa: BLE001
+            margin_map = {}
+
+    sorted_m_dates = sorted(margin_map.keys())
+    margin_chg_by_date: dict[str, float] = {}
+    for idx, d_key in enumerate(sorted_m_dates):
+        cur_tot = _parse_optional_float((margin_map.get(d_key) or {}).get("total_margin_yi"))
+        prev_tot = _parse_optional_float((margin_map.get(sorted_m_dates[idx - 1]) or {}).get("total_margin_yi")) if idx > 0 else None
+        if cur_tot is not None and prev_tot is not None:
+            margin_chg_by_date[d_key] = round(cur_tot - prev_tot, 2)
+
+    if prices is None or prices.empty:
+        return "（無本地大盤逐日歷史日線）"
+
+    sub = prices.loc[prices["stock_id"].astype(str) == str(benchmark_id)].copy()
+    if sub.empty:
+        sub = prices.loc[prices["stock_id"].astype(str).isin(["TAIEX", "0050"])].copy()
+    if sub.empty:
+        return "（prices.csv 未包含大盤基準日線）"
+
+    norm = add_momentum_indicators(_normalize_ohlcv(sub))
+    for p in MOVING_AVERAGE_PERIODS:
+        c = f"MA{p}"
+        if c not in norm.columns or norm[c].isna().all():
+            norm[c] = norm["close"].rolling(window=p, min_periods=1).mean()
+    norm["date_str"] = norm["date"].dt.strftime("%Y-%m-%d")
+    norm["pct_chg"] = (norm["close"].pct_change() * 100.0).fillna(0.0).round(2)
+    recent = norm.tail(days)
+
+    lines = [
+        f"【台股大盤基準 ({benchmark_id}) 近 {len(recent)} 交易日價量、五線均線、KD/RSI/MACD 與大盤整體融資趨勢】",
+        "| 日期 | 收盤 | 漲跌% | MA3 | MA17 | MA45 | MA117 | MA189 | K9/D9 | RSI14 | MACD柱 | 大盤總融資(億) | 融資單日增減(億) |",
+        "|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for _, r in recent.iterrows():
+        ds = str(r["date_str"])
+        m_rec = margin_map.get(ds) or {}
+        m_tot = _parse_optional_float(m_rec.get("total_margin_yi"))
+        m_chg = margin_chg_by_date.get(ds)
+        lines.append(
+            f"| {ds} | {float(r['close']):.2f} | {float(r['pct_chg']):+.2f}% | "
+            f"{float(r['MA3']):.2f} | {float(r['MA17']):.2f} | {float(r['MA45']):.2f} | "
+            f"{float(r['MA117']):.2f} | {float(r['MA189']):.2f} | "
+            f"{float(r['K9']):.1f}/{float(r['D9']):.1f} | {float(r['RSI14']):.1f} | {float(r['MACD_OSC']):+.2f} | "
+            f"{f'{m_tot:.1f}' if m_tot is not None else '-'} | {f'{m_chg:+.1f}' if m_chg is not None else '-'} |"
+        )
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -4138,6 +4539,10 @@ def build_rebound_watchlist_rows(
                 "Deterministic_RR": det_rr,
                 "Bear_Case_Warning": str(aud.get("Bear_Case_Warning") or "").strip(),
                 "Invalidation_Triggers": triggers_str,
+                "Allocation_Weight_Pct": aud.get("Allocation_Weight_Pct", ""),
+                "Tier1_Entry_Plan": str(aud.get("Tier1_Entry_Plan") or "").strip(),
+                "Tier2_Entry_Plan": str(aud.get("Tier2_Entry_Plan") or "").strip(),
+                "Tier3_Entry_Plan": str(aud.get("Tier3_Entry_Plan") or "").strip(),
             }
         )
     return rows

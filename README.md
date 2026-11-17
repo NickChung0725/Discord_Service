@@ -408,23 +408,22 @@ pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r "C:\path\to
 1. **標準執行順序（21:30 `ai-pick` 與 22:00 `rebound-ai` 皆依序執行）**：
    * **Step 1 — Stage 0 細分產業分類 (`TAXONOMY`)**：僅針對 `08_Stock_Taxonomy`（TTL 90 天）尚未快取或過期之個股呼叫 Gemini 補齊；若候選股皆已快取則 0 筆 AI 呼叫。
    * **Step 2 — 量化預篩與 FinMind 財報同步（無 AI 紀錄）**：執行日量 `< 300 張` 攔截、FinMind API 速率限制（`FinMindRequestLimiter`）下逐檔同步月營收／財報／股利／籌碼與 Google Sheets 快取檢查（約耗時 5~10 分鐘，視快取命中率與 API 速率而定）。
-   * **Step 3 — Stage 1 單股基本面診斷 (`STAGE1_DIAGNOSIS` / `STAGE1_GROUNDING`)**：僅將當期快取未命中（Cache Miss）的標的打包送出 Vertex AI Batch（耗時約 3~5 分鐘）；若該股稍早已於同一交易日完成診斷（例如 21:30 已分析、22:00 再次入榜），會直接命中 `00_Watchlist_Master` 快取不再重複呼叫。BigQuery 的 `created_at_tw` 記錄的是**批次完成並歸檔的時間點**。
-   * **Step 4 — Stage 0 財務硬傷排雷 & Pass 1 紅藍軍審計 (`RED_BLUE_AUDIT`)**：剔除本業虧損且合約負債 `< 1 億` 標的（及超過 15 檔時依 Stage 1 評分保留前 12 檔），再抓取新聞量價對齊與籌碼微結構送交 Pass 1 紅藍軍審計。若所有候選股皆被審計評為 `REJECT_TRAP` 或 `NO_TRADE`（**Zero-Pick Veto**），`dossiers` 為空，系統將**直接跳過 Stage 2 跨股總決策**並發布空手觀望報告。
-   * **Step 5 — Stage 2 跨股總決策 (`STAGE2_PORTFOLIO`)**：僅在 Pass 1 仍有倖存標的時執行。
-   * **排程重疊說明**：當 21:30 `ai-pick` 的 Pass 1 批次排隊或推論耗時較久（例如超過 30 分鐘至 22:11 才完成）時，22:00 `rebound-ai` 會依排程準時啟動並先行執行自己的 Step 1 (`TAXONOMY`) 與 Step 2，兩者在 BigQuery 時間軸上會呈交錯紀錄。
+   * **Step 3 — AI #1：Stage 1 單股基本面與未來性深潛 (`STAGE1_DIAGNOSIS` / `STAGE1_GROUNDING`)**：僅將當期快取未命中（Cache Miss）的標的打包送出 Vertex AI Batch（移除 17MA 短線下彎對體質之扣分）；若該股稍早已於同一交易日完成診斷，會直接命中 `00_Watchlist_Master` 快取。
+   * **Step 4 — AI #2：跨股績優股選拔委員會 (`AI_PICK_QUALITY_SELECT` / `REBOUND_QUALITY_SELECT`)**：由 `gemini-4-argon`（Vertex AI Batch 單一跨股請求）純審視基本面三率/FCF（45%）、法說未來性與話題催化劑（35%）及法人與集保大戶底氣（20%），**選股與擇時徹底解耦**（豁免大盤紅燈、短線正乖離與 17MA 下彎；21:30 驗證業績成長真實性、22:00 進行急跌賣壓錯殺歸因），精選出 **Top 3~5 檔真績優股**。
+   * **Step 5 — Python 戰略武器庫組裝 ＋ AI #3：戰略低接點位與雙層籌碼分配軍師 (`AI_PICK_STRATEGIC_LAYOUT` / `REBOUND_STRATEGIC_LAYOUT`)**：僅針對入選之 Top 3~5 檔績優股，由 Python 提取「近 20 日 OHLC+影線+成交量+五線歷史均線+KD/RSI14/MACD+三大法人+個股融資逐日對齊大表」、「三大大量支撐定位器（現價下方分價量最大支撐區 Lower Support POC #1/#2、近60日爆量紅K/長下影承接防守低點、投信/外資 20d/60d 買超加權成本均價 VWAP）」、「台股大盤近 10 日價量均線與大盤融資趨勢」與「隔夜美股七大指標 (`SOX/IXIC/GSPC/TSM/NVDA/VIX/TWD`)」，交由 `gemini-4-argon`（Vertex AI Batch，21:30 順勢版與 22:00 反彈版專屬 Prompt 分流）輸出 **雙層資金配置（建議總持倉水位 % ＋ 各股權重 %）** 與 **三階金字塔回檔低接掛單（第1批 30% / 第2批 40% / 第3批 30%）**。
 
 2. **BigQuery `ai_prompt_logs.task_type` 識別碼一覽**：
 
 | 來源 / 排程 | `task_type` | 說明 |
 | :--- | :--- | :--- |
 | **21:30 `finmind-ai-pick`** | `AI_PICK_TAXONOMY` | Stage 0 細分產業分類補齊 |
-| **21:30 `finmind-ai-pick`** | `AI_PICK_STAGE1_DIAGNOSIS` / `AI_PICK_STAGE1_GROUNDING` | Stage 1 單股診斷（Batch / Online） |
-| **21:30 `finmind-ai-pick`** | `AI_PICK_RED_BLUE_AUDIT` | Pass 1 紅藍軍審計 |
-| **21:30 `finmind-ai-pick`** | `AI_PICK_STAGE2_PORTFOLIO` | Stage 2 跨股總決策 |
+| **21:30 `finmind-ai-pick`** | `AI_PICK_STAGE1_DIAGNOSIS` / `AI_PICK_STAGE1_GROUNDING` | AI #1：Stage 1 單股財報與未來性深潛（Batch / Online） |
+| **21:30 `finmind-ai-pick`** | `AI_PICK_QUALITY_SELECT` | AI #2：跨股績優股選拔委員會（選出 Top 3~5 真績優股） |
+| **21:30 `finmind-ai-pick`** | `AI_PICK_STRATEGIC_LAYOUT` | AI #3：戰略回檔低接點位與雙層籌碼分配軍師（順勢版） |
 | **22:00 `finmind-rebound-ai`** | `REBOUND_TAXONOMY` | Stage 0 細分產業分類補齊 |
-| **22:00 `finmind-rebound-ai`** | `REBOUND_STAGE1_DIAGNOSIS` / `REBOUND_STAGE1_GROUNDING` | Stage 1 單股診斷（Batch / Online） |
-| **22:00 `finmind-rebound-ai`** | `REBOUND_RED_BLUE_AUDIT` | Pass 1 紅藍軍審計 |
-| **22:00 `finmind-rebound-ai`** | `REBOUND_STAGE2_PORTFOLIO` | Stage 2 型態 A 反彈跨股總決策 |
+| **22:00 `finmind-rebound-ai`** | `REBOUND_STAGE1_DIAGNOSIS` / `REBOUND_STAGE1_GROUNDING` | AI #1：Stage 1 單股財報與未來性深潛（Batch / Online） |
+| **22:00 `finmind-rebound-ai`** | `REBOUND_QUALITY_SELECT` | AI #2：型態 A 反彈跨股績優股選拔與賣壓歸因 |
+| **22:00 `finmind-rebound-ai`** | `REBOUND_STRATEGIC_LAYOUT` | AI #3：型態 A 長均線三階回檔低接與雙層籌碼分配（反彈版） |
 | **Discord `/stock_ai`** | `STOCK_AI_CMD_DIAGNOSIS` | 即時單股完整體質診斷（無 `prompt`） |
 | **Discord `/stock_ai`** | `STOCK_AI_CMD_QUERY` | 即時單股專題追問（有 `prompt`） |
 | **Discord `/stock_ai`** | `STOCK_AI_CMD_COMPARE` | 即時多股橫向比較（多代號） |
