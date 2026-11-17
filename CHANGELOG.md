@@ -4,6 +4,19 @@
 
 ---
 
+## [v6.0.1] - 2026-11-17
+### 🔧 優化與修正 — `/stock_ai` 模型選項動態化與 BigQuery `task_type` 全來源精準區分
+* **BigQuery AI 日誌 `task_type` 全來源區分（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)、[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)、[`services/stock_ai_command.py`](/services/stock_ai_command.py)）**：
+  * 21:30 順勢選股（`run_pipeline`）改寫入 `AI_PICK_TAXONOMY`、`AI_PICK_STAGE1_DIAGNOSIS` / `AI_PICK_STAGE1_GROUNDING`、`AI_PICK_RED_BLUE_AUDIT`、`AI_PICK_STAGE2_PORTFOLIO`。
+  * 22:00 型態 A 反彈選股（`run_rebound_pipeline`）改寫入 `REBOUND_TAXONOMY`、`REBOUND_STAGE1_DIAGNOSIS` / `REBOUND_STAGE1_GROUNDING`、`REBOUND_RED_BLUE_AUDIT`、`REBOUND_STAGE2_PORTFOLIO`。
+  * Discord `/stock_ai` 即時指令改寫入 `STOCK_AI_CMD_DIAGNOSIS`（單股完整診斷）、`STOCK_AI_CMD_QUERY`（單股專題追問）、`STOCK_AI_CMD_COMPARE`（多股比較）與 `STOCK_AI_CMD_TAXONOMY`（產業補齊），解決排程與即時指令在 BigQuery 混雜難以歸因之問題。
+  * [`README.md`](/README.md) 補充「AI 選股執行步驟與 BigQuery `task_type` 對照表」；[`tests/test_bq_ai_logging.py`](/tests/test_bq_ai_logging.py) 新增對應單元測試。
+* **`/stock_ai` `tier` 選項與說明文字改由 `.env` 模型設定動態產生（[`services/stock_ai_command.py`](/services/stock_ai_command.py)）**：
+  * 移除寫死的 `"標準 (3.8 Flash)"` 與 `"大師 (ARGON)"`，改於註冊指令時讀取 `get_stage1_model()`（`STAGE1_MODEL`）與 `get_vertex_stage1_model()`（`VERTEX_STAGE1_MODEL`），動態組合 `標準 (<model>)` 與 `大師 (<model>)` 顯示名稱（內部值分別為 `"standard"` / `"master"`），並確保不超過 Discord 100 字元上限。
+* **新增單元測試（[`tests/test_stock_ai_command.py`](/tests/test_stock_ai_command.py)）**。
+
+---
+
 ## [v6.0.0] - 2026-11-16
 ### ✨ 新增功能 & 🔧 優化與修正 — SASD v6.0 型態 A 反彈雙劇本引擎、三層結構錨點、籌碼/基本面修復與紅藍軍全鏈路貫通
 * **修復 `01_Monthly_Revenue` 月增率 100 倍放大失真與戰略擴產負 FCF 豁免（[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)）**：

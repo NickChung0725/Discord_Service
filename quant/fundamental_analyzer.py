@@ -1713,7 +1713,13 @@ class FundamentalAnalyzer:
                 out[col] = (pd.to_numeric(out[col], errors="coerce") / 1e8).round(2)
         return out
 
-    def build_markdown_context(self, stock_id: str, include_outlook: bool = False) -> str:
+    def build_markdown_context(
+        self,
+        stock_id: str,
+        include_outlook: bool = False,
+        *,
+        taxonomy_task_type: str = "TAXONOMY",
+    ) -> str:
         df_wide = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
         df_is = self.cache._read_stock_rows(self.cache._get_worksheet("02_Income_Statement"), stock_id)  # noqa: SLF001
         df_bs = self.cache._read_stock_rows(self.cache._get_worksheet("03_Balance_Sheet"), stock_id)  # noqa: SLF001
@@ -1754,6 +1760,7 @@ class FundamentalAnalyzer:
                 stock_name=stock_name,
                 official_industry=official_industry,
                 sync_sheet=False,
+                task_type=taxonomy_task_type,
             )
             if not stock_name and tax_rec:
                 stock_name = str(tax_rec.get("stock_name", "")).strip()
@@ -2255,6 +2262,7 @@ class FundamentalAnalyzer:
         official_industry: str = "",
         *,
         cached_only: bool = False,
+        taxonomy_task_type: str = "TAXONOMY",
     ) -> str:
         """取得單股「🏷️ 細分產業｜🔗 相似同業」標籤；任何失敗皆回傳空字串，不影響診斷主流程。"""
         try:
@@ -2269,6 +2277,7 @@ class FundamentalAnalyzer:
                     stock_name=stock_name,
                     official_industry=official_industry,
                     sync_sheet=True,
+                    task_type=taxonomy_task_type,
                 )
             return format_taxonomy_badge(rec) if rec else ""
         except Exception as exc:  # noqa: BLE001
@@ -2292,6 +2301,7 @@ class FundamentalAnalyzer:
         *,
         force_ai: bool = False,
         publish_war_room: bool = True,
+        taxonomy_task_type: str = "TAXONOMY",
     ) -> dict[str, Any]:
         """Data-prep half of the diagnosis: cache check + prompt assembly (no AI call)."""
         watchlist = self.cache._get_worksheet("00_Watchlist_Master")  # noqa: SLF001
@@ -2316,6 +2326,7 @@ class FundamentalAnalyzer:
             stock_id,
             str(row.get("stock_name", "")).strip() if row else "",
             str(row.get("industry_category", "")).strip() if row else "",
+            taxonomy_task_type=taxonomy_task_type,
         )
 
         cached_summary = str(row.get("ai_summary_json", "")).strip() if row else ""
@@ -2367,7 +2378,9 @@ class FundamentalAnalyzer:
             )
             return {"cached": True, "report": report, "stock_id": stock_id}
 
-        context = self.build_markdown_context(stock_id, include_outlook=True)
+        context = self.build_markdown_context(
+            stock_id, include_outlook=True, taxonomy_task_type=taxonomy_task_type
+        )
         # Stage 0 軟性警示：不擋股票，僅注入「系統硬傷警示」交由 AI 診斷。
         hard_metrics = self.get_hard_screen_metrics(stock_id)
         hard_warnings = build_hard_warnings(hard_metrics)
@@ -2443,9 +2456,14 @@ class FundamentalAnalyzer:
         force_ai: bool = False,
         publish_war_room: bool = True,
         master: bool = False,
+        task_type: str = "STAGE1_GROUNDING",
+        taxonomy_task_type: str = "TAXONOMY",
     ) -> DiagnosisReport:
         prep = await self.prepare_diagnosis_context(
-            stock_id, force_ai=force_ai, publish_war_room=publish_war_room
+            stock_id,
+            force_ai=force_ai,
+            publish_war_room=publish_war_room,
+            taxonomy_task_type=taxonomy_task_type,
         )
         if prep["cached"]:
             return prep["report"]
@@ -2453,9 +2471,9 @@ class FundamentalAnalyzer:
             prep["prompt"],
             tag=f"stock_diag:{stock_id}",
             master=master,
-            task_type="STAGE1_GROUNDING",
+            task_type=task_type,
             stock_id=stock_id,
-            custom_id=f"STAGE1_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stock_id}",
+            custom_id=f"{task_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stock_id}",
             blocking_bq_log=True,
         )
         return await self.finalize_diagnosis_from_ai(

@@ -344,7 +344,7 @@ flowchart TD
 
 ### 4.2 任務二：Stage 1 單股診斷 (`STAGE1_DIAGNOSIS`) ➔ Pass 1 紅藍軍審計 (`RED_BLUE_AUDIT`) ➔ Stage 2 投組總決策 (`STAGE2_PORTFOLIO`)
 
-* **觸發時機**：21:30 順勢選股、22:00 反彈選股（透過 Vertex AI Batch API），以及 Discord `/stock_ai` 單股查詢。
+* **觸發時機與 `task_type` 識別碼**：21:30 順勢選股寫入 `AI_PICK_*`（`AI_PICK_TAXONOMY` / `AI_PICK_STAGE1_DIAGNOSIS` / `AI_PICK_RED_BLUE_AUDIT` / `AI_PICK_STAGE2_PORTFOLIO`），22:00 反彈選股寫入 `REBOUND_*`（`REBOUND_TAXONOMY` / `REBOUND_STAGE1_DIAGNOSIS` / `REBOUND_RED_BLUE_AUDIT` / `REBOUND_STAGE2_PORTFOLIO`），Discord `/stock_ai` 即時指令寫入 `STOCK_AI_CMD_DIAGNOSIS` / `STOCK_AI_CMD_QUERY` / `STOCK_AI_CMD_COMPARE` / `STOCK_AI_CMD_TAXONOMY`。
 * **餵給 AI 的完整資料清單 (Context Payload)**：
 
 | 資訊維度 | 餵入 AI Prompt 的具體數據欄位與計算邏輯 | 資料時間跨度 |

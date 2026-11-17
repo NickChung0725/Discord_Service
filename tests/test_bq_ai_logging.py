@@ -134,6 +134,39 @@ class BigQueryAiLoggingGuaranteeTests(unittest.TestCase):
             self.assertTrue(kwargs["blocking_bq_log"])
             self.assertTrue(str(kwargs["custom_id"]).startswith("AUDIT_"))
 
+    def test_custom_task_type_overrides_for_pipelines(self) -> None:
+        fake_resp = ai_service.AIResponse(
+            text='{"top_picks": []}',
+            provider="vertex_ai",
+            requested_model="gemini-4-argon",
+            model_version="gemini-4-argon",
+            prompt_tokens=100,
+            output_tokens=20,
+        )
+        with patch.object(alignment_ai_picker, "ask_vertex_ai_with_meta", return_value=fake_resp) as mock_ask:
+            asyncio.run(
+                alignment_ai_picker.run_portfolio_selection(
+                    ["dossier 1"],
+                    max_top=3,
+                    use_vertex_batch=False,
+                    task_type="REBOUND_STAGE2_PORTFOLIO",
+                )
+            )
+            _, kwargs = mock_ask.call_args
+            self.assertEqual(kwargs["task_type"], "REBOUND_STAGE2_PORTFOLIO")
+            self.assertTrue(str(kwargs["custom_id"]).startswith("REBOUND_STAGE2_PORTFOLIO_"))
+
+        with patch.object(alignment_ai_picker, "ask_vertex_ai_with_meta", return_value=fake_resp) as mock_ask:
+            asyncio.run(
+                alignment_ai_picker._audit_batch(
+                    [("2330", "block1")],
+                    model=None,
+                    task_type="AI_PICK_RED_BLUE_AUDIT",
+                )
+            )
+            _, kwargs = mock_ask.call_args
+            self.assertEqual(kwargs["task_type"], "AI_PICK_RED_BLUE_AUDIT")
+
 
 if __name__ == "__main__":
     unittest.main()

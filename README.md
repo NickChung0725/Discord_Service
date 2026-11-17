@@ -409,6 +409,36 @@ pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r "C:\path\to
 * `deploy/finmind-ai-pick.service`、`deploy/finmind-rebound-ai.service` 已設 `TimeoutStartSec=infinity` 與 `PYTHONUNBUFFERED=1`；本地 JSONL 暫存於 `finmind_reports/.state/batch/`，依 `local_retention_days` 自動清理。
 * 憑證：使用 ADC，自動探測 `GOOGLE_APPLICATION_CREDENTIALS` ➔ `certs/sheetbot.json` ➔ `./sheetbot.json`。
 
+### AI 選股執行步驟與 BigQuery `task_type` 對照表
+
+1. **標準執行順序（21:30 `ai-pick` 與 22:00 `rebound-ai` 皆依序執行）**：
+   * **Step 1 — Stage 0 細分產業分類 (`TAXONOMY`)**：僅針對 `08_Stock_Taxonomy`（TTL 90 天）尚未快取或過期之個股呼叫 Gemini 補齊；若候選股皆已快取則 0 筆 AI 呼叫。
+   * **Step 2 — 量化預篩與 FinMind 財報同步（無 AI 紀錄）**：執行日量 `< 300 張` 攔截、FinMind API 速率限制（`FinMindRequestLimiter`）下逐檔同步月營收／財報／股利／籌碼與 Google Sheets 快取檢查（約耗時 5~10 分鐘，視快取命中率與 API 速率而定）。
+   * **Step 3 — Stage 1 單股基本面診斷 (`STAGE1_DIAGNOSIS` / `STAGE1_GROUNDING`)**：僅將當期快取未命中（Cache Miss）的標的打包送出 Vertex AI Batch（耗時約 3~5 分鐘）；若該股稍早已於同一交易日完成診斷（例如 21:30 已分析、22:00 再次入榜），會直接命中 `00_Watchlist_Master` 快取不再重複呼叫。BigQuery 的 `created_at_tw` 記錄的是**批次完成並歸檔的時間點**。
+   * **Step 4 — Stage 0 財務硬傷排雷 & Pass 1 紅藍軍審計 (`RED_BLUE_AUDIT`)**：剔除本業虧損且合約負債 `< 1 億` 標的（及超過 15 檔時依 Stage 1 評分保留前 12 檔），再抓取新聞量價對齊與籌碼微結構送交 Pass 1 紅藍軍審計。若所有候選股皆被審計評為 `REJECT_TRAP` 或 `NO_TRADE`（**Zero-Pick Veto**），`dossiers` 為空，系統將**直接跳過 Stage 2 跨股總決策**並發布空手觀望報告。
+   * **Step 5 — Stage 2 跨股總決策 (`STAGE2_PORTFOLIO`)**：僅在 Pass 1 仍有倖存標的時執行。
+   * **排程重疊說明**：當 21:30 `ai-pick` 的 Pass 1 批次排隊或推論耗時較久（例如超過 30 分鐘至 22:11 才完成）時，22:00 `rebound-ai` 會依排程準時啟動並先行執行自己的 Step 1 (`TAXONOMY`) 與 Step 2，兩者在 BigQuery 時間軸上會呈交錯紀錄。
+
+2. **BigQuery `ai_prompt_logs.task_type` 識別碼一覽**：
+
+| 來源 / 排程 | `task_type` | 說明 |
+| :--- | :--- | :--- |
+| **21:30 `finmind-ai-pick`** | `AI_PICK_TAXONOMY` | Stage 0 細分產業分類補齊 |
+| **21:30 `finmind-ai-pick`** | `AI_PICK_STAGE1_DIAGNOSIS` / `AI_PICK_STAGE1_GROUNDING` | Stage 1 單股診斷（Batch / Online） |
+| **21:30 `finmind-ai-pick`** | `AI_PICK_RED_BLUE_AUDIT` | Pass 1 紅藍軍審計 |
+| **21:30 `finmind-ai-pick`** | `AI_PICK_STAGE2_PORTFOLIO` | Stage 2 跨股總決策 |
+| **22:00 `finmind-rebound-ai`** | `REBOUND_TAXONOMY` | Stage 0 細分產業分類補齊 |
+| **22:00 `finmind-rebound-ai`** | `REBOUND_STAGE1_DIAGNOSIS` / `REBOUND_STAGE1_GROUNDING` | Stage 1 單股診斷（Batch / Online） |
+| **22:00 `finmind-rebound-ai`** | `REBOUND_RED_BLUE_AUDIT` | Pass 1 紅藍軍審計 |
+| **22:00 `finmind-rebound-ai`** | `REBOUND_STAGE2_PORTFOLIO` | Stage 2 型態 A 反彈跨股總決策 |
+| **Discord `/stock_ai`** | `STOCK_AI_CMD_DIAGNOSIS` | 即時單股完整體質診斷（無 `prompt`） |
+| **Discord `/stock_ai`** | `STOCK_AI_CMD_QUERY` | 即時單股專題追問（有 `prompt`） |
+| **Discord `/stock_ai`** | `STOCK_AI_CMD_COMPARE` | 即時多股橫向比較（多代號） |
+| **Discord `/stock_ai`** | `STOCK_AI_CMD_TAXONOMY` | 即時指令觸發之細分產業分類補齊 |
+| **Discord `/ai`** | `GENERAL_QA` | 萬用 AI 問答 |
+| **08:15 `taishin-morning-brief`** | `MORNING_BRIEF` | 台新盤前開盤作戰晨報 |
+| **22:45 `taishin-memory-sync`** | `THESIS_SYNC` | 台新盤後持股健診與建倉記憶歸因 |
+
 ## Phase 3 微結構模組 (v5.7.0)
 - 新增頂層模組 `quant/signal_audit_service.py`（SQLite `data/signal_audit.db` 的 `signal_audit_log` 審計表）。
 - 掃描新增「近 20 日成交金額中位數 < 5,000 萬」流動性護欄；`macro_context.evaluate_market_regime_quota` 與 `taxonomy_service.compute_sector_breadth` 為待接入排程的模組。

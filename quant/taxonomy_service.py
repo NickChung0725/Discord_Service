@@ -1094,6 +1094,7 @@ class TaxonomyService:
         valid_stock_map: Mapping[str, str] | None = None,
         as_of: date | None = None,
         sync_sheet: bool = False,
+        task_type: str = "TAXONOMY",
     ) -> dict[str, Any]:
         """同步取得單股細分產業與同業資訊（若快取未命中則呼叫免費版 Gemini Lite）。"""
         self.load()
@@ -1123,9 +1124,9 @@ class TaxonomyService:
                         prompt,
                         model=model_name,
                         tag=f"taxonomy_{sid}",
-                        task_type="TAXONOMY",
+                        task_type=task_type,
                         stock_id=sid,
-                        custom_id=f"TAXONOMY_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{sid}",
+                        custom_id=f"{task_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{sid}",
                         blocking_bq_log=True,
                     )
                 )
@@ -1166,6 +1167,7 @@ class TaxonomyService:
         as_of: date | None = None,
         call_interval_sec: float = 4.2,
         sync_sheet: bool = True,
+        task_type: str = "TAXONOMY",
     ) -> dict[str, dict[str, Any]]:
         """批次補齊訊號股之細分產業與同業標籤，若有任何新增則同步寫回本地 JSON 與 Google Sheets。"""
         self.load()
@@ -1191,6 +1193,7 @@ class TaxonomyService:
                     valid_stock_map=valid_stock_map,
                     as_of=today,
                     sync_sheet=False,
+                    task_type=task_type,
                 )
                 if self._records.get(sid) is not before:
                     updated_any = True

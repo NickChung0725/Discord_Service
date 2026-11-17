@@ -25,7 +25,7 @@ for _sub in (_ROOT, _ROOT / "services", _ROOT / "quant", _ROOT / "taishin"):
     if str(_sub) not in sys.path:
         sys.path.insert(0, str(_sub))
 
-from ai_service import ask_vertex_ai_with_meta, get_vertex_stage1_model
+from ai_service import ask_vertex_ai_with_meta, get_stage1_model, get_vertex_stage1_model
 from fundamental_analyzer import FundamentalAnalyzer
 from fundamental_cache import FundamentalCacheError, FundamentalCacheManager
 from fundamental_config import PROMPT_TEMPLATES
@@ -46,8 +46,16 @@ def _parse_symbols(raw_symbol: str) -> list[str]:
     return unique_tokens
 
 
-_TIER_STANDARD = "標準 (3.8 Flash)"
-_TIER_MASTER = "大師 (ARGON)"
+_TIER_STANDARD = "standard"
+_TIER_MASTER = "master"
+
+
+def _format_tier_label(prefix: str, model_name: str, *, max_len: int = 100) -> str:
+    """組合 Discord Choice 顯示名稱，並確保不超過 Discord 100 字元限制。"""
+    label = f"{prefix} ({model_name})"
+    if len(label) <= max_len:
+        return label
+    return label[: max_len - 1] + "…"
 _EMBED_FIELD_LIMIT = 1000
 
 
@@ -130,19 +138,33 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
     cache = FundamentalCacheManager()
     analyzer = FundamentalAnalyzer(cache)
 
+    standard_model = get_stage1_model()
+    master_model = get_vertex_stage1_model()
+    standard_label = _format_tier_label("標準", standard_model)
+    master_label = _format_tier_label("大師", master_model)
+    tier_desc = f"單股診斷模型：{standard_label} 或 {master_label}（付費 Vertex AI）"
+    if len(tier_desc) > 100:
+        tier_desc = tier_desc[:99] + "…"
+
     @tree.command(name="stock_ai", description="台股基本面三大財報、股利與籌碼智慧快取分析")
     @app_commands.describe(
         symbol="台股代號（必填，單股如 2357，或多股比較如 2357,2330）",
         prompt="想詢問 AI 的特定財報問題（選填；若不填則產出完整體質診斷）",
         force_refresh="是否強制重抓最新資料並重跑 AI 分析（預設 False）",
-        tier="單股診斷模型：標準 (3.8 Flash) 或 大師 (ARGON，付費 Vertex AI)",
+        tier=tier_desc,
+    )
+    @app_commands.choices(
+        tier=[
+            app_commands.Choice(name=standard_label, value=_TIER_STANDARD),
+            app_commands.Choice(name=master_label, value=_TIER_MASTER),
+        ]
     )
     async def stock_ai(
         interaction: discord.Interaction,
         symbol: str,
         prompt: str | None = None,
         force_refresh: bool = False,
-        tier: Literal["標準 (3.8 Flash)", "大師 (ARGON)"] = _TIER_STANDARD,
+        tier: str = _TIER_STANDARD,
     ) -> None:
         stock_ids = _parse_symbols(symbol)
         if not stock_ids or any(not _STOCK_ID_PATTERN.fullmatch(sid) for sid in stock_ids):
@@ -182,7 +204,11 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
         if len(stock_ids) > 1:
             try:
                 contexts = [
-                    await asyncio.to_thread(analyzer.build_markdown_context, sid)
+                    await asyncio.to_thread(
+                        analyzer.build_markdown_context,
+                        sid,
+                        taxonomy_task_type="STOCK_AI_CMD_TAXONOMY",
+                    )
                     for sid in stock_ids
                 ]
                 user_q = (
@@ -203,9 +229,9 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                 meta = await ask_vertex_ai_with_meta(
                     combined_prompt,
                     tag=f"stock_compare:{','.join(stock_ids)}",
-                    task_type="SINGLE_QUERY",
+                    task_type="STOCK_AI_CMD_COMPARE",
                     stock_id=",".join(stock_ids),
-                    custom_id=f"CMD_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(stock_ids)}",
+                    custom_id=f"STOCK_AI_CMD_COMPARE_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(stock_ids)}",
                     model=get_vertex_stage1_model(),
                 )
                 answer = meta.text
@@ -228,7 +254,9 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
 
         if prompt and prompt.strip():
             try:
-                prompt_ctx = analyzer.build_markdown_context(stock_id)
+                prompt_ctx = analyzer.build_markdown_context(
+                    stock_id, taxonomy_task_type="STOCK_AI_CMD_TAXONOMY"
+                )
                 combined_prompt = (
                     prompt_ctx
                     + "\n\n==================================================\n"
@@ -240,9 +268,9 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
                 meta = await ask_vertex_ai_with_meta(
                     combined_prompt,
                     tag=f"stock_qa:{stock_id}",
-                    task_type="SINGLE_QUERY",
+                    task_type="STOCK_AI_CMD_QUERY",
                     stock_id=stock_id,
-                    custom_id=f"CMD_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stock_id}",
+                    custom_id=f"STOCK_AI_CMD_QUERY_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stock_id}",
                     model=get_vertex_stage1_model(),
                 )
                 answer = f"分析模型：{meta.model_version}\n" + meta.text
@@ -260,7 +288,11 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
         # 依需求：每次 /stock_ai 都重新呼叫 Gemini 產生最新診斷文字
         try:
             report = await analyzer.run_full_diagnosis(
-                stock_id, force_ai=True, master=(tier == _TIER_MASTER)
+                stock_id,
+                force_ai=True,
+                master=(tier == _TIER_MASTER),
+                task_type="STOCK_AI_CMD_DIAGNOSIS",
+                taxonomy_task_type="STOCK_AI_CMD_TAXONOMY",
             )
         except Exception:
             logger.exception("Full diagnosis failed for %s", stock_id)

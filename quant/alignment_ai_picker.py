@@ -193,6 +193,8 @@ def enrich_with_taxonomy(
     frame: pd.DataFrame,
     config: Mapping[str, object],
     target_date: date,
+    *,
+    task_type: str = "TAXONOMY",
 ) -> pd.DataFrame:
     """為候選股補齊 08_Stock_Taxonomy 的細分次產業 (sub_industry)、主被動元件屬性與同業標籤。"""
     result = frame.copy()
@@ -240,7 +242,9 @@ def enrich_with_taxonomy(
         for r in result.itertuples(index=False):
             valid_map[str(r.stock_id).strip()] = str(getattr(r, "stock_name", "")).strip()
 
-        tax_svc.ensure_batch(result, valid_map, as_of=target_date, sync_sheet=True)
+        tax_svc.ensure_batch(
+            result, valid_map, as_of=target_date, sync_sheet=True, task_type=task_type
+        )
         for idx, sid in result["stock_id"].items():
             rec = tax_svc.get_cached(str(sid))
             if rec:
@@ -542,6 +546,9 @@ async def analyze_candidates(
     batch_model: str | None = None,
     poll_interval: float = 60.0,
     target_date: date | None = None,
+    stage1_task_type: str = "STAGE1_DIAGNOSIS",
+    online_task_type: str = "STAGE1_GROUNDING",
+    taxonomy_task_type: str = "TAXONOMY",
 ) -> tuple[dict[str, dict[str, object]], list[tuple[str, str]]]:
     """Sync + diagnose each candidate; one stock failing never aborts the batch.
 
@@ -558,6 +565,8 @@ async def analyze_candidates(
             batch_model=batch_model,
             poll_interval=poll_interval,
             target_date=target_date,
+            stage1_task_type=stage1_task_type,
+            taxonomy_task_type=taxonomy_task_type,
         )
     results: dict[str, dict[str, object]] = {}
     failures: list[tuple[str, str]] = []
@@ -568,7 +577,11 @@ async def analyze_candidates(
         try:
             await asyncio.to_thread(cache.check_and_sync_stock, stock_id, False)
             report = await analyzer.run_full_diagnosis(
-                stock_id, force_ai=force_ai, publish_war_room=publish_all
+                stock_id,
+                force_ai=force_ai,
+                publish_war_room=publish_all,
+                task_type=online_task_type,
+                taxonomy_task_type=taxonomy_task_type,
             )
             snapshot = await asyncio.to_thread(
                 analyzer.build_quant_snapshot,
@@ -605,6 +618,8 @@ async def _analyze_candidates_batch(
     batch_model: str | None,
     poll_interval: float,
     target_date: date | None,
+    stage1_task_type: str = "STAGE1_DIAGNOSIS",
+    taxonomy_task_type: str = "TAXONOMY",
 ) -> tuple[dict[str, dict[str, object]], list[tuple[str, str]]]:
     results: dict[str, dict[str, object]] = {}
     failures: list[tuple[str, str]] = []
@@ -624,7 +639,10 @@ async def _analyze_candidates_batch(
         try:
             await asyncio.to_thread(cache.check_and_sync_stock, stock_id, False)
             prep = await analyzer.prepare_diagnosis_context(
-                stock_id, force_ai=force_ai, publish_war_room=publish_all
+                stock_id,
+                force_ai=force_ai,
+                publish_war_room=publish_all,
+                taxonomy_task_type=taxonomy_task_type,
             )
             if prep["cached"] is True:
                 report = prep["report"]
@@ -657,7 +675,7 @@ async def _analyze_candidates_batch(
                 job_prefix=f"stage1_diag_{day}",
                 poll_interval_seconds=poll_interval,
                 tag="stage1_batch",
-                task_type="STAGE1_DIAGNOSIS",
+                task_type=stage1_task_type,
             )
         except Exception as error:  # noqa: BLE001
             for stock_id in pending_preps:
@@ -1006,6 +1024,7 @@ async def run_portfolio_selection(
     selection_mode: str = "trend",
     use_vertex_batch: bool = False,
     poll_interval: float = 60.0,
+    task_type: str = "STAGE2_PORTFOLIO",
 ) -> object:
     market_light_str = (
         str(market_regime.get("summary") or market_regime.get("light") or "🟡黃燈")
@@ -1034,7 +1053,7 @@ async def run_portfolio_selection(
             job_prefix="stage2_portfolio",
             poll_interval_seconds=poll_interval,
             tag="portfolio_select_batch",
-            task_type="STAGE2_PORTFOLIO",
+            task_type=task_type,
             stock_ids={"PORTFOLIO_STAGE2": "PORTFOLIO"},
         )
         meta = batch_res.get("PORTFOLIO_STAGE2")
@@ -1045,9 +1064,9 @@ async def run_portfolio_selection(
         prompt,
         model=model,
         tag="portfolio_select",
-        task_type="STAGE2_PORTFOLIO",
+        task_type=task_type,
         stock_id="PORTFOLIO",
-        custom_id=f"STAGE2_PORTFOLIO_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        custom_id=f"{task_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
         blocking_bq_log=True,
     )
     return meta
@@ -1421,7 +1440,10 @@ def build_audit_prompt(blocks: list[str]) -> str:
 
 
 async def _audit_batch(
-    batch: list[tuple[str, str]], model: str | None
+    batch: list[tuple[str, str]],
+    model: str | None,
+    *,
+    task_type: str = "RED_BLUE_AUDIT",
 ) -> tuple[list[StockAuditItem], list[str]]:
     ids = [sid for sid, _ in batch]
     ids_set = set(ids)
@@ -1433,7 +1455,7 @@ async def _audit_batch(
             model=model,
             tag="red_blue_audit",
             response_schema=BatchAuditResponse,
-            task_type="RED_BLUE_AUDIT",
+            task_type=task_type,
             stock_id=stock_ids_str,
             custom_id=f"AUDIT_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{'_'.join(sorted(ids))[:30]}",
             blocking_bq_log=True,
@@ -1458,6 +1480,7 @@ async def run_red_blue_audit(
     use_vertex_batch: bool = False,
     poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
     target_date: date | None = None,
+    task_type: str = "RED_BLUE_AUDIT",
 ) -> tuple[list[StockAuditItem], list[str]]:
     """Pass 1 紅藍軍審計：
     - 當 `use_vertex_batch=True` 時，採 Vertex AI Batch API（預設模型 `get_vertex_batch_stage1_model()` 即 `gemini-3.8-flash`），
@@ -1482,7 +1505,7 @@ async def run_red_blue_audit(
                 job_prefix=f"pass1_audit_{day_str}",
                 poll_interval_seconds=poll_interval,
                 tag="red_blue_audit_batch",
-                task_type="RED_BLUE_AUDIT",
+                task_type=task_type,
                 stock_ids=stock_id_map,
             )
         except Exception as error:  # noqa: BLE001
@@ -1508,7 +1531,9 @@ async def run_red_blue_audit(
             return items, missing
 
     batches = [blocks[i : i + batch_size] for i in range(0, len(blocks), batch_size)]
-    outcomes = await asyncio.gather(*(_audit_batch(b, resolved_model) for b in batches))
+    outcomes = await asyncio.gather(
+        *(_audit_batch(b, resolved_model, task_type=task_type) for b in batches)
+    )
     items = []
     missing = []
     for batch_items, batch_missing in outcomes:
@@ -1623,6 +1648,7 @@ async def run_audit_stage(
     use_vertex_batch: bool = False,
     poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
     selection_mode: str = "trend",
+    task_type: str = "RED_BLUE_AUDIT",
 ) -> tuple[pd.DataFrame, dict[str, dict[str, object]], list[dict[str, str]]]:
     """Pass 1 紅藍軍審計：除息補償 → 點位 → 處置/三層籌碼/族群廣度 → 庫存曝險 → 新聞量價對齊 → AI 審計 → 硬攔截 → 訊號留痕。
 
@@ -1966,6 +1992,7 @@ async def run_audit_stage(
         use_vertex_batch=use_vertex_batch,
         poll_interval=poll_interval,
         target_date=target_date,
+        task_type=task_type,
     )
     guarded = _enforce_post_audit_guards(
         items,
@@ -2536,7 +2563,7 @@ async def run_pipeline(
     total_signals = len(candidates)
     enriched = enrich_with_tracker(candidates, daily_dir, target_date)
     selected, skipped = prefilter_candidates(enriched, max_candidates)
-    selected = enrich_with_taxonomy(selected, config, target_date)
+    selected = enrich_with_taxonomy(selected, config, target_date, task_type="AI_PICK_TAXONOMY")
     print(f"候選訊號股 {total_signals} 檔，進入深度分析 {len(selected)} 檔（略過 {skipped} 檔）。")
 
     # Stage 0 硬性攔截（日量 < 300 張）：先於 Stage 1 剔除，不消耗 Token；財務類硬傷於財報同步後再判斷。
@@ -2572,6 +2599,9 @@ async def run_pipeline(
             use_vertex_batch=stage1_batch,
             poll_interval=batch_poll,
             target_date=target_date,
+            stage1_task_type="AI_PICK_STAGE1_DIAGNOSIS",
+            online_task_type="AI_PICK_STAGE1_GROUNDING",
+            taxonomy_task_type="AI_PICK_TAXONOMY",
         )
 
     analyzed = selected.loc[selected["stock_id"].isin(results.keys())].reset_index(drop=True)
@@ -2612,6 +2642,7 @@ async def run_pipeline(
                 stage1_results=results,
                 use_vertex_batch=stage1_batch,
                 poll_interval=batch_poll,
+                task_type="AI_PICK_RED_BLUE_AUDIT",
             )
             pre_filtered_avoid = [*pre_filtered_avoid, *audit_rejected]
             audit_all_rejected = analyzed.empty
@@ -2643,6 +2674,7 @@ async def run_pipeline(
                 strategy_context=AUDIT_FINALIZER_CONTEXT if audit_records else "",
                 use_vertex_batch=stage2_batch,
                 poll_interval=batch_poll,
+                task_type="AI_PICK_STAGE2_PORTFOLIO",
             )
             raw_text = str(getattr(portfolio_meta, "text", "") or "")
         except Exception as error:  # noqa: BLE001
@@ -2871,7 +2903,9 @@ async def run_rebound_pipeline(
     )
     if not rebound_df.empty:
         try:
-            rebound_df = enrich_with_taxonomy(rebound_df, config, target_date)
+            rebound_df = enrich_with_taxonomy(
+                rebound_df, config, target_date, task_type="REBOUND_TAXONOMY"
+            )
         except Exception:
             logger.warning('[rebound] 細分產業補齊失敗', exc_info=True)
         preview_cols = [
@@ -2946,7 +2980,9 @@ async def run_rebound_pipeline(
         cache.enable_batch_mode()
         analyzer = FundamentalAnalyzer(cache)
 
-        enriched_rebound = enrich_with_taxonomy(rebound_df, config, target_date)
+        enriched_rebound = enrich_with_taxonomy(
+            rebound_df, config, target_date, task_type="REBOUND_TAXONOMY"
+        )
         vol_filtered, pre_filtered_avoid = hard_prefilter(enriched_rebound, {})
         selected, skipped = prefilter_rebound_candidates(
             vol_filtered,
@@ -2968,6 +3004,9 @@ async def run_rebound_pipeline(
                 use_vertex_batch=stage1_batch,
                 poll_interval=batch_poll,
                 target_date=target_date,
+                stage1_task_type="REBOUND_STAGE1_DIAGNOSIS",
+                online_task_type="REBOUND_STAGE1_GROUNDING",
+                taxonomy_task_type="REBOUND_TAXONOMY",
             )
 
         analyzed = selected.loc[selected["stock_id"].isin(ai_results.keys())].reset_index(drop=True)
@@ -2999,6 +3038,7 @@ async def run_rebound_pipeline(
                         use_vertex_batch=stage1_batch,
                         poll_interval=batch_poll,
                         selection_mode="rebound",
+                        task_type="REBOUND_RED_BLUE_AUDIT",
                     )
                     audit_all_rejected = analyzed.empty
                     print(f"[rebound] Pass 1 紅藍軍審計：通過 {len(analyzed)} 檔、淘汰 {len(audit_rejected)} 檔。")
@@ -3042,6 +3082,7 @@ async def run_rebound_pipeline(
                     selection_mode="rebound",
                     use_vertex_batch=stage2_batch,
                     poll_interval=batch_poll,
+                    task_type="REBOUND_STAGE2_PORTFOLIO",
                 )
                 raw_text = str(getattr(portfolio_meta, "text", "") or "")
                 decision = parse_portfolio_json(raw_text, set(analyzed["stock_id"].astype(str)), max_top)
