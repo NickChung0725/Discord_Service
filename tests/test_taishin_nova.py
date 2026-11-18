@@ -844,7 +844,7 @@ class TestTaishinNova(unittest.TestCase):
         self.assertGreaterEqual(dipped_stop, prev_stop)
 
     # ----------------------------------------------------------------------- #
-    # 9. SASD v5.2.0: 08:15 Morning Brief (0-Token Mode vs VERTEX_STAGE2_MODEL) & Macro/Dump
+    # 9. SASD v5.2.0: 08:15 Morning Brief (0-Token Mode vs AI_MODEL_HIGH) & Macro/Dump
     # ----------------------------------------------------------------------- #
     def test_morning_brief_skips_ai_when_only_untracked_holdings_and_calls_vertex_when_tracked(self) -> None:
         fake_sdk = MagicMock()
@@ -890,7 +890,7 @@ class TestTaishinNova(unittest.TestCase):
             self.assertIn("0 Token 快報模式", joined_zero)
             self.assertIn("費半指數 +2.45%", joined_zero)
 
-        # Path B: Tracked 2330 holding (1,000 shares single lot reaching TP1 1120) -> calls VERTEX_STAGE2_MODEL!
+        # Path B: Tracked 2330 holding (1,000 shares single lot reaching TP1 1120) -> calls AI_MODEL_HIGH!
         fake_sdk.account_statment.return_value = [
             {"trade_date": "2026-10-31", "order_no": "10", "stock_no": "2330", "action": "BUY", "filled_qty": 1000, "filled_price": 1000.0}
         ]

@@ -19,8 +19,7 @@ class TestStockAICommandTierDisplay(unittest.TestCase):
             patch.dict(
                 os.environ,
                 {
-                    "STAGE1_MODEL": "gemini-4-hydrogen",
-                    "VERTEX_STAGE1_MODEL": "gemini-4-argon",
+                    "AI_MODEL_MID": "gemini-4-hydrogen",
                 },
                 clear=False,
             ),
@@ -38,11 +37,11 @@ class TestStockAICommandTierDisplay(unittest.TestCase):
             [(c.name, c.value) for c in tier_param.choices],
             [
                 ("標準 (gemini-4-hydrogen)", "standard"),
-                ("大師 (gemini-4-argon)", "master"),
+                ("大師 (gemini-4-hydrogen)", "master"),
             ],
         )
         self.assertIn("標準 (gemini-4-hydrogen)", tier_param.description)
-        self.assertIn("大師 (gemini-4-argon)", tier_param.description)
+        self.assertIn("大師 (gemini-4-hydrogen)", tier_param.description)
         self.assertLessEqual(len(tier_param.description), 100)
 
 

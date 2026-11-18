@@ -199,10 +199,29 @@ class VertexBatchEngineTests(unittest.TestCase):
     def test_model_getters_priority(self) -> None:
         with patch.dict(
             os.environ,
-            {"VERTEX_BATCH_STAGE1_MODEL": "", "VERTEX_STAGE1_MODEL": "s1", "VERTEX_BATCH_STAGE2_MODEL": "b2"},
+            {
+                "AI_MODEL_BASE": "base-lite",
+                "AI_MODEL_MID": "mid-flash",
+                "AI_MODEL_HIGH": "high-argon",
+            },
         ):
-            self.assertEqual(ai_service.get_vertex_batch_stage1_model(), "s1")
-            self.assertEqual(ai_service.get_vertex_batch_stage2_model(), "b2")
+            self.assertEqual(ai_service.get_gemini_model(), "base-lite")
+            self.assertEqual(ai_service.get_stage1_model(), "mid-flash")
+            self.assertEqual(ai_service.get_vertex_stage1_model(), "mid-flash")
+            self.assertEqual(ai_service.get_vertex_batch_stage1_model(), "mid-flash")
+            self.assertEqual(ai_service.get_vertex_stage2_model(), "high-argon")
+            self.assertEqual(ai_service.get_vertex_batch_stage2_model(), "high-argon")
+        with patch.dict(
+            os.environ,
+            {
+                "AI_MODEL_BASE": "",
+                "AI_MODEL_MID": "",
+                "AI_MODEL_HIGH": "",
+            },
+        ):
+            self.assertEqual(ai_service.get_gemini_model(), ai_service.DEFAULT_GEMINI_MODEL)
+            self.assertEqual(ai_service.get_vertex_batch_stage1_model(), ai_service.DEFAULT_VERTEX_MODEL)
+            self.assertEqual(ai_service.get_vertex_batch_stage2_model(), ai_service.DEFAULT_VERTEX_HIGH_MODEL)
         with patch.dict(os.environ, {"VERTEX_BATCH_ENABLED": "false"}):
             self.assertFalse(ai_service.is_vertex_batch_enabled())
             self.assertTrue(ai_service.is_vertex_batch_enabled(True))

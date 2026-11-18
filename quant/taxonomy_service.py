@@ -20,7 +20,7 @@ import gspread
 import pandas as pd
 import requests
 
-from ai_service import ask_gemini_with_meta
+from ai_service import ask_gemini_with_meta, get_gemini_model
 from fundamental_config import SHEET_SCHEMAS
 
 logger = logging.getLogger(__name__)
@@ -1117,7 +1117,7 @@ class TaxonomyService:
             biz_desc = fetch_yahoo_company_profile(sid)
             prompt = build_taxonomy_prompt(sid, s_name, off_ind, biz_desc)
 
-            model_name = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest").strip() or "gemini-flash-lite-latest"
+            model_name = get_gemini_model()
             try:
                 meta = asyncio.run(
                     ask_gemini_with_meta(

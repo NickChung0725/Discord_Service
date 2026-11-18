@@ -453,7 +453,11 @@ class GeminiFallbackTests(unittest.TestCase):
 
     def test_portfolio_selection_uses_vertex_ai_and_env_vertex_model(self) -> None:
         with (
-            patch.dict("os.environ", {"VERTEX_STAGE2_MODEL": "gemini-2.5-pro"}, clear=False),
+            patch.dict(
+                "os.environ",
+                {"AI_MODEL_HIGH": "gemini-2.5-pro"},
+                clear=False,
+            ),
             patch("alignment_ai_picker.ask_vertex_ai_with_meta") as vertex_call,
         ):
             vertex_call.return_value = ai_service.AIResponse(

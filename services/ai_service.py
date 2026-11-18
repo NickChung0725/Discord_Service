@@ -1,8 +1,8 @@
 """Dual-provider Gemini AI service:
-- Google AI Studio (free tier via GEMINI_API_KEY / GEMINI_MODEL): used for general /ai, /stock_ai,
+- Google AI Studio (free tier via GEMINI_API_KEY / AI_MODEL_BASE): used for general /ai, /stock_ai,
   and per-stock fundamental diagnosis.
 - Google Cloud Vertex AI (paid tier via GOOGLE_CLOUD_PROJECT_ID / VERTEX_LOCATION / VERTEX_API_KEY
-  / VERTEX_MODEL): used for the Stage 2 cross-stock portfolio selection decision.
+  / AI_MODEL_MID / AI_MODEL_HIGH): used for Stage 1/2/3 cross-stock selection, strategic layout, and morning brief.
 
 SASD v3.5.1:
 - Migrate Google AI Studio calls from `client.interactions.create` to `client.models.generate_content`.
@@ -54,7 +54,8 @@ class AIResponse:
 
 
 DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
-DEFAULT_VERTEX_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_VERTEX_MODEL = "gemini-3.8-flash"
+DEFAULT_VERTEX_HIGH_MODEL = "gemini-4-argon"
 DEFAULT_VERTEX_LOCATION = "global"
 DEFAULT_BQ_LOCATION = "us-central1"
 DEFAULT_VERTEX_BATCH_TIMEOUT_SECONDS = 7200.0  # 2 小時（避免 Vertex Batch 排隊超過 30 分鐘逾時）
@@ -62,17 +63,16 @@ DEFAULT_VERTEX_BATCH_TIMEOUT_SECONDS = 7200.0  # 2 小時（避免 Vertex Batch 
 GOOGLE_AI_THINKING_BUDGET = 128
 GOOGLE_AI_HTTP_TIMEOUT_MS = 300_000
 
-# SASD v4.0 Stage 1 單股基本面診斷：改用付費版 gemini-3.8-flash（可由 .env STAGE1_MODEL 覆寫）。
+# SASD v4.0 Stage 1 單股基本面診斷：改用付費版 gemini-3.8-flash（可由 .env AI_MODEL_MID 覆寫）。
 # 停用 flash-lite 降級（避免財報推論 JSON 欄位違規與期別錯亂）；如需降級可設定 STAGE1_FALLBACK_MODEL。
 DEFAULT_STAGE1_MODEL = "gemini-3.8-flash"
-DIAG_PRIMARY_MODEL = DEFAULT_STAGE1_MODEL
 DIAG_PRIMARY_RETRY_DELAYS_SECONDS = (15.0, 30.0, 45.0)
 DIAG_FALLBACK_MODEL: str | None = None
 
 
 def get_stage1_model() -> str:
-    """Stage 1 model from .env STAGE1_MODEL (read lazily so load_dotenv ordering never matters)."""
-    return (os.getenv("STAGE1_MODEL") or DEFAULT_STAGE1_MODEL).strip()
+    """Mid-tier model for Stage 1 /stock_ai / sync-memory (reads AI_MODEL_MID)."""
+    return (os.getenv("AI_MODEL_MID") or DEFAULT_STAGE1_MODEL).strip()
 
 
 def get_stage1_fallback_model() -> str | None:
@@ -258,8 +258,8 @@ def _usage_counts(response: Any) -> tuple[int | None, int | None]:
 # 1. Google AI Studio (Free Tier)
 # --------------------------------------------------------------------------- #
 def get_gemini_model() -> str:
-    """Return configured Google AI Studio model from GEMINI_MODEL or default."""
-    return (os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL).strip()
+    """Base-tier model for /ai and TAXONOMY (reads AI_MODEL_BASE)."""
+    return (os.getenv("AI_MODEL_BASE") or DEFAULT_GEMINI_MODEL).strip()
 
 
 def _call_google_ai_once(
@@ -503,7 +503,7 @@ async def ask_gemini(
     model: str | None = None,
     fallback_model: str | None = None,
 ) -> str:
-    """Ask Google AI Studio (free tier). `model` overrides GEMINI_MODEL; `fallback_model` enables quota fallback."""
+    """Ask Google AI Studio (free tier). `model` overrides AI_MODEL_BASE; `fallback_model` enables quota fallback."""
     return await asyncio.to_thread(_generate_with_fallback, prompt, model, fallback_model)
 
 
@@ -668,9 +668,9 @@ async def ask_gemini_diagnosis_with_meta(
     """Stage 1 單股診斷。
 
     Routing (2026-10):
-    - master=True（/stock_ai 大師模式）：直接走 Vertex AI（VERTEX_STAGE1_MODEL）。
-    - master=False：先走 Google AI Studio（STAGE1_MODEL）做長等待重試；若仍失敗，
-      自動升級至 Vertex AI（VERTEX_STAGE1_MODEL）確保排程/手動單股診斷可完成。
+    - master=True（/stock_ai 大師模式）：直接走 Vertex AI（AI_MODEL_MID）。
+    - master=False：先走 Google AI Studio（AI_MODEL_MID）做長等待重試；若仍失敗，
+      自動升級至 Vertex AI（AI_MODEL_MID）確保排程/手動單股診斷可完成。
     """
 
     vertex_stage1_model = get_vertex_stage1_model()
@@ -720,37 +720,18 @@ async def ask_gemini_diagnosis_with_meta(
 # 2. Google Cloud Vertex AI (Paid Tier - for Stage 2 Portfolio Decision)
 # --------------------------------------------------------------------------- #
 def get_vertex_model() -> str:
-    """Return configured Vertex AI model from .env VERTEX_MODEL.
-
-    NOTE: Newer routing prefers stage-specific env vars:
-    - VERTEX_STAGE1_MODEL: /stock_ai 專題問答、多股比較、以及 Stage 1 失敗時的付費備援
-    - VERTEX_STAGE2_MODEL: 跨股彙總決策（Stage 2）
-
-    This function remains for backward compatibility and as a fallback when stage-specific
-    vars are not configured.
-    """
-
-    return (os.getenv("VERTEX_MODEL") or DEFAULT_VERTEX_MODEL).strip()
+    """Return configured mid-tier Vertex AI model (reads AI_MODEL_MID)."""
+    return (os.getenv("AI_MODEL_MID") or DEFAULT_VERTEX_MODEL).strip()
 
 
 def get_vertex_stage1_model() -> str:
-    """Return Vertex AI model for Stage 1 /stock_ai QA and fallback."""
-
-    return (
-        os.getenv("VERTEX_STAGE1_MODEL")
-        or os.getenv("VERTEX_MODEL")
-        or DEFAULT_VERTEX_MODEL
-    ).strip()
+    """Mid-tier Vertex AI model for Stage 1 /stock_ai QA and fallback (reads AI_MODEL_MID)."""
+    return (os.getenv("AI_MODEL_MID") or DEFAULT_VERTEX_MODEL).strip()
 
 
 def get_vertex_stage2_model() -> str:
-    """Return Vertex AI model for Stage 2 portfolio decision."""
-
-    return (
-        os.getenv("VERTEX_STAGE2_MODEL")
-        or os.getenv("VERTEX_MODEL")
-        or DEFAULT_VERTEX_MODEL
-    ).strip()
+    """High-tier Vertex AI model for AI #2, AI #3, and 08:15 Morning Brief (reads AI_MODEL_HIGH)."""
+    return (os.getenv("AI_MODEL_HIGH") or DEFAULT_VERTEX_HIGH_MODEL).strip()
 
 
 def get_vertex_location() -> str:
@@ -1110,22 +1091,13 @@ def get_vertex_batch_location() -> str:
 
 
 def get_vertex_batch_stage1_model() -> str:
-    return (
-        os.getenv("VERTEX_BATCH_STAGE1_MODEL")
-        or os.getenv("VERTEX_STAGE1_MODEL")
-        or os.getenv("STAGE1_MODEL")
-        or os.getenv("VERTEX_MODEL")
-        or DEFAULT_VERTEX_MODEL
-    ).strip()
+    """Mid-tier Vertex AI Batch model for Stage 1 diagnosis (reads AI_MODEL_MID)."""
+    return (os.getenv("AI_MODEL_MID") or DEFAULT_VERTEX_MODEL).strip()
 
 
 def get_vertex_batch_stage2_model() -> str:
-    return (
-        os.getenv("VERTEX_BATCH_STAGE2_MODEL")
-        or os.getenv("VERTEX_STAGE2_MODEL")
-        or os.getenv("VERTEX_MODEL")
-        or DEFAULT_VERTEX_MODEL
-    ).strip()
+    """High-tier Vertex AI Batch model for AI #2 / AI #3 (reads AI_MODEL_HIGH)."""
+    return (os.getenv("AI_MODEL_HIGH") or DEFAULT_VERTEX_HIGH_MODEL).strip()
 
 
 def get_vertex_batch_timeout_seconds(config_override: float | None = None) -> float:

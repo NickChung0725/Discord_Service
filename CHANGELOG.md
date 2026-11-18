@@ -16,7 +16,10 @@
 ---
 
 ## [v6.1.1] - 2026-11-18
-### 🔧 優化與修正 — 修復 SASD v6.1 總經函式匯入／庫存曝險參數錯誤，並將 Vertex AI Batch 逾時放寬至 2 小時
+### 🔧 優化與修正 — 統一三級 AI 模型變數 (`AI_MODEL_BASE / MID / HIGH`)、修復 SASD v6.1 總經/曝險錯誤，並放寬 Batch 逾時至 2 小時
+* **統一全系統 AI 模型環境變數為三級分層（[`services/ai_service.py`](/services/ai_service.py)、[`quant/taxonomy_service.py`](/quant/taxonomy_service.py)、[`.env.example`](/.env.example)）**：
+  * 移除原本互相覆蓋的 7 個舊變數，統一改以 **`AI_MODEL_BASE`**（基礎輕量：`/ai`、`TAXONOMY`）、**`AI_MODEL_MID`**（中級主力：`/stock_ai`、AI #1 單股財報、`22:45 sync-memory`）與 **`AI_MODEL_HIGH`**（高級旗艦：AI #2 績優選拔、AI #3 戰略低接、`08:15` 開盤晨報）控管，程式碼仍完整保留舊變數向後相容 fallback。
+  * 同步修正 `.env.example` 去除會觸發 `404 NOT_FOUND` 的舊預設值 `gemini-2.5-pro` 與 `gemini-2.5-flash-lite`。
 * **修復 22:00 `rebound-ai` AI #2/#3 執行期錯誤（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
   * 修正 `execute_v61_quality_and_strategic_pipeline()` 誤匯入不存在之 `fetch_macro_context(..., as_of=...)`，改為正確呼叫 `taishin.macro_context.fetch_global_macro_context()`。
   * 修正 `evaluate_candidate_exposure()` 傳入不存在之關鍵字參數 `candidate_id` / `candidate_name` / `candidate_sector`，對齊實際簽章 `(sid, sub_ind, holdings, candidate_prices=..., holding_prices=...)`。

@@ -24,7 +24,7 @@ class GoogleAiStudioTests(unittest.TestCase):
         with (
             patch.dict(
                 "os.environ",
-                {"GEMINI_API_KEY": "test-key", "GEMINI_MODEL": "test-model"},
+                {"GEMINI_API_KEY": "test-key", "AI_MODEL_BASE": "test-model"},
                 clear=True,
             ),
             patch("ai_service.genai.Client", return_value=client) as create_client,
@@ -107,7 +107,7 @@ class VertexAiTests(unittest.TestCase):
                     "GOOGLE_CLOUD_PROJECT_ID": "my-gcp-project",
                     "VERTEX_LOCATION": "asia-east1",
                     "VERTEX_API_KEY": "vertex-key-123",
-                    "VERTEX_MODEL": "gemini-2.5-pro",
+                    "AI_MODEL_MID": "gemini-2.5-pro",
                 },
                 clear=True,
             ),

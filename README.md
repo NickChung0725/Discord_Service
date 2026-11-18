@@ -8,10 +8,10 @@
 
 | 時間 / 頻率 | 任務名稱 | 觸發機制 | 執行內容與產出 |
 | :--- | :--- | :--- | :--- |
-| **週一至週五 08:15** | **台新盤前隔夜美股與嚴選持股開盤作戰晨報** | `systemd` (`taishin-morning-brief.timer`) | **SASD v5.2.0 法人級開盤作戰中心 (`morning-brief`)**：<br>1. **隔夜美股與國際總經環境 (`taishin/macro_context.py`)**：抓取費半 (`^SOX`)、那指 (`^IXIC`)、標普 (`^GSPC`)、台積電 ADR (`TSM`)、輝達 (`NVDA`)、`^VIX` 恐慌指數與美元台幣 (`TWD=X`) 漲跌，搭配近 48h 國際財經要聞判定 `RISK_ON` / `NEUTRAL` / `RISK_OFF`<br>2. **鎖定初始目標價 ＋ 風格 B 分批移動停利**：讀取 `05_Position_Thesis_Memory` 鎖定之買進當時 `initial_tp1` / `initial_tp2` / `initial_sl`（杜絕目標價每日漂移），計算「觸及 TP1 先出 50%（單張自動建議盤中零股賣 500 股）＋ 單向棘輪移動停利 (`trailing_stop`)」，呼叫付費版 `VERTEX_STAGE2_MODEL` 產出開盤掛單作戰指令並更新 `02_Portfolio_Holdings`（若無嚴選記憶持股則自動切換 **0-Token 純 Python 省流快報**；非嚴選股如 `0050` 僅列出 `📦 帳面損益觀察`）。 |
+| **週一至週五 08:15** | **台新盤前隔夜美股與嚴選持股開盤作戰晨報** | `systemd` (`taishin-morning-brief.timer`) | **SASD v5.2.0 法人級開盤作戰中心 (`morning-brief`)**：<br>1. **隔夜美股與國際總經環境 (`taishin/macro_context.py`)**：抓取費半 (`^SOX`)、那指 (`^IXIC`)、標普 (`^GSPC`)、台積電 ADR (`TSM`)、輝達 (`NVDA`)、`^VIX` 恐慌指數與美元台幣 (`TWD=X`) 漲跌，搭配近 48h 國際財經要聞判定 `RISK_ON` / `NEUTRAL` / `RISK_OFF`<br>2. **鎖定初始目標價 ＋ 風格 B 分批移動停利**：讀取 `05_Position_Thesis_Memory` 鎖定之買進當時 `initial_tp1` / `initial_tp2` / `initial_sl`（杜絕目標價每日漂移），計算「觸及 TP1 先出 50%（單張自動建議盤中零股賣 500 股）＋ 單向棘輪移動停利 (`trailing_stop`)」，呼叫付費版 `AI_MODEL_HIGH` 產出開盤掛單作戰指令並更新 `02_Portfolio_Holdings`（若無嚴選記憶持股則自動切換 **0-Token 純 Python 省流快報**；非嚴選股如 `0050` 僅列出 `📦 帳面損益觀察`）。 |
 | **週一至週五 13:15** | **0050 每週不定期定額智慧尋底評估** | `systemd` (`taishin-dca-0050.timer`) | **SASD v5.1.0 0050 智慧尋底引擎**：<br>1. 檢查本週 (`YYYY-Www`) 是否已買入 `0050`<br>2. **週一至週四**：若出現「跌破 17MA 負乖離 <= -1.5%」、「回踩 45MA 季線」、「RSI(14) <= 40 或 KD_K <= 30」、「近 10 日高點回落 >= 2.5%」任一低點訊號，立即觸發買進訊號<br>3. **週五 13:15**：若週一至週四皆未觸發，強制執行本週保底定投（依 `dip_score` 0~100 動態調整 `0.6x ~ 1.5x` 股數）<br>4. 預設 `TAISHIN_ENABLE_TRADING=false` 僅寫入 `04_DCA_0050_Tracker` 並推播 Discord 買入建議；開啟 `TAISHIN_ENABLE_TRADING=true` 且帶入 `--confirm-live-order` 時才呼叫 `sdk.stock.place_order` 下盤中零股 (`MarketType.IntradayOdd`)。 |
 | **週一至週五 19:00** | **第一階段：台股五線均線＋微結構流動性護欄＋雙核心大盤路由＋盤後審計回填** | `systemd` (`finmind-scan.timer`) | **全市場動態掃描與微結構審計回填（SASD v5.7.0）**：`industries=["ALL"]`，先以 TWSE/TPEx 盤後快照做 Stage 1「雙軌量能守門員」，對通過者呼叫 FinMind 日線並強制通過 **20 日成交金額中位數 ≥ 5,000 萬護欄**（`passes_liquidity_median_guard`，防單日爆量殭屍股）與**除權息跳空前複權回溯補償**（`compensate_ex_dividend_gaps`，消除假死叉與假套牢區）。篩選符合 `MA3 >= 各線`、`MA45 > MA117 > MA189` 且處於 `17/45MA 即將金叉 (-1.5%~0%)` 或 `剛金叉起漲 (0%~+2.5%)` 之強勢股，並同步啟動**加權（TAIEX）＋櫃買（OTC）＋外資台指期雙核心紅綠燈路由器（`RegimeRouter`）**：<br>1. 產出本地 CSV：`daily/{date}_prices.csv`、`daily/{date}_alignment_signals.csv`、`daily/{date}_failures.csv` 與含 `regime_quota` 之 `daily/{date}_market_regime.json`<br>2. 同步至 Google Sheets `MA_Signal_Tracker`（設定鍵：`sync_alignment_to_gsheet`）<br>3. **無未來函數事後審計回填（`run_signal_audit_backfill`）**：自動以最新日線回填 `data/signal_audit.db`（`Open_{T+1} + 0.5%` 摩擦成本、停損優先悲觀認定、`REJECT_TRAP` 錯殺率）並同步至 Google Sheets 輔助表 `Signal_Audit_Log`<br>4. 推播手機/LINE 雙行卡片版均線快報至 `ALIGNMENT_SIGNALS_CHANNEL_ID`。 |
-| **週一至週五 21:30** | **第二階段：右側強勢股基本面特徵＋微結構紅藍軍審計＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **事件驅動財報快取同步（Phase 2）**：每月 5 日起營收開獎窗口對落後標的自動觸發 Event-Driven Cache Bypass（含 6h 冷卻），補齊月營收、三大財報、衍生財務比率、股利與法人融資籌碼<br>2. **Stage 1 單股 Step 1~7 審計（`STAGE1_MODEL`）**：Stage 0 硬性攔截日量 < 300 張、本業虧損無合約負債與籌碼斷頭硬傷股；注入三層防呆流通股數、春節豁免營收動能、本業前瞻 EPS 與同業中位數 PE 對齊、三率語意標籤<br>3. **Pass 1 紅藍軍審計與微結構硬攔截（Phase 1~3，`ai_picker_red_blue_audit`）**：Python 先行執行除權息前複權補償、ATR14／60 日量 POC／追價上限／硬停損／TP1／風報比確定性計算、處置股過熱預警、三層籌碼微結構（停資券窗口＋週集保大戶底氣＋日融資 K 線實體效率）、同細分產業資金共振度（`SectorBreadth`）、台新庫存曝險相關係數檢核與近 5 交易日新聞量價反應對齊；透過 Vertex AI Structured Output（`response_schema=BatchAuditResponse`，先找空頭破綻最後才評級）並行審計，再由 Python 執行風報比 `< 1.8`、處置禁追高、雙核心大盤配額（紅燈禁右側突破、黃燈限 PR85+、族群廣度與相對 PE 上限）硬攔截，並將 `S_TIER` / `A_TIER` / `REJECT_TRAP` 全數寫入 `data/signal_audit.db`（支援 Zero-Pick Veto 空手觀望）<br>4. **Stage 2 跨股總決策與大盤配額調控（`VERTEX_STAGE2_MODEL`）**：套用 `enforce_regime_quotas()` 嚴格控管右側突破與 Style B 低接檔數上限，且 `target_price_1` / `stop_loss_price` 強制鎖定 Python 確定性點位<br>5. **戰情室發布、Google Sheets 同步與週五審計週報**：發布 GitHub Pages 戰情室，寫入 `AI_Daily_Picks`（含 9 個確定性審計欄位）並同步 `Signal_Audit_Log`；每逢**週五盤後自動附加「Weekly Quantitative Audit Summary（實戰獲利因子、逆向選擇 Delta、AI 錯殺率與調參建議）」**推播至 `STOCK_CHANNEL_ID`。 |
+| **週一至週五 21:30** | **第二階段：右側強勢股基本面特徵＋微結構紅藍軍審計＋AI 嚴選進場** | `systemd` (`finmind-ai-pick.timer`) | 讀取 19:00 產出之 `alignment_signals` 清單：<br>1. **事件驅動財報快取同步（Phase 2）**：每月 5 日起營收開獎窗口對落後標的自動觸發 Event-Driven Cache Bypass（含 6h 冷卻），補齊月營收、三大財報、衍生財務比率、股利與法人融資籌碼<br>2. **Stage 1 單股 Step 1~7 審計（`AI_MODEL_MID`）**：Stage 0 硬性攔截日量 < 300 張、本業虧損無合約負債與籌碼斷頭硬傷股；注入三層防呆流通股數、春節豁免營收動能、本業前瞻 EPS 與同業中位數 PE 對齊、三率語意標籤<br>3. **Pass 1 紅藍軍審計與微結構硬攔截（Phase 1~3，`ai_picker_red_blue_audit`）**：Python 先行執行除權息前複權補償、ATR14／60 日量 POC／追價上限／硬停損／TP1／風報比確定性計算、處置股過熱預警、三層籌碼微結構（停資券窗口＋週集保大戶底氣＋日融資 K 線實體效率）、同細分產業資金共振度（`SectorBreadth`）、台新庫存曝險相關係數檢核與近 5 交易日新聞量價反應對齊；透過 Vertex AI Structured Output（`response_schema=BatchAuditResponse`，先找空頭破綻最後才評級）並行審計，再由 Python 執行風報比 `< 1.8`、處置禁追高、雙核心大盤配額（紅燈禁右側突破、黃燈限 PR85+、族群廣度與相對 PE 上限）硬攔截，並將 `S_TIER` / `A_TIER` / `REJECT_TRAP` 全數寫入 `data/signal_audit.db`（支援 Zero-Pick Veto 空手觀望）<br>4. **Stage 2 跨股總決策與大盤配額調控（`AI_MODEL_HIGH`）**：套用 `enforce_regime_quotas()` 嚴格控管右側突破與 Style B 低接檔數上限，且 `target_price_1` / `stop_loss_price` 強制鎖定 Python 確定性點位<br>5. **戰情室發布、Google Sheets 同步與週五審計週報**：發布 GitHub Pages 戰情室，寫入 `AI_Daily_Picks`（含 9 個確定性審計欄位）並同步 `Signal_Audit_Log`；每逢**週五盤後自動附加「Weekly Quantitative Audit Summary（實戰獲利因子、逆向選擇 Delta、AI 錯殺率與調參建議）」**推播至 `STOCK_CHANNEL_ID`。 |
 | **週一至週五 22:00** | **第三階段：左側「型態 A 高點回跌回踩長均線反彈」掃描與彈性 AI 診斷** | `systemd` (`finmind-rebound-ai.timer`) | 從當日產出之 `daily/{date}_prices.csv` 讀取近 60 個交易日數據，捕捉績優股急跌回踩長均線之均值回歸契機：<br>1. **型態 A 五大濾網**：`MA45 >= MA117 > MA189`、近 60 日高點回跌達位階門檻（30~150跌>=10元、150~500跌>=30元、500~1000跌>=100元、>=1000跌>=300元）且跌幅 `>= 10%`、收盤回踩 `45MA` 或 `117MA`（`-1.5% ~ +2.5%`）、反彈至 `17MA` 空間 `>= 5%`、K 線收盤強度 `(Close-Min)/(Max-Min) >= 0.55`<br>2. 產出本地 `daily/{date}_rebound_signals.csv` 與 `daily/{date}_rebound_failures.csv`<br>3. 寫入獨立 Google Sheets 工作表 `Rebound_Watchlist`<br>4. **彈性決策點**：先推播手機/LINE 雙行卡片版「今日符合反彈條件標的總數」與數字序號清單至 `ALIGNMENT_SIGNALS_CHANNEL_ID`（`alignment_signals#1566830891299508426`）；支援第一階段觀測標的數量（預設不自動跑 AI），或透過 `--run-ai` / `rebound_auto_run_ai`（當檔數落於 3~15 檔合理區間）無縫啟動 AI 深度診斷與推播。<br>5. **Stage 2 Prompt 反彈模式分流**：22:00 反彈清單在跨股嚴選時不沿用「17MA 下彎扣分」規則，改以「45MA/117MA 守穩 + 收盤強度 >= 0.55 + 反彈至 17MA 空間 >= 5%」檢核，且第一目標價優先設為 17MA 反壓。 |
 | **週一至週五 22:45** | **第四階段：台新盤後對帳單同步與嚴選建倉記憶自動歸因鎖定** | `systemd` (`taishin-memory-sync.timer`) | **SASD v5.2.0 建倉記憶錨定引擎 (`sync-memory`)**：<br>1. 同步近 7 日對帳單 (`account_statment`)、成交明細 (`filled_history`)、已實現損益與最新庫存至 `01_Account_Statement` 與 `03_Settlement_And_PnL`<br>2. **波段切分與近 5 交易日嚴選歸因**：由對帳單自動還原未平倉買進波段，回查買進日往前 5 個交易日內之 `21:30 AI_Daily_Picks (TOP_PICK)` ➔ `WATCHLIST` ➔ `22:00 Rebound_Watchlist`，自動建立/更新 `05_Position_Thesis_Memory` 並釘死買進當時的 `initial_tp1` / `initial_tp2` / `initial_sl` 與進場論點（加碼僅重算均價與峰值股數，不覆寫初始目標價；非嚴選股不建卡）<br>3. **靜默無干擾通知**：平時靜默寫表，**僅當日有新綁定建倉記憶、完成 TP1 分批減碼或清倉結案時**推播精簡歸因快訊至 `TAISHIN_ALERT_CHANNEL_ID`。 |
 
@@ -21,7 +21,7 @@
  
 | 指令 | 參數說明 | 功能與產出說明 |
 | :--- | :--- | :--- |
-| **`/stock_ai`** | `symbol` (單股如 `2357` 或多股如 `2357,2330`，最多 4 檔)<br>`prompt` (選填，特定問題)<br>`force_refresh` (選填，預設 `False`)<br>`tier` (選填：`標準 (3.8 Flash)`〔預設〕或 `大師 (ARGON)`〔強制走 Vertex AI Stage1：`VERTEX_STAGE1_MODEL`〕) | **【📊 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）】**<br>• **手機好讀一鍵複製**：以純文字 Markdown 發送（長按 1 秒即可複製轉傳他人）。<br>• **單股體質診斷（SASD v4.0 Step 1~7，先審計後評分）**：包含 0~100 體質評分、1~4 點動態亮點與風險、趨勢標籤，並附 **交易計畫 Embed**（戰術定位、進場觸發條件、第一/二目標價、嚴格停損價、紅軍失效退場條件）；日量 < 300 張或本業虧損無合約負債者以「🚨 系統硬傷警示」注入診斷（軟性警示，不擋股票）、三率/CCC/FCF 拆解、股利與法人籌碼、表 7 均線與量能結構、法說展望真實性佐證；並在首行顯示 **分析模型：{response.model_version}**。<br>• **二合一戰情室網頁**：發布全新戰情室 (`charts/{stock_id}_fund.html`)，內嵌**近半年技術面 K 線與均線 (17/45/117/189MA) + 成交量 + KD + MACD**，以及**基本面六大財務趨勢圖（每張圖正上方皆有獨立圖例與白話名詞小抄）**；戰情室頁面亦顯示「分析模型」。<br>• **多股橫向比較 (`2357,2330`)**：改走付費 Vertex AI（Stage1：`VERTEX_STAGE1_MODEL`）進行橫向比較與結論輸出（同樣顯示「分析模型」）。<br>• **專題追問 (`prompt`)**：改走付費 Vertex AI（Stage1：`VERTEX_STAGE1_MODEL`）針對使用者問題引用財報數字精準解答（同樣顯示「分析模型」）。 |
+| **`/stock_ai`** | `symbol` (單股如 `2357` 或多股如 `2357,2330`，最多 4 檔)<br>`prompt` (選填，特定問題)<br>`force_refresh` (選填，預設 `False`)<br>`tier` (選填：`標準 (3.8 Flash)`〔預設〕或 `大師 (3.8 Flash)`〔強制走 Vertex AI：`AI_MODEL_MID`〕) | **【📊 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）】**<br>• **手機好讀一鍵複製**：以純文字 Markdown 發送（長按 1 秒即可複製轉傳他人）。<br>• **單股體質診斷（SASD v4.0 Step 1~7，先審計後評分）**：包含 0~100 體質評分、1~4 點動態亮點與風險、趨勢標籤，並附 **交易計畫 Embed**（戰術定位、進場觸發條件、第一/二目標價、嚴格停損價、紅軍失效退場條件）；日量 < 300 張或本業虧損無合約負債者以「🚨 系統硬傷警示」注入診斷（軟性警示，不擋股票）、三率/CCC/FCF 拆解、股利與法人籌碼、表 7 均線與量能結構、法說展望真實性佐證；並在首行顯示 **分析模型：{response.model_version}**。<br>• **二合一戰情室網頁**：發布全新戰情室 (`charts/{stock_id}_fund.html`)，內嵌**近半年技術面 K 線與均線 (17/45/117/189MA) + 成交量 + KD + MACD**，以及**基本面六大財務趨勢圖（每張圖正上方皆有獨立圖例與白話名詞小抄）**；戰情室頁面亦顯示「分析模型」。<br>• **多股橫向比較 (`2357,2330`)**：改走付費 Vertex AI（`AI_MODEL_MID`）進行橫向比較與結論輸出（同樣顯示「分析模型」）。<br>• **專題追問 (`prompt`)**：改走付費 Vertex AI（`AI_MODEL_MID`）針對使用者問題引用財報數字精準解答（同樣顯示「分析模型」）。 |
 | **`/ai`** | `prompt` (問題內容) | **【Gemini AI 萬用問答】**<br>呼叫 Google Gemini 模型回答各式投資、程式或日常問題（超過 2,000 字自動分段回覆）。 |
 | **`/card`** | 無 | **【系統狀態卡片】** 顯示機器人名稱、API 延遲 (ms) 與伺服器成員數。 |
 | **`/ping`** | 無 | **【連線延遲測試】** 回應 `Pong! 🏓` 與毫秒延遲（或在頻道直接輸入文字 `ping`）。 |
@@ -46,7 +46,7 @@
 | **`06_Dividend_Policy`** | **歷年股利政策表**：民國年自動轉西元年、現金股利、股票股利、總股利、現金股利總額(億)、年度 EPS、配息率 (`payout_ratio_pct`)、除息日。 | 30 天 TTL 增量更新。 |
 | **`07_Chip_Summary`** | **三大法人與外資籌碼表**：外資持股比例、20 日持股變化、外資/投信/自營商及三大法人合計之近 5 日與近 20 日買賣超（張）。 | 每日 TTL（>= 1 天）增量更新。 |
 | **`07_Chip_Summary`** | **三大法人、融資維持率與 TDCC 集保大戶籌碼表**：外資持股比例、20 日持股變化、外資/投信/自營商及三大法人合計之近 5 日與近 20 日買賣超（張）、融資使用率與維持率、資法人對作象限，以及 TDCC 官方免費 Open Data 之 400/1,000 張大戶持股比與總股東人數。 | 每日 TTL（>= 1 天）增量更新。 |
-| **`08_Stock_Taxonomy`** | **細分產業與同業知識庫**（SASD v5.7.3）：`stock_id`、`stock_name`、`official_industry`、`sector_group`（互斥六大板塊）、`sub_industry`（細分次產業，供 21:30 同業限額分群）、`valuation_regime`（估值定價邏輯：`景氣循環股` / `穩健價值與高息股` / `成長型科技與利基股` / `高本益比/題材研發股`）、`component_nature`（主動/被動元件等）、`supply_chain_role`、`core_products`、`theme_tags`、`peers`（經 Python 真實代號防幻覺校驗）、`updated_at`。同步本地快取 `finmind_reports/.state/stock_taxonomy.json`。 | TTL 90 天；由 `GEMINI_MODEL`（免費 flash-lite）搭配 Yahoo 業務簡介（自動過濾 SEO 空殼樣板字）產生，入榜訊號股與 `/stock_ai` 查詢時補齊並交接至 Stage 1 表頭。 |
+| **`08_Stock_Taxonomy`** | **細分產業與同業知識庫**（SASD v5.7.3）：`stock_id`、`stock_name`、`official_industry`、`sector_group`（互斥六大板塊）、`sub_industry`（細分次產業，供 21:30 同業限額分群）、`valuation_regime`（估值定價邏輯：`景氣循環股` / `穩健價值與高息股` / `成長型科技與利基股` / `高本益比/題材研發股`）、`component_nature`（主動/被動元件等）、`supply_chain_role`、`core_products`、`theme_tags`、`peers`（經 Python 真實代號防幻覺校驗）、`updated_at`。同步本地快取 `finmind_reports/.state/stock_taxonomy.json`。 | TTL 90 天；由 `AI_MODEL_BASE`（免費 flash-lite）搭配 Yahoo 業務簡介（自動過濾 SEO 空殼樣板字）產生，入榜訊號股與 `/stock_ai` 查詢時補齊並交接至 Stage 1 表頭。 |
 | **`MA_Signal_Tracker`** | **19:00 均線與量能強勢股追蹤表**：記錄每日符合五線排列之個股、標註「🆕 是（新進榜）/ 🔄 否（持續符合）」、「連續天數」、「每日執行狀況」、「17MA 近期走勢」、**「成交量(張) / 5日均量(張) / 20日均量(張) / 量能狀態(量比)」**並自動套用條件格式底色（放量點火自動亮橘紅加粗、低量冷門灰字警示）。 | 每日 19:00 `scan-all` 自動同步。 |
 | **`AI_Daily_Picks`** | **21:30 AI 嚴選進場歷史追蹤表**：記錄每日 AI 評選之 `TOP_PICK`、`WATCHLIST`、`AVOID` 清單、推薦當下收盤價、17MA/45MA 支撐價、單股財報分、總決策推薦分、法說展望評級、進場理由、結構化交易計畫與 **9 個確定性紅藍軍審計欄位**（`Audit_Grade`、`Execution_Tactic`、`Ideal_Buy_Or_Ref`、`Chase_Limit_Price`、`Hard_Stop_Loss`、`TP1_Target_Or_POC`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers`），供盤後建倉記憶鎖定目標價與長期回測勝率。 | 每日 21:30 `analyze-alignment` 自動寫入。 |
 | **`Rebound_Watchlist`** | **22:00 型態 A 長均線回踩反彈清單**：記錄 `pk_key`、`stock_id`、`stock_name`、`industry_category`、`scan_date`、`close_price`、`high_60d`、`drop_amount`、`drop_pct`、`support_ma`、`support_price`、`target_ma17`、`potential_return_pct`、`volume_status`、`market_light`、`ai_summary_json`、`war_room_url`。 | 每日 22:00 `analyze-rebound` 自動同步。 |
@@ -137,20 +137,18 @@ STOCK_CHANNEL_ID=每日21:30_AI嚴選股票推播頻道ID
 ALIGNMENT_SIGNALS_CHANNEL_ID=每日19:00均線訊號與22:00反彈清單推播頻道ID
 
 # 2. 雙軌 AI 設定（Google AI Studio 免費版 ＋ GCP Vertex AI 付費版）
-# 2-1. Google AI Studio（免費版：用於 /ai、/stock_ai 與單股基本面財報診斷）
 GEMINI_API_KEY=你的_Gemini_API_Key
-GEMINI_MODEL=gemini-flash-lite-latest
 
-# （SASD v4.0）Stage 1 單股診斷（21:30 排程）預設先走 Google AI Studio（可能排隊），使用 STAGE1_MODEL；
-# 若重試後仍失敗，會自動升級改走 Vertex AI（VERTEX_STAGE1_MODEL）以確保排程可完成。
-STAGE1_MODEL=gemini-3.8-flash
-# STAGE1_FALLBACK_MODEL=            # （選填）Google AI Studio 端的備援模型；如不填則只重試不降級
+# 2-1. AI 模型分級設定（全系統統一 3 級：Base / 中級 / 高級）
+# - AI_MODEL_BASE：基礎輕量（/ai 萬用問答、Stage 0 產業分類 TAXONOMY）
+# - AI_MODEL_MID ：中級主力（/stock_ai 單股診斷/追問/比較、AI #1 單股財報、22:45 持股健診）
+# - AI_MODEL_HIGH：高級旗艦（AI #2 績優選拔、AI #3 戰略低接、08:15 開盤作戰晨報）
+AI_MODEL_BASE=gemini-flash-lite-latest
+AI_MODEL_MID=gemini-3.8-flash
+AI_MODEL_HIGH=gemini-4-argon
 # 並且每次 AI 呼叫會把完整 Prompt/回覆寫入 finmind_reports/logs/YYYY-MM-DD_ai_calls.log
 
 # 2-2. GCP Vertex AI（付費版）
-# - Stage 1（/stock_ai 專題問答、多股比較、以及 21:30 單股診斷在免費層失敗時的升級備援）：VERTEX_STAGE1_MODEL
-# - Stage 2（21:30 / 22:00 跨股彙總決策選股，以及 08:15 盤前開盤作戰晨報）：VERTEX_STAGE2_MODEL
-# - VERTEX_MODEL：相容舊版設定，當 stage 專用變數未設定時才會 fallback
 # - VERTEX_LOCATION：AI 模型端點一律使用 global（避免特定模型如 gemini-4-argon / gemini-3.8-flash 於區域端點報 404 NOT_FOUND）
 # - BQ_LOCATION / GOOGLE_CLOUD_LOCATION：BigQuery 永久表與 Batch 暫存表放置區域（預設 us-central1）
 GOOGLE_CLOUD_PROJECT_ID=你的_GCP_Project_ID
@@ -158,9 +156,6 @@ GOOGLE_CLOUD_LOCATION=us-central1
 VERTEX_LOCATION=global
 BQ_LOCATION=us-central1
 VERTEX_API_KEY=你的_Vertex_API_Key
-VERTEX_MODEL=gemini-2.5-flash-lite
-VERTEX_STAGE1_MODEL=gemini-3.8-flash
-VERTEX_STAGE2_MODEL=gemini-2.5-pro
 
 # Vertex AI Batch 與 GCS 設定（SASD v5.3.0：21:30 / 22:00 AI 選股離線批次，50% 折扣）
 VERTEX_BATCH_ENABLED=true
@@ -168,8 +163,6 @@ GCS_BUCKET_NAME=nickchung_bucket
 GCS_BATCH_PREFIX=vertex_batch
 VERTEX_BATCH_POLL_SECONDS=60             # Vertex Batch 狀態輪詢秒數（預設 60s）
 VERTEX_BATCH_TIMEOUT_SECONDS=7200         # Vertex Batch 單次輪詢超時秒數（預設 7200s = 2 小時）
-VERTEX_BATCH_STAGE1_MODEL=gemini-2.5-flash-lite
-VERTEX_BATCH_STAGE2_MODEL=gemini-2.5-pro
 
 # 3. FinMind 台股數據 API 設定
 FINMIND_API_TOKEN=你的_FinMind_API_Token
@@ -275,7 +268,7 @@ uv run python taishin_portfolio_service.py sync-memory --dry-run
 uv run python taishin_portfolio_service.py sync-memory
 uv run python taishin_portfolio_service.py sync-memory --no-discord  # 僅寫入 Sheet，不發送新綁定/減碼/平倉快訊
 
-# 5. 【週一至週五 08:15 排程主任務】隔夜美股國際盤 + VERTEX_STAGE2_MODEL 嚴選記憶持股開盤作戰晨報
+# 5. 【週一至週五 08:15 排程主任務】隔夜美股國際盤 + AI_MODEL_HIGH 嚴選記憶持股開盤作戰晨報
 uv run python taishin_portfolio_service.py morning-brief --dry-run
 uv run python taishin_portfolio_service.py morning-brief
 uv run python taishin_portfolio_service.py morning-brief --no-ai      # 純 Python 快報（不呼叫 AI）

@@ -1676,7 +1676,7 @@ async def run_portfolio_ai_diagnosis(
     recent_statements: list[dict[str, Any]],
     market_regime: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], str, str]:
-    """Invoke `STAGE1_MODEL` -> `VERTEX_STAGE1_MODEL` to diagnose all current holdings."""
+    """Invoke `AI_MODEL_MID` (Google AI Studio -> Vertex AI fallback) to diagnose all current holdings."""
     if not holdings_rows:
         return holdings_rows, "目前無庫存持股。", ""
 
@@ -1964,7 +1964,7 @@ def sync_daily(
         updated_at=now_iso,
     )
 
-    # 3. AI Diagnosis (STAGE1_MODEL -> fallback VERTEX_STAGE1_MODEL)
+    # 3. AI Diagnosis (AI_MODEL_MID: Google AI Studio -> fallback Vertex AI)
     portfolio_overview = ""
     model_version = ""
     if run_ai and holdings_rows:
@@ -3537,7 +3537,7 @@ async def run_morning_battle_ai_review(
     deep_fund_map: Mapping[str, Mapping[str, Any]] | None = None,
     fresh_top_picks_block: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str, str]:
-    """Call `VERTEX_STAGE2_MODEL` once across all active tracked memory cards with deep fundamental & chip dossier."""
+    """Call `AI_MODEL_HIGH` once across all active tracked memory cards with deep fundamental & chip dossier."""
     if not active_memories:
         return active_memories, {}, "", ""
 
@@ -4210,7 +4210,7 @@ def run_morning_brief(
     ai_called = False
 
     if run_ai and active_memories:
-        print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，載入深度財報/籌碼微結構並呼叫 VERTEX_STAGE2_MODEL...")
+        print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，載入深度財報/籌碼微結構並呼叫 AI_MODEL_HIGH...")
         try:
             tracked_sids = {clean_leading_zero_code(m.get("stock_no", "")) for m in active_memories} - {""}
             prices_by_sid = {
@@ -4610,7 +4610,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # 6. morning-brief (Pre-Market Battle Plan)
     p_morn = subparsers.add_parser(
         "morning-brief",
-        help="整合隔夜美股國際盤 + VERTEX_STAGE2_MODEL 嚴選記憶持股開盤作戰建議",
+        help="整合隔夜美股國際盤 + AI_MODEL_HIGH 嚴選記憶持股開盤作戰建議",
     )
     p_morn.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
     p_morn.add_argument("--dry-run", action="store_true", help="僅在終端機預覽，不寫入 Sheet 亦不發送 Discord")

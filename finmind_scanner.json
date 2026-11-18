@@ -269,7 +269,6 @@
   "local_retention_days": 30,
   "ai_picker_max_candidates": 25,
   "ai_picker_max_top_picks": 5,
-  "ai_picker_portfolio_model": "gemini-3.8-flash",
   "ai_picker_call_interval_seconds": 13.0,
   "ai_picker_use_vertex_batch": true,
   "ai_picker_stage2_use_vertex_batch": true,
