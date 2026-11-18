@@ -40,6 +40,7 @@ from ai_service import (
     flush_bq_archives,
     get_vertex_batch_stage1_model,
     get_vertex_batch_stage2_model,
+    get_vertex_batch_timeout_seconds,
     get_vertex_stage2_model,
     is_vertex_batch_enabled,
     run_vertex_batch_requests,
@@ -559,6 +560,7 @@ async def analyze_candidates(
     use_vertex_batch: bool = False,
     batch_model: str | None = None,
     poll_interval: float = 60.0,
+    timeout_seconds: float | None = None,
     target_date: date | None = None,
     stage1_task_type: str = "STAGE1_DIAGNOSIS",
     online_task_type: str = "STAGE1_GROUNDING",
@@ -578,6 +580,7 @@ async def analyze_candidates(
             publish_all=publish_all,
             batch_model=batch_model,
             poll_interval=poll_interval,
+            timeout_seconds=timeout_seconds,
             target_date=target_date,
             stage1_task_type=stage1_task_type,
             taxonomy_task_type=taxonomy_task_type,
@@ -634,6 +637,7 @@ async def _analyze_candidates_batch(
     batch_model: str | None,
     poll_interval: float,
     target_date: date | None,
+    timeout_seconds: float | None = None,
     stage1_task_type: str = "STAGE1_DIAGNOSIS",
     taxonomy_task_type: str = "TAXONOMY",
 ) -> tuple[dict[str, dict[str, object]], list[tuple[str, str]]]:
@@ -695,6 +699,7 @@ async def _analyze_candidates_batch(
                 poll_interval_seconds=poll_interval,
                 tag="stage1_batch",
                 task_type=stage1_task_type,
+                timeout_seconds=timeout_seconds,
             )
         except Exception as error:  # noqa: BLE001
             for stock_id in pending_preps:
@@ -2278,6 +2283,7 @@ async def run_quality_selection(
     selection_mode: str = "trend",
     use_vertex_batch: bool = True,
     poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
+    timeout_seconds: float | None = None,
     task_type: str = "AI_PICK_QUALITY_SELECT",
 ) -> object:
     """SASD v6.1 AI #2：跨股績優股選拔委員會（選股與擇時解耦，挑出 Top 3~5 真績優股）。"""
@@ -2300,6 +2306,7 @@ async def run_quality_selection(
             tag="quality_select_batch",
             task_type=task_type,
             stock_ids={"QUALITY_SELECT_STAGE2": "PORTFOLIO"},
+            timeout_seconds=timeout_seconds,
         )
         meta = batch_res.get("QUALITY_SELECT_STAGE2")
         if meta is None:
@@ -2391,6 +2398,7 @@ async def run_strategic_entry_planner(
     selection_mode: str = "trend",
     use_vertex_batch: bool = True,
     poll_interval: float = DEFAULT_BATCH_POLL_SECONDS,
+    timeout_seconds: float | None = None,
     task_type: str = "AI_PICK_STRATEGIC_LAYOUT",
 ) -> object:
     """SASD v6.1 AI #3：專職針對入選之 Top 3~5 績優股，結合 20日逐日價量均線指標籌碼表、大量支撐定位器、台股與美股多指數，規劃三階回檔低接點位與雙層資金配置。"""
@@ -2427,6 +2435,7 @@ async def run_strategic_entry_planner(
             tag="strategic_layout_batch",
             task_type=task_type,
             stock_ids={"STRATEGIC_LAYOUT_STAGE3": "PORTFOLIO"},
+            timeout_seconds=timeout_seconds,
         )
         meta = batch_res.get("STRATEGIC_LAYOUT_STAGE3")
         if meta is None:
@@ -2457,6 +2466,7 @@ async def execute_v61_quality_and_strategic_pipeline(
     model: str | None,
     use_vertex_batch: bool,
     poll_interval: float,
+    timeout_seconds: float | None = None,
     selection_mode: str = "trend",
     dry_run: bool = False,
 ) -> tuple[dict | None, dict[str, dict[str, object]], str, str]:
@@ -2472,7 +2482,7 @@ async def execute_v61_quality_and_strategic_pipeline(
         compensate_ex_dividend_gaps,
         fetch_news_excerpt,
     )
-    from taishin.macro_context import fetch_macro_context
+    from taishin.macro_context import fetch_global_macro_context
     from taxonomy_service import build_sector_metrics_from_prices
     from taishin_portfolio_service import evaluate_candidate_exposure, load_portfolio_exposure_inputs
 
@@ -2541,6 +2551,7 @@ async def execute_v61_quality_and_strategic_pipeline(
         selection_mode=selection_mode,
         use_vertex_batch=use_vertex_batch,
         poll_interval=poll_interval,
+        timeout_seconds=timeout_seconds,
         task_type=q_task_type,
     )
     q_raw = str(getattr(q_meta, "text", "") or "")
@@ -2572,7 +2583,7 @@ async def execute_v61_quality_and_strategic_pipeline(
 
     # Step 2: 為入選之 Top 3~5 績優股組裝「20日逐日價量均線指標籌碼大表 ＋ 三大大量支撐定位器 ＋ 台美股總經」
     try:
-        macro_ctx = await asyncio.to_thread(fetch_macro_context, as_of=target_date)
+        macro_ctx = await asyncio.to_thread(fetch_global_macro_context)
         macro_block = str(macro_ctx.get("prompt_block") or "")
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] 抓取隔夜美股總經環境失敗（略過）：{exc}")
@@ -2658,10 +2669,9 @@ async def execute_v61_quality_and_strategic_pipeline(
         tech_packages[sid] = pkg
 
         exposure = evaluate_candidate_exposure(
-            candidate_id=sid,
-            candidate_name=sname,
-            candidate_sector=sub_ind,
-            holdings=holdings,
+            sid,
+            sub_ind,
+            holdings,
             candidate_prices=raw_stock_prices,
             holding_prices=holding_prices,
         )
@@ -2687,6 +2697,7 @@ async def execute_v61_quality_and_strategic_pipeline(
         selection_mode=selection_mode,
         use_vertex_batch=use_vertex_batch,
         poll_interval=poll_interval,
+        timeout_seconds=timeout_seconds,
         task_type=s_task_type,
     )
     s_raw = str(getattr(s_meta, "text", "") or "")
@@ -3230,6 +3241,19 @@ def resolve_batch_settings(
     return stage1, stage2, poll
 
 
+def resolve_batch_timeout(config: Mapping[str, object]) -> float:
+    """Return Vertex AI Batch timeout in seconds. Priority: scanner json > env > 7200s (2h)."""
+    cfg_val = config.get("vertex_batch_timeout_seconds")
+    if cfg_val is not None:
+        try:
+            parsed = float(cfg_val)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            pass
+    return get_vertex_batch_timeout_seconds()
+
+
 async def run_pipeline(
     config: Mapping[str, object],
     *,
@@ -3243,6 +3267,7 @@ async def run_pipeline(
     max_candidates = int(_cfg(config, "ai_picker_max_candidates", DEFAULT_MAX_CANDIDATES))
     max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
     stage1_batch, stage2_batch, batch_poll = resolve_batch_settings(config, use_batch)
+    batch_timeout = resolve_batch_timeout(config)
     portfolio_model = get_vertex_batch_stage2_model() if stage2_batch else get_vertex_stage2_model()
     call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
     publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
@@ -3300,6 +3325,7 @@ async def run_pipeline(
             call_interval=call_interval,
             use_vertex_batch=stage1_batch,
             poll_interval=batch_poll,
+            timeout_seconds=batch_timeout,
             target_date=target_date,
             stage1_task_type="AI_PICK_STAGE1_DIAGNOSIS",
             online_task_type="AI_PICK_STAGE1_GROUNDING",
@@ -3346,6 +3372,7 @@ async def run_pipeline(
                     model=portfolio_model,
                     use_vertex_batch=stage2_batch,
                     poll_interval=batch_poll,
+                    timeout_seconds=batch_timeout,
                     selection_mode="trend",
                     dry_run=dry_run,
                 )
@@ -3636,6 +3663,7 @@ async def run_rebound_pipeline(
         max_candidates = int(_cfg(config, "rebound_prefilter_top_n", 12))
         max_top = int(_cfg(config, "ai_picker_max_top_picks", DEFAULT_MAX_TOP_PICKS))
         stage1_batch, stage2_batch, batch_poll = resolve_batch_settings(config, use_batch)
+        batch_timeout = resolve_batch_timeout(config)
         portfolio_model = get_vertex_batch_stage2_model() if stage2_batch else get_vertex_stage2_model()
         call_interval = float(_cfg(config, "ai_picker_call_interval_seconds", DEFAULT_CALL_INTERVAL_SECONDS))
         publish_all = bool(_cfg(config, "publish_war_room_for_all_candidates", True))
@@ -3667,6 +3695,7 @@ async def run_rebound_pipeline(
                 call_interval=call_interval,
                 use_vertex_batch=stage1_batch,
                 poll_interval=batch_poll,
+                timeout_seconds=batch_timeout,
                 target_date=target_date,
                 stage1_task_type="REBOUND_STAGE1_DIAGNOSIS",
                 online_task_type="REBOUND_STAGE1_GROUNDING",
@@ -3702,6 +3731,7 @@ async def run_rebound_pipeline(
                             model=portfolio_model,
                             use_vertex_batch=stage2_batch,
                             poll_interval=batch_poll,
+                            timeout_seconds=batch_timeout,
                             selection_mode="rebound",
                             dry_run=dry_run,
                         )

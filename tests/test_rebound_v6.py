@@ -412,4 +412,135 @@ class ReboundV6Tests(unittest.TestCase):
         self.assertEqual(parsed_s["strategic_picks"][0]["allocation_weight_pct"], 50)
         self.assertIn("2,680~2,700", parsed_s["strategic_picks"][0]["tier1_entry"])
 
+    def test_v61_execute_pipeline_end_to_end_and_batch_timeout_2h(self) -> None:
+        import asyncio
+        from datetime import date
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import services.ai_service as ai_service
+        from quant.alignment_ai_picker import (
+            execute_v61_quality_and_strategic_pipeline,
+            resolve_batch_timeout,
+        )
+
+        self.assertEqual(ai_service.get_vertex_batch_timeout_seconds(), 7200.0)
+        self.assertEqual(resolve_batch_timeout({"vertex_batch_timeout_seconds": 7200}), 7200.0)
+
+        with TemporaryDirectory() as tmpdir:
+            daily_dir = Path(tmpdir) / "daily"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            dates = pd.date_range("2026-08-01", periods=65, freq="B")
+            closes = [700.0 + i for i in range(65)]
+            prices_df = pd.DataFrame(
+                {
+                    "stock_id": ["2379"] * 65 + ["TAIEX"] * 65,
+                    "stock_name": ["瑞昱"] * 65 + ["加權指數"] * 65,
+                    "date": list(dates) + list(dates),
+                    "open": [c - 2.0 for c in closes] * 2,
+                    "max": [c + 5.0 for c in closes] * 2,
+                    "min": [c - 5.0 for c in closes] * 2,
+                    "close": closes * 2,
+                    "Trading_Volume": [3_000_000] * 130,
+                }
+            )
+            prices_df.to_csv(daily_dir / "2026-11-17_prices.csv", index=False)
+
+            analyzed = pd.DataFrame(
+                [
+                    {
+                        "stock_id": "2379",
+                        "stock_name": "瑞昱",
+                        "market": "上市",
+                        "industry_category": "半導體業",
+                        "sub_industry": "網通與多媒體IC設計",
+                        "close": 764.0,
+                        "MA3": 762.0,
+                        "MA17": 755.0,
+                        "MA45": 749.0,
+                        "MA117": 721.0,
+                        "MA189": 635.0,
+                        "vol_lots": 4107,
+                        "vol_ma5_lots": 2591,
+                        "vol_ma20_lots": 3287,
+                        "vol_status": "📈 溫和放量",
+                    }
+                ]
+            )
+            stage1_results = {"2379": {"snapshot": "snap 2379", "summary": '{"score": 88}'}}
+
+            q_json = (
+                '{"selection_summary": "網通IC龍頭", '
+                '"quality_picks": [{"rank": 1, "stock_id": "2379", "stock_name": "瑞昱", '
+                '"sector": "網通與多媒體IC設計", "quality_score": 88, "quality_grade": "S_TIER_CORE", '
+                '"outlook_verdict": "高度可信", "fundamental_moat_and_catalysts": "三率穩健", '
+                '"chip_and_institutional_backing": "投信買超", "fundamental_invalidation": "營收轉弱"}], '
+                '"watchlist": [], "avoid": []}'
+            )
+            s_json = (
+                '{"market_light": "🔴紅燈", "recommended_total_exposure_pct": 40, '
+                '"market_comment": "美股偏弱，建議總持倉40%等回檔", '
+                '"strategic_picks": [{"rank": 1, "stock_id": "2379", "stock_name": "瑞昱", '
+                '"sector": "網通與多媒體IC設計", "score": 88, "allocation_weight_pct": 100, '
+                '"tactical_type": "🎯 型態A長均線三階低接", '
+                '"current_tech_and_chip_diagnosis": "等待回測117MA", '
+                '"tier1_entry": "【第1批 30% 試單】718~722元", '
+                '"tier2_entry": "【第2批 40% 核心】695~705元", '
+                '"tier3_entry": "【第3批 30% 黃金坑】650~665元", '
+                '"weighted_avg_entry_price": "695.00", "chase_limit_price": "725.00", '
+                '"target_price_1": "760.00", "target_price_2": "820.00", '
+                '"stop_loss_price": "630.00", "invalidation_rule": "跌破630元"}]}'
+            )
+
+            async def fake_batch(requests_map, **kwargs):
+                self.assertEqual(kwargs.get("timeout_seconds"), 7200.0)
+                if "QUALITY_SELECT_STAGE2" in requests_map:
+                    return {"QUALITY_SELECT_STAGE2": SimpleNamespace(text=q_json, model_version="gemini-4-argon")}
+                return {"STRATEGIC_LAYOUT_STAGE3": SimpleNamespace(text=s_json, model_version="gemini-4-argon")}
+
+            cache = MagicMock()
+            cache.get_daily_chip_history.return_value = pd.DataFrame()
+            analyzer = MagicMock()
+            analyzer.cache._read_stock_rows.return_value = pd.DataFrame()
+            analyzer.compute_cross_sectional_pe_map.return_value = {}
+            analyzer._fetch_yahoo_stock_rss.return_value = []
+
+            with (
+                patch("quant.alignment_ai_picker.run_vertex_batch_requests", side_effect=fake_batch),
+                patch(
+                    "taishin.macro_context.fetch_global_macro_context",
+                    return_value={"prompt_block": "- 國際盤氣候：🔴 國際逆風警戒"},
+                ) as mock_macro,
+                patch("taishin_portfolio_service.load_portfolio_exposure_inputs", return_value=([], {})),
+            ):
+                decision, audit_records, _raw, model_ver = asyncio.run(
+                    execute_v61_quality_and_strategic_pipeline(
+                        analyzed,
+                        {"market_benchmark_id": "TAIEX", "enable_ex_dividend_compensation": False},
+                        target_date=date(2026, 11, 17),
+                        daily_dir=daily_dir,
+                        cache=cache,
+                        analyzer=analyzer,
+                        stage1_results=stage1_results,
+                        market_regime={"light": "🔴紅燈", "summary": "🔴紅燈"},
+                        max_top=5,
+                        model="gemini-4-argon",
+                        use_vertex_batch=True,
+                        poll_interval=60.0,
+                        timeout_seconds=7200.0,
+                        selection_mode="rebound",
+                        dry_run=True,
+                    )
+                )
+
+            mock_macro.assert_called_once_with()
+            self.assertIsNotNone(decision)
+            self.assertEqual(model_ver, "gemini-4-argon")
+            self.assertEqual(len(decision["top_picks"]), 1)
+            self.assertEqual(decision["top_picks"][0]["stock_id"], "2379")
+            self.assertEqual(audit_records["2379"]["Allocation_Weight_Pct"], 100)
+            self.assertIn("718~722", audit_records["2379"]["Tier1_Entry_Plan"])
+
 

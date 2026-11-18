@@ -57,6 +57,7 @@ DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
 DEFAULT_VERTEX_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_VERTEX_LOCATION = "global"
 DEFAULT_BQ_LOCATION = "us-central1"
+DEFAULT_VERTEX_BATCH_TIMEOUT_SECONDS = 7200.0  # 2 小時（避免 Vertex Batch 排隊超過 30 分鐘逾時）
 
 GOOGLE_AI_THINKING_BUDGET = 128
 GOOGLE_AI_HTTP_TIMEOUT_MS = 300_000
@@ -1127,6 +1128,21 @@ def get_vertex_batch_stage2_model() -> str:
     ).strip()
 
 
+def get_vertex_batch_timeout_seconds(config_override: float | None = None) -> float:
+    """Return Vertex AI Batch polling timeout in seconds (default 7200s / 2 hours)."""
+    if config_override is not None and float(config_override) > 0:
+        return float(config_override)
+    raw = (os.getenv("VERTEX_BATCH_TIMEOUT_SECONDS") or "").strip()
+    if raw:
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+    return DEFAULT_VERTEX_BATCH_TIMEOUT_SECONDS
+
+
 def get_bq_staging_dataset() -> str:
     return (os.getenv("BQ_STAGING_DATASET") or DEFAULT_BQ_STAGING_DATASET).strip()
 
@@ -1601,7 +1617,7 @@ async def run_vertex_batch_requests(
     tag: str = "vertex_batch",
     task_type: str = "STAGE2_DIAGNOSIS",
     stock_ids: Mapping[str, str] | None = None,
-    timeout_seconds: float = 1800.0,
+    timeout_seconds: float | None = None,
 ) -> dict[str, AiCallResult]:
     """Run prompts as one Vertex AI Batch job via BigQuery (input_/predictions_ tables per job).
 
@@ -1612,6 +1628,7 @@ async def run_vertex_batch_requests(
         return {}
 
     target_model = (model or get_vertex_batch_stage1_model()).strip()
+    resolved_timeout = get_vertex_batch_timeout_seconds(timeout_seconds)
     records = await asyncio.to_thread(
         _run_vertex_batch_sync,
         requests_map,
@@ -1621,7 +1638,7 @@ async def run_vertex_batch_requests(
         temperature=temperature,
         task_type=task_type,
         stock_ids=stock_ids,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=resolved_timeout,
     )
 
     results: dict[str, AiCallResult] = {}

@@ -319,7 +319,7 @@ flowchart TD
    │   2. 三大大量支撐定位器（60日分價量 POC/VAH/VAL 與現價下方最大量支撐區 Lower Support POC #1/#2、近60日爆量紅K/長下影承接防守低點、投信/外資 20d/60d 買超加權成本均價 VWAP）
    │   3. 近 60/120 日波段高低點、黃金分割回檔位 (0.236~0.786)、未回補跳空缺口、五線均線斜率與未來 5 日扣抵價、基本面價值鐵底價
    ├─ build_market_daily_trend_block()：台股大盤基準近 10 交易日價量、五線均線、KD/RSI/MACD 與大盤整體融資餘額/增減趨勢
-   ├─ fetch_macro_context()：隔夜美股七大指標（費半 ^SOX、那指 ^IXIC、標普 ^GSPC、TSM ADR、NVDA、^VIX 恐慌指數、TWD=X 匯率）
+   ├─ fetch_global_macro_context()：隔夜美股七大指標（費半 ^SOX、那指 ^IXIC、標普 ^GSPC、TSM ADR、NVDA、^VIX 恐慌指數、TWD=X 匯率）
    └─ evaluate_candidate_exposure()：台新現有持股同產業與 60 日報酬相關係數曝險檢核
    ↓
 [AI #3: STRATEGIC_LAYOUT] (gemini-4-argon, Batch 單一跨股請求: AI_PICK_STRATEGIC_LAYOUT / REBOUND_STRATEGIC_LAYOUT)

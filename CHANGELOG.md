@@ -15,6 +15,17 @@
 
 ---
 
+## [v6.1.1] - 2026-11-18
+### 🔧 優化與修正 — 修復 SASD v6.1 總經函式匯入／庫存曝險參數錯誤，並將 Vertex AI Batch 逾時放寬至 2 小時
+* **修復 22:00 `rebound-ai` AI #2/#3 執行期錯誤（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
+  * 修正 `execute_v61_quality_and_strategic_pipeline()` 誤匯入不存在之 `fetch_macro_context(..., as_of=...)`，改為正確呼叫 `taishin.macro_context.fetch_global_macro_context()`。
+  * 修正 `evaluate_candidate_exposure()` 傳入不存在之關鍵字參數 `candidate_id` / `candidate_name` / `candidate_sector`，對齊實際簽章 `(sid, sub_ind, holdings, candidate_prices=..., holding_prices=...)`。
+* **放寬 Vertex AI Batch 逾時上限至 2 小時 / `7200` 秒（[`services/ai_service.py`](/services/ai_service.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`finmind_scanner.json`](/finmind_scanner.json)、[`.env.example`](/.env.example)）**：
+  * 針對 21:30 `finmind-ai-pick` 遇 GCP 尖峰排隊逾時（`1813.9s > 1800.0s`）失敗問題，將 `DEFAULT_VERTEX_BATCH_TIMEOUT_SECONDS` 由 `1800.0`（30 分鐘）調升至 `7200.0`（2 小時），並支援透過 `finmind_scanner.json` (`vertex_batch_timeout_seconds`) 與 `.env` (`VERTEX_BATCH_TIMEOUT_SECONDS`) 覆寫，全面串接至 Stage 1、AI #2 (`run_quality_selection`) 與 AI #3 (`run_strategic_entry_planner`)。
+* **新增端到端測試（[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**：新增 `test_v61_execute_pipeline_end_to_end_and_batch_timeout_2h` 驗證真實匯入、函式簽章與 2 小時逾時設定。
+
+---
+
 ## [v6.1.0] - 2026-11-17
 ### ✨ 新增功能 & 🔧 優化與修正 — SASD v6.1 三階段專職分工（「績優股選拔」與「戰略回檔低接＋雙層籌碼分配」徹底解耦）
 * **重構盤後 AI 選股為三階段 Vertex AI Batch 專職分工架構（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：

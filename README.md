@@ -166,7 +166,8 @@ VERTEX_STAGE2_MODEL=gemini-2.5-pro
 VERTEX_BATCH_ENABLED=true
 GCS_BUCKET_NAME=nickchung_bucket
 GCS_BATCH_PREFIX=vertex_batch
-VERTEX_BATCH_POLL_SECONDS=60
+VERTEX_BATCH_POLL_SECONDS=60             # Vertex Batch 狀態輪詢秒數（預設 60s）
+VERTEX_BATCH_TIMEOUT_SECONDS=7200         # Vertex Batch 單次輪詢超時秒數（預設 7200s = 2 小時）
 VERTEX_BATCH_STAGE1_MODEL=gemini-2.5-flash-lite
 VERTEX_BATCH_STAGE2_MODEL=gemini-2.5-pro
 
@@ -399,7 +400,7 @@ pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r "C:\path\to
 
 * 每日 21:30 `analyze-alignment`（及 22:00 `analyze-rebound --run-ai`）的 **Stage 1 單股診斷** 與 **Stage 2 跨股總決策** 預設走 Vertex AI Batch API（50% Token 折扣），免除 `sleep(13s)` 與 429 限流；`/stock_ai`、`/ai`、08:15 晨報仍為即時 API。
 * 流程：FinMind 同步與快取檢查 → 只把 Cache Miss 的股票打包成一份 JSONL 上傳 GCS → 建立 Batch Job 並每 60 秒輪詢 → 解析輸出（以 `custom_id` 對齊）→ 戰情室 / Sheets / Discord。全數命中快取時不會建立 Stage 1 Job。
-* 開關優先序：CLI `--batch/--no-batch` > `finmind_scanner.json`（`ai_picker_use_vertex_batch`、`ai_picker_stage2_use_vertex_batch`、`vertex_batch_poll_interval_seconds`）> `.env` `VERTEX_BATCH_ENABLED`。
+* 開關優先序：CLI `--batch/--no-batch` > `finmind_scanner.json`（`ai_picker_use_vertex_batch`、`ai_picker_stage2_use_vertex_batch`、`vertex_batch_poll_interval_seconds`、`vertex_batch_timeout_seconds`）> `.env` `VERTEX_BATCH_ENABLED` / `VERTEX_BATCH_TIMEOUT_SECONDS`（預設 `7200` 秒 / 2 小時）。
 * `deploy/finmind-ai-pick.service`、`deploy/finmind-rebound-ai.service` 已設 `TimeoutStartSec=infinity` 與 `PYTHONUNBUFFERED=1`；本地 JSONL 暫存於 `finmind_reports/.state/batch/`，依 `local_retention_days` 自動清理。
 * 憑證：使用 ADC，自動探測 `GOOGLE_APPLICATION_CREDENTIALS` ➔ `certs/sheetbot.json` ➔ `./sheetbot.json`。
 

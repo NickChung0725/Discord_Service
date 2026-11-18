@@ -274,6 +274,7 @@
   "ai_picker_use_vertex_batch": true,
   "ai_picker_stage2_use_vertex_batch": true,
   "vertex_batch_poll_interval_seconds": 60,
+  "vertex_batch_timeout_seconds": 7200,
   "publish_war_room_for_all_candidates": true,
   "post_ai_picks_to_discord": true,
   "save_ai_picks_to_gsheet": true,
