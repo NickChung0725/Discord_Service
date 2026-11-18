@@ -993,6 +993,7 @@ def build_strategic_tech_and_chip_package(
         "- **🛡️ 基本面價值鐵底參考**：" + (" ｜ ".join(val_floors) if val_floors else "依長均線與前波低點防守"),
         f"- **🧭 Python 預設三階回檔低接參考區（禁止現價 {close_t:.2f} 追高）**：第1批(30%) {t1_ref}｜第2批(40%) {t2_ref}｜第3批(30%) {t3_ref}｜硬停損參考 {hard_sl:.2f}｜TP1參考 {tp1_def:.2f}",
         "- **📊 近 20 個交易日「價、量、五線歷史均線、KD/RSI/MACD、三大法人、融資」逐日對齊明細表**：",
+        "",
         *table_lines,
     ]
 
@@ -1062,6 +1063,7 @@ def build_market_daily_trend_block(
 
     lines = [
         f"【台股大盤基準 ({benchmark_id}) 近 {len(recent)} 交易日價量、五線均線、KD/RSI/MACD 與大盤整體融資趨勢】",
+        "",
         "| 日期 | 收盤 | 漲跌% | MA3 | MA17 | MA45 | MA117 | MA189 | K9/D9 | RSI14 | MACD柱 | 大盤總融資(億) | 融資單日增減(億) |",
         "|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]

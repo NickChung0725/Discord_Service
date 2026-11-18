@@ -1859,7 +1859,7 @@ class FundamentalAnalyzer:
                 "qtr_rev_yoy_pct",
             ]
             show = df_wide[[c for c in cols_wide if c in df_wide.columns]].copy() if not df_wide.empty else pd.DataFrame()
-            parts.append("\n■ 表 1：損益結構、營業費用率與本業/業外歸因 (近 8 季｜營收單位：億元，比率：%)")
+            parts.append("\n■ 表 1：損益結構、營業費用率與本業/業外歸因 (近 8 季｜營收單位：億元，比率：%)\n")
             if not show.empty:
                 parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
@@ -1899,7 +1899,7 @@ class FundamentalAnalyzer:
 
             show = base[[c for c in cols if c in base.columns]].copy() if not base.empty else pd.DataFrame()
             show = self._scale_cols_to_yi(show, money_cols_t2)
-            parts.append("\n■ 表 2：營運週轉效率 (CCC)、合約負債與金融資產配置 (近 8 季｜金額單位：億元，週轉：天)")
+            parts.append("\n■ 表 2：營運週轉效率 (CCC)、合約負債與金融資產配置 (近 8 季｜金額單位：億元，週轉：天)\n")
             if not show.empty:
                 parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
@@ -1922,7 +1922,7 @@ class FundamentalAnalyzer:
             ]
             show = df_cf[[c for c in cols if c in df_cf.columns]].copy()
             show = self._scale_cols_to_yi(show, cols[1:])
-            parts.append("\n■ 表 3：單季現金流量拆解、營運資金變動與含金量 (近 8 季｜金額單位：億元)")
+            parts.append("\n■ 表 3：單季現金流量拆解、營運資金變動與含金量 (近 8 季｜金額單位：億元)\n")
             parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 4: leverage and solvency (統一將資產負債表原始元轉為億元，與 total_debt_亿元 / ebitda_亿元 一致)
@@ -1959,7 +1959,7 @@ class FundamentalAnalyzer:
             show_cols = [c for c in (cols_bs + cols_wide[1:]) if c in base.columns]
             show = base[show_cols].copy() if not base.empty else pd.DataFrame()
             show = self._scale_cols_to_yi(show, cols_bs[1:])
-            parts.append("\n■ 表 4：財務槓桿、有息負債結構與償債能力 (近 8 季｜金額單位：億元，比率：%)")
+            parts.append("\n■ 表 4：財務槓桿、有息負債結構與償債能力 (近 8 季｜金額單位：億元，比率：%)\n")
             if not show.empty:
                 parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
@@ -1976,6 +1976,7 @@ class FundamentalAnalyzer:
                 parts.append(
                     f"- {stale_msg}｜請於 Step 1 標註月營收資料過期，並改以【表 1】最新季報 qtr_rev_yoy_pct 作為營收動能主依據。"
                 )
+            parts.append("")
             parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 6: dividend + chip summary (含 v5.5.0 融資融券與維持率欄位)
@@ -1993,7 +1994,7 @@ class FundamentalAnalyzer:
                 "payment_date",
             ]
             show = df_div[[c for c in cols if c in df_div.columns]].copy()
-            parts.append("\n【股利政策 (近 5 年)】")
+            parts.append("\n【股利政策 (近 5 年)】\n")
             parts.append(show.to_markdown(index=False, floatfmt=".2f"))
         if not df_chip.empty:
             cols = [
@@ -2023,7 +2024,7 @@ class FundamentalAnalyzer:
                 "tdcc_total_shareholders",
             ]
             show = df_chip[[c for c in cols if c in df_chip.columns]].copy()
-            parts.append("\n- 【法人與信用籌碼 (近 8 週，含融資使用率/增減與估算維持率)】")
+            parts.append("\n- 【法人與信用籌碼 (近 8 週，含融資使用率/增減與估算維持率)】\n")
             parts.append(show.to_markdown(index=False, floatfmt=".2f"))
 
         # Table 7: Optional latest prices.csv moving averages (if available locally)
@@ -2193,6 +2194,7 @@ class FundamentalAnalyzer:
             ]
             if vol_line:
                 lines.append(vol_line)
+            lines.append("")
             lines.append(recent_5d[display_cols].to_markdown(index=False, floatfmt=".2f"))
             return "\n".join(lines)
         except Exception:
