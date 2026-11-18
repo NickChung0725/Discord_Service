@@ -80,6 +80,7 @@ DEFAULT_PORTFOLIO_MODEL = DEFAULT_VERTEX_MODEL
 DEFAULT_CALL_INTERVAL_SECONDS = 13.0
 DEFAULT_BATCH_POLL_SECONDS = 60.0
 DISCORD_CHUNK_LIMIT = 1800
+DISCORD_MAX_MESSAGE_LENGTH = 2000
 
 _VERDICT_EMOJI = {"高度可信": "🟢", "待驗證": "🟡", "存疑": "🔴"}
 _RANK_EMOJI = {1: "🥇", 2: "🥈", 3: "🥉"}
@@ -2997,14 +2998,67 @@ def format_pick_report(
     blocks.append("本報告僅為資料整理與 AI 輔助評選，非投資建議。")
 
     chunks: list[str] = []
+    continuation_heading = heading + "\n（續）"
     current = heading
+
+    def _flush_and_reset() -> None:
+        nonlocal current
+        chunks.append(current)
+        current = continuation_heading
+
     for block in blocks:
-        if len(current) + len(block) + 2 > DISCORD_CHUNK_LIMIT and current != heading:
-            chunks.append(current)
-            current = heading + "\n（續）"
-        current += "\n\n" + block
+        if len(current) + len(block) + 2 <= DISCORD_CHUNK_LIMIT:
+            current += "\n\n" + block
+            continue
+        if current not in (heading, continuation_heading):
+            _flush_and_reset()
+        if len(current) + len(block) + 2 <= DISCORD_CHUNK_LIMIT:
+            current += "\n\n" + block
+            continue
+        # Block exceeds remaining chunk space even on a fresh chunk; split by lines.
+        sep = "\n\n"
+        budget = max(1, DISCORD_CHUNK_LIMIT - len(continuation_heading) - 2)
+        for line in block.splitlines():
+            pieces = _split_text_to_limit(line, budget) if len(line) > budget else [line]
+            for piece in pieces:
+                if len(current) + len(sep) + len(piece) > DISCORD_CHUNK_LIMIT and current not in (
+                    heading,
+                    continuation_heading,
+                ):
+                    _flush_and_reset()
+                    sep = "\n\n"
+                current += sep + piece
+                sep = "\n"
     chunks.append(current)
     return chunks
+
+
+def _split_text_to_limit(text: str, limit: int) -> list[str]:
+    """Split text into chunks of at most ``limit`` characters, preferring line boundaries."""
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    if len(text) <= limit:
+        return [text]
+
+    parts: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if len(line) > limit:
+            if current:
+                parts.append(current.rstrip("\n"))
+                current = ""
+            stripped = line.rstrip("\n")
+            for idx in range(0, len(stripped), limit):
+                parts.append(stripped[idx : idx + limit])
+            continue
+        if len(current) + len(line) > limit:
+            parts.append(current.rstrip("\n"))
+            current = line
+        else:
+            current += line
+    if current:
+        parts.append(current.rstrip("\n"))
+    return [part for part in parts if part] or [text[:limit]]
 
 
 def _trim_reply_continuation(content: str, *, marker: str = "（續）", scan_lines: int = 50) -> str:
@@ -3035,53 +3089,55 @@ def post_messages_to_discord(messages: list[str], channel_id: str, bot_token: st
         content_to_send = content
         if index > 0 and first_message_id:
             content_to_send = _trim_reply_continuation(content)
+        parts = _split_text_to_limit(content_to_send, DISCORD_MAX_MESSAGE_LENGTH)
 
-        payload_dict: dict[str, Any] = {
-            "content": content_to_send,
-            "flags": 4,
-        }
-        if index > 0 and first_message_id:
-            payload_dict["message_reference"] = {
-                "message_id": str(first_message_id),
-                "fail_if_not_exists": False,
+        for part_idx, part in enumerate(parts):
+            payload_dict: dict[str, Any] = {
+                "content": part,
+                "flags": 4,
             }
-            payload_dict["allowed_mentions"] = {"replied_user": False}
+            if sent > 0 and first_message_id:
+                payload_dict["message_reference"] = {
+                    "message_id": str(first_message_id),
+                    "fail_if_not_exists": False,
+                }
+                payload_dict["allowed_mentions"] = {"replied_user": False}
 
-        request = Request(
-            f"{DISCORD_API_BASE_URL}/channels/{channel_id}/messages",
-            data=json.dumps(payload_dict, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bot {bot_token.strip()}",
-                "Content-Type": "application/json",
-                "User-Agent": "DiscordService (alignment AI picker)",
-            },
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-                if response.status not in (200, 201):
-                    raise RuntimeError(f"Discord returned unexpected HTTP status {response.status}.")
-                resp_body = response.read()
-                if isinstance(resp_body, bytes):
-                    resp_text = resp_body.decode("utf-8", errors="replace")
-                elif isinstance(resp_body, str):
-                    resp_text = resp_body
-                else:
-                    resp_text = ""
-                try:
-                    resp_data = json.loads(resp_text) if resp_text else {}
-                    if index == 0 and isinstance(resp_data, dict) and resp_data.get("id"):
-                        first_message_id = str(resp_data["id"])
-                except Exception:
-                    pass
-        except HTTPError as error:
-            body = error.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Discord rejected the report (HTTP {error.code}): {body}") from error
-        except URLError as error:
-            raise RuntimeError(f"Failed to reach Discord: {error.reason}") from error
-        sent += 1
-        if index + 1 < len(messages):
-            time.sleep(DISCORD_POST_PAUSE_SECONDS)
+            request = Request(
+                f"{DISCORD_API_BASE_URL}/channels/{channel_id}/messages",
+                data=json.dumps(payload_dict, ensure_ascii=False).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bot {bot_token.strip()}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "DiscordService (alignment AI picker)",
+                },
+                method="POST",
+            )
+            try:
+                with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                    if response.status not in (200, 201):
+                        raise RuntimeError(f"Discord returned unexpected HTTP status {response.status}.")
+                    resp_body = response.read()
+                    if isinstance(resp_body, bytes):
+                        resp_text = resp_body.decode("utf-8", errors="replace")
+                    elif isinstance(resp_body, str):
+                        resp_text = resp_body
+                    else:
+                        resp_text = ""
+                    try:
+                        resp_data = json.loads(resp_text) if resp_text else {}
+                        if sent == 0 and isinstance(resp_data, dict) and resp_data.get("id"):
+                            first_message_id = str(resp_data["id"])
+                    except Exception:
+                        pass
+            except HTTPError as error:
+                body = error.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"Discord rejected the report (HTTP {error.code}): {body}") from error
+            except URLError as error:
+                raise RuntimeError(f"Failed to reach Discord: {error.reason}") from error
+            sent += 1
+            if part_idx + 1 < len(parts) or index + 1 < len(messages):
+                time.sleep(DISCORD_POST_PAUSE_SECONDS)
     return sent
 
 

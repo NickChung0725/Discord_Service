@@ -524,6 +524,73 @@ class DiscordPostReplyTests(unittest.TestCase):
         self.assertEqual(calls[2]["message_reference"]["message_id"], "msg-first-12345")
         self.assertEqual(calls[2]["content"], "#4 2330 台積電")
 
+    def test_report_splits_oversized_avoid_and_raw_blocks_within_chunk_limit(self) -> None:
+        stock_ids = [f"{2300 + i}" for i in range(11)]
+        frame = _frame([{"stock_id": sid, "stock_name": f"測試{i}"} for i, sid in enumerate(stock_ids)])
+        decision = {
+            "market_light": "🟡黃燈",
+            "market_comment": "本日無符合嚴選標準的標的。",
+            "top_picks": [],
+            "watchlist": [],
+            "avoid": [{"stock_id": sid, "reason": "基本面與籌碼尚待觀察，" * 15} for sid in stock_ids],
+        }
+        messages = format_pick_report(
+            date(2026, 11, 17),
+            decision,
+            "",
+            frame,
+            {},
+            [],
+            total_signals=11,
+            skipped=0,
+            model="gemini-4-argon",
+            model_version="gemini-4-argon",
+        )
+        self.assertGreater(len(messages), 1)
+        self.assertTrue(all(len(m) <= 1800 for m in messages))
+        joined = "\n".join(messages)
+        for sid in stock_ids:
+            self.assertIn(sid, joined)
+
+        raw_messages = format_pick_report(
+            date(2026, 11, 17),
+            None,
+            "X" * 3000,
+            frame,
+            {},
+            [],
+            total_signals=11,
+            skipped=0,
+            model="gemini-4-argon",
+            model_version="",
+        )
+        self.assertGreater(len(raw_messages), 1)
+        self.assertTrue(all(len(m) <= 1800 for m in raw_messages))
+
+    def test_post_messages_to_discord_splits_oversized_message(self) -> None:
+        calls: list[dict] = []
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(json.loads(req.data.decode("utf-8")))
+            mock_resp = Mock()
+            mock_resp.status = 200
+            mock_resp.__enter__ = Mock(return_value=mock_resp)
+            mock_resp.__exit__ = Mock(return_value=None)
+            mock_resp.read.return_value = json.dumps({"id": "msg-oversized-1"}).encode("utf-8")
+            return mock_resp
+
+        oversized = "\n".join(f"- {2300 + i} 測試股：" + ("說明文字" * 40) for i in range(15))
+        self.assertGreater(len(oversized), 2000)
+        with patch("alignment_ai_picker.urlopen", side_effect=fake_urlopen):
+            with patch("time.sleep", return_value=None):
+                sent = post_messages_to_discord([oversized], channel_id="123456789", bot_token="fake-token")
+
+        self.assertEqual(sent, len(calls))
+        self.assertGreater(sent, 1)
+        self.assertTrue(all(len(c["content"]) <= 2000 for c in calls))
+        self.assertNotIn("message_reference", calls[0])
+        self.assertEqual(calls[1]["message_reference"]["message_id"], "msg-oversized-1")
+
 
 import numpy as np
 from unittest.mock import AsyncMock

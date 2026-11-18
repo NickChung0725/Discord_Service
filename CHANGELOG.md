@@ -4,6 +4,15 @@
 
 ---
 
+## [v6.1.2] - 2026-11-18
+### 🔧 優化與修正 — 修復 Discord 報告單一區塊超過 2000 字元導致 HTTP 400 推播失敗
+* **修復 `format_pick_report` 與 `post_messages_to_discord` 超長訊息分段（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`tests/test_alignment_ai_picker.py`](/tests/test_alignment_ai_picker.py)）**：
+  * 修正當 `avoid` / `watchlist` 多檔列舉、`top_picks` 或 `raw_text` 單一區塊長度超過 `DISCORD_CHUNK_LIMIT`（1800 字元）時未自動依行切分，導致單則訊息突破 Discord 2000 字元上限（HTTP 400 `BASE_TYPE_MAX_LENGTH`）之問題。
+  * 新增共用切分輔助函式 `_split_text_to_limit()`，於 `format_pick_report()` 依行界線自動拆分為多個 `<= 1800` 字元續篇區塊，並於 `post_messages_to_discord()` 推播前再次確保每則訊息皆 `<= 2000` 字元且正確回覆首則訊息。
+  * 擴充 `tests/test_alignment_ai_picker.py` 單元測試驗證 11 檔長原因 `avoid`、`raw_text` 回退與超長單則推播自動分段行為。
+
+---
+
 ## [v6.0.2] - 2026-11-17
 ### 🔧 優化與修正 — 移除早期測試用伺服器心跳與台北天氣功能
 * **移除伺服器 6 小時心跳與台北天氣排程／指令（[`bot_server.py`](/bot_server.py)、[`services/bot.py`](/services/bot.py)、[`services/__init__.py`](/services/__init__.py)、[`.env.example`](/.env.example)）**：
