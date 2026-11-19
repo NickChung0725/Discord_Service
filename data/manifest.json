@@ -1,0 +1,3038 @@
+{
+  "updated_at": "2026-11-19 10:17:55",
+  "available_dates": [
+    "2026-11-18",
+    "2026-11-17",
+    "2026-11-16",
+    "2026-11-13",
+    "2026-11-12",
+    "2026-11-11",
+    "2026-11-10",
+    "2026-11-09",
+    "2026-11-06",
+    "2026-11-05",
+    "2026-11-04",
+    "2026-11-03",
+    "2026-11-02",
+    "2026-10-30",
+    "2026-10-29",
+    "2026-10-28",
+    "2026-10-27",
+    "2026-10-26",
+    "2026-10-23",
+    "2026-10-22",
+    "2026-10-21",
+    "2026-10-20",
+    "2026-10-19"
+  ],
+  "strategies_catalog": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "description": "五線多頭排列 ＋ 基本面績優選拔 ＋ 三階拉回低接"
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "description": "高點回跌 ≥10% 回踩 45/117/189MA 支撐 ＋ 錯殺歸因低接"
+    }
+  ],
+  "rolling_30d_summary": {
+    "settled_trades": 2,
+    "win_rate_pct": 0.0,
+    "profit_factor": 0.0,
+    "false_negative_rate_pct": 24.0
+  },
+  "stock_search_index": {
+    "1216": {
+      "stock_name": "統一",
+      "sector": "食品加工與綜合通路",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1216/technical-chart",
+      "war_room_url": "charts/1216_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 80
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 5,
+          "score": 82
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1301": {
+      "stock_name": "台塑",
+      "sector": "石化基礎原料與塑膠製品",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1301/technical-chart",
+      "war_room_url": "charts/1301_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1326": {
+      "stock_name": "台化",
+      "sector": "石化塑膠-基礎化學品與塑膠原料",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1326/technical-chart",
+      "war_room_url": "charts/1326_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-12",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-06",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1560": {
+      "stock_name": "中砂",
+      "sector": "半導體材料與再生晶圓",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1560/technical-chart",
+      "war_room_url": "charts/1560_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1563": {
+      "stock_name": "巧新",
+      "sector": "汽車零組件-車用鍛造鋁圈",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1563/technical-chart",
+      "war_room_url": "charts/1563_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-06",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1709": {
+      "stock_name": "和益",
+      "sector": "石化基礎原料與界面活性劑",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1709/technical-chart",
+      "war_room_url": "charts/1709_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 5,
+          "score": 82
+        },
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1727": {
+      "stock_name": "中華化",
+      "sector": "電子化學品與基礎化工",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1727/technical-chart",
+      "war_room_url": "charts/1727_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1808": {
+      "stock_name": "潤隆",
+      "sector": "建材營造-住宅與商辦開發",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1808/technical-chart",
+      "war_room_url": "charts/1808_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-03",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1815": {
+      "stock_name": "富喬",
+      "sector": "PCB-玻纖布與基板材料",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1815/technical-chart",
+      "war_room_url": "charts/1815_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "1907": {
+      "stock_name": "永豐餘",
+      "sector": "造紙與紙容器包裝",
+      "wantgoo_url": "https://www.wantgoo.com/stock/1907/technical-chart",
+      "war_room_url": "charts/1907_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-03",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2027": {
+      "stock_name": "大成鋼",
+      "sector": "鋼鐵工業-不鏽鋼與鋁板捲",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2027/technical-chart",
+      "war_room_url": "charts/2027_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-03",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 88
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2034": {
+      "stock_name": "允強",
+      "sector": "不銹鋼管與板材製造",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2034/technical-chart",
+      "war_room_url": "charts/2034_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2059": {
+      "stock_name": "川湖",
+      "sector": "伺服器與筆電滑軌及鉸鏈",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2059/technical-chart",
+      "war_room_url": "charts/2059_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2061": {
+      "stock_name": "風青",
+      "sector": "特殊線材與漆包線",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2061/technical-chart",
+      "war_room_url": "charts/2061_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2207": {
+      "stock_name": "和泰車",
+      "sector": "汽車銷售與租賃通路",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2207/technical-chart",
+      "war_room_url": "charts/2207_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2221": {
+      "stock_name": "大甲",
+      "sector": "汽車零件-車身與外觀件",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2221/technical-chart",
+      "war_room_url": "charts/2221_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-11",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-10",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-09",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-06",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2241": {
+      "stock_name": "艾姆勒",
+      "sector": "汽車零組件-電動車散熱",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2241/technical-chart",
+      "war_room_url": "charts/2241_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2302": {
+      "stock_name": "麗正",
+      "sector": "分離式元件與整流二極體",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2302/technical-chart",
+      "war_room_url": "charts/2302_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2305": {
+      "stock_name": "全友",
+      "sector": "電子工業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2305/technical-chart",
+      "war_room_url": "charts/2305_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2323": {
+      "stock_name": "中環",
+      "sector": "光碟片與記憶媒體製造",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2323/technical-chart",
+      "war_room_url": "charts/2323_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2340": {
+      "stock_name": "台亞",
+      "sector": "光電-LED與感測元件",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2340/technical-chart",
+      "war_room_url": "charts/2340_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2351": {
+      "stock_name": "順德",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2351/technical-chart",
+      "war_room_url": "charts/2351_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-27",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2357": {
+      "stock_name": "華碩",
+      "sector": "PC品牌與消費性電子",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2357/technical-chart",
+      "war_room_url": "charts/2357_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-06",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2362": {
+      "stock_name": "藍天",
+      "sector": "電腦及週邊設備業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2362/technical-chart",
+      "war_room_url": "charts/2362_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-29",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2377": {
+      "stock_name": "微星",
+      "sector": "品牌電競PC與主機板",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2377/technical-chart",
+      "war_room_url": "charts/2377_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-11",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 85
+        },
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 85
+        }
+      ]
+    },
+    "2379": {
+      "stock_name": "瑞昱",
+      "sector": "網通與多媒體IC設計",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2379/technical-chart",
+      "war_room_url": "charts/2379_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 85
+        }
+      ]
+    },
+    "2380": {
+      "stock_name": "虹光",
+      "sector": "電腦及週邊設備業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2380/technical-chart",
+      "war_room_url": "charts/2380_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2408": {
+      "stock_name": "南亞科",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2408/technical-chart",
+      "war_room_url": "charts/2408_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-27",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2413": {
+      "stock_name": "環科",
+      "sector": "變壓器與電源零組件",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2413/technical-chart",
+      "war_room_url": "charts/2413_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-11",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2426": {
+      "stock_name": "鼎元",
+      "sector": "光電-發光二極體與感測元件",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2426/technical-chart",
+      "war_room_url": "charts/2426_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2434": {
+      "stock_name": "統懋",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2434/technical-chart",
+      "war_room_url": "charts/2434_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-28",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2453": {
+      "stock_name": "凌群",
+      "sector": "系統整合與資訊服務",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2453/technical-chart",
+      "war_room_url": "charts/2453_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 5,
+          "score": 76
+        }
+      ]
+    },
+    "2454": {
+      "stock_name": "聯發科",
+      "sector": "IC設計-行動運算與網通",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2454/technical-chart",
+      "war_room_url": "charts/2454_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2464": {
+      "stock_name": "盟立",
+      "sector": "工業自動化與智慧倉儲設備",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2464/technical-chart",
+      "war_room_url": "charts/2464_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2465": {
+      "stock_name": "麗臺",
+      "sector": "顯示卡與AI工作站",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2465/technical-chart",
+      "war_room_url": "charts/2465_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-03",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2481": {
+      "stock_name": "強茂",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2481/technical-chart",
+      "war_room_url": "charts/2481_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-28",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2484": {
+      "stock_name": "希華",
+      "sector": "電子工業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2484/technical-chart",
+      "war_room_url": "charts/2484_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2606": {
+      "stock_name": "裕民",
+      "sector": "散裝航運",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2606/technical-chart",
+      "war_room_url": "charts/2606_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 88
+        },
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2609": {
+      "stock_name": "陽明",
+      "sector": "航運業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2609/technical-chart",
+      "war_room_url": "charts/2609_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 79
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 79
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 78
+        },
+        {
+          "date": "2026-10-22",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 78
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2615": {
+      "stock_name": "萬海",
+      "sector": "航運業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2615/technical-chart",
+      "war_room_url": "charts/2615_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-03",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 85
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 85
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 84
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 84
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 85
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 82
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2618": {
+      "stock_name": "長榮航",
+      "sector": "航空客貨運",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2618/technical-chart",
+      "war_room_url": "charts/2618_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-12",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-11",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-10",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-09",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-06",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-05",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 82
+        },
+        {
+          "date": "2026-11-03",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 80
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-29",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 78
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 5,
+          "score": 76
+        },
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 86
+        }
+      ]
+    },
+    "2636": {
+      "stock_name": "台驊控股",
+      "sector": "航運業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2636/technical-chart",
+      "war_room_url": "charts/2636_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2637": {
+      "stock_name": "慧洋-KY",
+      "sector": "航運業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2637/technical-chart",
+      "war_room_url": "charts/2637_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 83
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-29",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 81
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 83
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 85
+        },
+        {
+          "date": "2026-10-22",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 85
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2834": {
+      "stock_name": "臺企銀",
+      "sector": "銀行業-中小企業授信",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2834/technical-chart",
+      "war_room_url": "charts/2834_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-03",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2855": {
+      "stock_name": "統一證",
+      "sector": "證券商與綜合金融",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2855/technical-chart",
+      "war_room_url": "charts/2855_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2881": {
+      "stock_name": "富邦金",
+      "sector": "綜合金融控股",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2881/technical-chart",
+      "war_room_url": "charts/2881_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2882": {
+      "stock_name": "國泰金",
+      "sector": "金控與綜合金融服務",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2882/technical-chart",
+      "war_room_url": "charts/2882_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-03",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2885": {
+      "stock_name": "元大金",
+      "sector": "綜合證券與金融控股",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2885/technical-chart",
+      "war_room_url": "charts/2885_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2887": {
+      "stock_name": "台新新光金",
+      "sector": "金控-綜合金融",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2887/technical-chart",
+      "war_room_url": "charts/2887_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2897": {
+      "stock_name": "王道銀行",
+      "sector": "商業銀行",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2897/technical-chart",
+      "war_room_url": "charts/2897_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3006": {
+      "stock_name": "晶豪科",
+      "sector": "利基型記憶體IC設計",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3006/technical-chart",
+      "war_room_url": "charts/3006_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-21",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3010": {
+      "stock_name": "華立",
+      "sector": "電子通路業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3010/technical-chart",
+      "war_room_url": "charts/3010_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 86
+        }
+      ]
+    },
+    "3017": {
+      "stock_name": "奇鋐",
+      "sector": "散熱模組與水冷散熱",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3017/technical-chart",
+      "war_room_url": "charts/3017_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 82
+        }
+      ]
+    },
+    "3022": {
+      "stock_name": "威強電",
+      "sector": "電腦及週邊設備業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3022/technical-chart",
+      "war_room_url": "charts/3022_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-29",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3029": {
+      "stock_name": "零壹",
+      "sector": "資訊服務與資安代理",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3029/technical-chart",
+      "war_room_url": "charts/3029_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-12",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-11",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3034": {
+      "stock_name": "聯詠",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3034/technical-chart",
+      "war_room_url": "charts/3034_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 93
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 88
+        },
+        {
+          "date": "2026-10-29",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 89
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 89
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 90
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 86
+        },
+        {
+          "date": "2026-10-22",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 86
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 90
+        },
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 90
+        }
+      ]
+    },
+    "3037": {
+      "stock_name": "欣興",
+      "sector": "電子工業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3037/technical-chart",
+      "war_room_url": "charts/3037_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3055": {
+      "stock_name": "蔚華科",
+      "sector": "半導體設備與測試代理",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3055/technical-chart",
+      "war_room_url": "charts/3055_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-03",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3105": {
+      "stock_name": "穩懋",
+      "sector": "砷化鎵晶圓代工",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3105/technical-chart",
+      "war_room_url": "charts/3105_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 87
+        },
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3189": {
+      "stock_name": "景碩",
+      "sector": "PCB-ABF載板",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3189/technical-chart",
+      "war_room_url": "charts/3189_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3219": {
+      "stock_name": "倚強科",
+      "sector": "其他電子類",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3219/technical-chart",
+      "war_room_url": "charts/3219_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3231": {
+      "stock_name": "緯創",
+      "sector": "伺服器與筆記型電腦代工",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3231/technical-chart",
+      "war_room_url": "charts/3231_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-29",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 82
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 5,
+          "score": 84
+        },
+        {
+          "date": "2026-10-22",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 84
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 82
+        }
+      ]
+    },
+    "3234": {
+      "stock_name": "光環",
+      "sector": "光通訊元件與光收發模組",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3234/technical-chart",
+      "war_room_url": "charts/3234_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-11",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3293": {
+      "stock_name": "鈊象",
+      "sector": "數位遊戲研發與博弈授權",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3293/technical-chart",
+      "war_room_url": "charts/3293_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 94
+        },
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 90
+        }
+      ]
+    },
+    "3311": {
+      "stock_name": "閎暉",
+      "sector": "機構與模組元件",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3311/technical-chart",
+      "war_room_url": "charts/3311_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-17",
+          "strategy_id": "rebound_2200",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3324": {
+      "stock_name": "雙鴻",
+      "sector": "散熱模組與水冷散熱",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3324/technical-chart",
+      "war_room_url": "charts/3324_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3374": {
+      "stock_name": "精材",
+      "sector": "半導體封測-晶圓級封裝",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3374/technical-chart",
+      "war_room_url": "charts/3374_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 89
+        },
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3443": {
+      "stock_name": "創意",
+      "sector": "矽智財與ASIC設計服務",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3443/technical-chart",
+      "war_room_url": "charts/3443_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-12",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3467": {
+      "stock_name": "台灣精材",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3467/technical-chart",
+      "war_room_url": "charts/3467_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-27",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3518": {
+      "stock_name": "柏騰",
+      "sector": "真空濺鍍與表面處理",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3518/technical-chart",
+      "war_room_url": "charts/3518_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-11",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3532": {
+      "stock_name": "台勝科",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3532/technical-chart",
+      "war_room_url": "charts/3532_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-21",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3564": {
+      "stock_name": "其陽",
+      "sector": "網路安全設備與工業電腦",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3564/technical-chart",
+      "war_room_url": "charts/3564_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3617": {
+      "stock_name": "碩天",
+      "sector": "不斷電系統與電源設備",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3617/technical-chart",
+      "war_room_url": "charts/3617_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 90
+        },
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 95
+        },
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-12",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-11",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3624": {
+      "stock_name": "光頡",
+      "sector": "被動元件-薄膜電阻",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3624/technical-chart",
+      "war_room_url": "charts/3624_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3653": {
+      "stock_name": "健策",
+      "sector": "電子工業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3653/technical-chart",
+      "war_room_url": "charts/3653_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3711": {
+      "stock_name": "日月光投控",
+      "sector": "半導體-封測",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3711/technical-chart",
+      "war_room_url": "charts/3711_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 89
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3714": {
+      "stock_name": "富采",
+      "sector": "LED與Micro LED光電元件",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3714/technical-chart",
+      "war_room_url": "charts/3714_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4105": {
+      "stock_name": "東洋",
+      "sector": "新藥研發與特殊製劑",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4105/technical-chart",
+      "war_room_url": "charts/4105_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-10",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4542": {
+      "stock_name": "科嶠",
+      "sector": "電子零組件業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4542/technical-chart",
+      "war_room_url": "charts/4542_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4767": {
+      "stock_name": "誠泰科技",
+      "sector": "化學工業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4767/technical-chart",
+      "war_room_url": "charts/4767_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-22",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4770": {
+      "stock_name": "上品",
+      "sector": "特用化學品-氟樹脂工程塑膠",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4770/technical-chart",
+      "war_room_url": "charts/4770_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-06",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4912": {
+      "stock_name": "聯德控股-KY",
+      "sector": "電子工業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4912/technical-chart",
+      "war_room_url": "charts/4912_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4927": {
+      "stock_name": "泰鼎-KY",
+      "sector": "PCB-印刷電路板",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4927/technical-chart",
+      "war_room_url": "charts/4927_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-06",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4938": {
+      "stock_name": "和碩",
+      "sector": "筆記型電腦與伺服器代工",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4938/technical-chart",
+      "war_room_url": "charts/4938_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 82
+        },
+        {
+          "date": "2026-11-11",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4939": {
+      "stock_name": "亞電",
+      "sector": "電子零組件業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4939/technical-chart",
+      "war_room_url": "charts/4939_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "4961": {
+      "stock_name": "天鈺",
+      "sector": "IC設計-驅動與電源IC",
+      "wantgoo_url": "https://www.wantgoo.com/stock/4961/technical-chart",
+      "war_room_url": "charts/4961_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "5426": {
+      "stock_name": "振發",
+      "sector": "電腦機構與機殼",
+      "wantgoo_url": "https://www.wantgoo.com/stock/5426/technical-chart",
+      "war_room_url": "charts/5426_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-05",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-29",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-22",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "5487": {
+      "stock_name": "通泰",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/5487/technical-chart",
+      "war_room_url": "charts/5487_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-29",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-22",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6154": {
+      "stock_name": "順發",
+      "sector": "電子通路業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6154/technical-chart",
+      "war_room_url": "charts/6154_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6187": {
+      "stock_name": "萬潤",
+      "sector": "其他電子類",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6187/technical-chart",
+      "war_room_url": "charts/6187_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-28",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6207": {
+      "stock_name": "雷科",
+      "sector": "半導體與被動元件設備",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6207/technical-chart",
+      "war_room_url": "charts/6207_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6209": {
+      "stock_name": "今國光",
+      "sector": "光學鏡片與鏡頭",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6209/technical-chart",
+      "war_room_url": "charts/6209_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6245": {
+      "stock_name": "立端",
+      "sector": "網路安全設備與網通硬體",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6245/technical-chart",
+      "war_room_url": "charts/6245_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6269": {
+      "stock_name": "台郡",
+      "sector": "PCB-軟性印刷電路板",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6269/technical-chart",
+      "war_room_url": "charts/6269_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6277": {
+      "stock_name": "宏正",
+      "sector": "電腦及週邊設備業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6277/technical-chart",
+      "war_room_url": "charts/6277_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 83
+        }
+      ]
+    },
+    "6414": {
+      "stock_name": "樺漢",
+      "sector": "電腦及週邊設備業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6414/technical-chart",
+      "war_room_url": "charts/6414_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 85
+        }
+      ]
+    },
+    "6446": {
+      "stock_name": "藥華藥",
+      "sector": "新藥開發與生物製藥",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6446/technical-chart",
+      "war_room_url": "charts/6446_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 85
+        },
+        {
+          "date": "2026-11-12",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 88
+        },
+        {
+          "date": "2026-11-11",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-10",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-09",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6467": {
+      "stock_name": "泰合",
+      "sector": "新藥開發與特殊製劑",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6467/technical-chart",
+      "war_room_url": "charts/6467_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6526": {
+      "stock_name": "達發",
+      "sector": "IC設計-網通與藍牙晶片",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6526/technical-chart",
+      "war_room_url": "charts/6526_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 93
+        },
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6533": {
+      "stock_name": "晶心科",
+      "sector": "IC設計-矽智財(IP)",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6533/technical-chart",
+      "war_room_url": "charts/6533_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6620": {
+      "stock_name": "漢達",
+      "sector": "生技醫療業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6620/technical-chart",
+      "war_room_url": "charts/6620_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-05",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6668": {
+      "stock_name": "中揚光",
+      "sector": "光學鏡頭與模組",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6668/technical-chart",
+      "war_room_url": "charts/6668_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6715": {
+      "stock_name": "嘉基",
+      "sector": "高速傳輸線與連接器",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6715/technical-chart",
+      "war_room_url": "charts/6715_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-12",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6742": {
+      "stock_name": "澤米",
+      "sector": "光學元件-精密光學薄膜與玻璃加工",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6742/technical-chart",
+      "war_room_url": "charts/6742_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-13",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6756": {
+      "stock_name": "威鋒電子",
+      "sector": "IC設計-高速傳輸介面",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6756/technical-chart",
+      "war_room_url": "charts/6756_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-16",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 80
+        }
+      ]
+    },
+    "6805": {
+      "stock_name": "富世達",
+      "sector": "機構與模組-軸承與摺疊機機構",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6805/technical-chart",
+      "war_room_url": "charts/6805_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-02",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6834": {
+      "stock_name": "天二科技",
+      "sector": "被動元件-晶片電阻",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6834/technical-chart",
+      "war_room_url": "charts/6834_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-11",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "6922": {
+      "stock_name": "宸曜",
+      "sector": "電腦及週邊設備業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6922/technical-chart",
+      "war_room_url": "charts/6922_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-21",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "7704": {
+      "stock_name": "明遠精密",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/7704/technical-chart",
+      "war_room_url": "charts/7704_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-28",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-27",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-26",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-23",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-10-22",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "7711": {
+      "stock_name": "永擎",
+      "sector": "伺服器與資料中心設備",
+      "wantgoo_url": "https://www.wantgoo.com/stock/7711/technical-chart",
+      "war_room_url": "charts/7711_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-06",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-05",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "7716": {
+      "stock_name": "昱臺國際",
+      "sector": "航運業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/7716/technical-chart",
+      "war_room_url": "charts/7716_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "8039": {
+      "stock_name": "台虹",
+      "sector": "PCB-軟性印刷電路板材料",
+      "wantgoo_url": "https://www.wantgoo.com/stock/8039/technical-chart",
+      "war_room_url": "charts/8039_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-11",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
+          "date": "2026-11-04",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "8050": {
+      "stock_name": "廣積",
+      "sector": "工業電腦與嵌入式系統",
+      "wantgoo_url": "https://www.wantgoo.com/stock/8050/technical-chart",
+      "war_room_url": "charts/8050_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "8103": {
+      "stock_name": "瀚荃",
+      "sector": "電子工業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/8103/technical-chart",
+      "war_room_url": "charts/8103_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-30",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "8227": {
+      "stock_name": "巨有科技",
+      "sector": "ASIC設計與矽智財",
+      "wantgoo_url": "https://www.wantgoo.com/stock/8227/technical-chart",
+      "war_room_url": "charts/8227_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-17",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "8383": {
+      "stock_name": "千附",
+      "sector": "半導體業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/8383/technical-chart",
+      "war_room_url": "charts/8383_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-21",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 78
+        },
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "8464": {
+      "stock_name": "億豐",
+      "sector": "居家生活與建材家具",
+      "wantgoo_url": "https://www.wantgoo.com/stock/8464/technical-chart",
+      "war_room_url": "charts/8464_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-18",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 84
+        }
+      ]
+    },
+    "8476": {
+      "stock_name": "台境*",
+      "sector": "綠能環保",
+      "wantgoo_url": "https://www.wantgoo.com/stock/8476/technical-chart",
+      "war_room_url": "charts/8476_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-20",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "8996": {
+      "stock_name": "高力",
+      "sector": "熱交換器與氫能零組件",
+      "wantgoo_url": "https://www.wantgoo.com/stock/8996/technical-chart",
+      "war_room_url": "charts/8996_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-09",
+          "strategy_id": "rebound_2200",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "9912": {
+      "stock_name": "偉聯",
+      "sector": "電腦及週邊設備業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/9912/technical-chart",
+      "war_room_url": "charts/9912_fund.html",
+      "appearances": [
+        {
+          "date": "2026-10-19",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    }
+  }
+}

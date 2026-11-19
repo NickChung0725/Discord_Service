@@ -1,0 +1,78 @@
+{
+  "date": "2026-11-10",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "RED_DEFENSIVE",
+    "recommended_exposure_pct": 50,
+    "summary": "🔴紅燈｜TAIEX 收盤 42,711.92（17MA 44,803.76／45MA 46,548.79／117MA 45,487.18／189MA 41,712.71）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 7,059.9 億（單日 +19.6 億 / 5日 -818.8 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "PENDING_AI",
+      "status_badge": "⏳ 等待 21:30 AI 審計",
+      "total_candidates": 4,
+      "analyzed_count": 0,
+      "ai_model": "",
+      "strategy_comment": "⏳ 等待 21:30 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [],
+      "pending_candidates": [
+        {
+          "stock_id": "6446",
+          "stock_name": "藥華藥",
+          "sector": "新藥開發與生物製藥",
+          "close": 1280.0,
+          "signal": "即將金叉",
+          "vol_status": "🔥 放量點火 (2.47x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6446/technical-chart",
+            "war_room": "charts/6446_fund.html"
+          }
+        },
+        {
+          "stock_id": "2618",
+          "stock_name": "長榮航",
+          "sector": "航空客貨運",
+          "close": 46.15,
+          "signal": "剛金叉起漲",
+          "vol_status": "🔥 放量點火 (2.02x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2618/technical-chart",
+            "war_room": "charts/2618_fund.html"
+          }
+        },
+        {
+          "stock_id": "2221",
+          "stock_name": "大甲",
+          "sector": "汽車零件-車身與外觀件",
+          "close": 152.0,
+          "signal": "即將金叉",
+          "vol_status": "🔥 放量點火 (2.61x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2221/technical-chart",
+            "war_room": "charts/2221_fund.html"
+          }
+        },
+        {
+          "stock_id": "4105",
+          "stock_name": "東洋",
+          "sector": "新藥研發與特殊製劑",
+          "close": 82.2,
+          "signal": "剛金叉起漲",
+          "vol_status": "📈 溫和放量 (1.60x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/4105/technical-chart",
+            "war_room": "charts/4105_fund.html"
+          }
+        }
+      ]
+    }
+  ]
+}

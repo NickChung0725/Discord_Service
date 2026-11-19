@@ -1,0 +1,286 @@
+{
+  "date": "2026-11-11",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "RED_DEFENSIVE",
+    "recommended_exposure_pct": 50,
+    "summary": "🔴紅燈｜TAIEX 收盤 44,257.15（17MA 44,644.19／45MA 46,506.40／117MA 45,511.87／189MA 41,777.23）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 7,059.9 億（單日 +0.0 億 / 5日 -818.8 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 5,
+      "analyzed_count": 5,
+      "ai_model": "gemini-4-argon",
+      "strategy_comment": "今日無符合高勝率標準之標的，建議空手觀望（Pass 1 紅藍軍審計全數淘汰）。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [
+        {
+          "stock_id": "3617",
+          "stock_name": "碩天",
+          "sector": "不斷電系統與電源設備",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢，系統強制關閉右側追高配額（上限 0 檔），逆勢追價極易遭受大盤系統性修正雙巴。",
+          "close_at_pick": 267.5,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 5,
+            "latest_close": 262.0,
+            "period_low": 251.0,
+            "period_high": 280.0,
+            "effective_entry_price": 268.33,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 268.3)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-2.1%)",
+            "mfe_pct": 4.35,
+            "mae_pct": -6.46,
+            "pain_badge": "📉 最大套牢 -6.5% / 最高浮盈 +4.3%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3617/technical-chart",
+            "war_room": "charts/3617_fund.html"
+          }
+        },
+        {
+          "stock_id": "6446",
+          "stock_name": "藥華藥",
+          "sector": "新藥開發與生物製藥",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢，右側突破配額上限為 0 檔，此時採取右側突破追高違反系統性總體風控原則。",
+          "close_at_pick": 1335.0,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 5,
+            "latest_close": 1245.0,
+            "period_low": 1245.0,
+            "period_high": 1410.0,
+            "effective_entry_price": 1316.55,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 1316.5)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-6.7%)",
+            "mfe_pct": 7.1,
+            "mae_pct": -5.43,
+            "pain_badge": "📉 最大套牢 -5.4% / 最高浮盈 +7.1%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6446/technical-chart",
+            "war_room": "charts/6446_fund.html"
+          }
+        },
+        {
+          "stock_id": "2618",
+          "stock_name": "長榮航",
+          "sector": "航空客貨運",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢，右側突破配額為 0 檔，嚴禁右側追高。",
+          "close_at_pick": 47.6,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 5,
+            "latest_close": 46.8,
+            "period_low": 45.35,
+            "period_high": 48.95,
+            "effective_entry_price": 47.54,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 47.5)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-1.7%)",
+            "mfe_pct": 2.97,
+            "mae_pct": -4.61,
+            "pain_badge": "📉 最大套牢 -4.6% / 最高浮盈 +3.0%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2618/technical-chart",
+            "war_room": "charts/2618_fund.html"
+          }
+        },
+        {
+          "stock_id": "3029",
+          "stock_name": "零壹",
+          "sector": "資訊服務與資安代理",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢，系統已強制關閉右側突破（RIGHT_BREAKOUT）配額（上限 0 檔），逆勢追高極易遭遇系統性殺盤。",
+          "close_at_pick": 135.0,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 10,
+            "latest_close": null,
+            "period_low": null,
+            "period_high": null,
+            "effective_entry_price": 133.66,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "STOP_LOSS_HIT",
+            "net_return_10d_pct": -10.28,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 133.7)",
+            "outcome_badge": "⏳ 追蹤中 (第 10 日)",
+            "mfe_pct": 5.12,
+            "mae_pct": -12.09,
+            "pain_badge": "📉 最大套牢 -12.1% / 最高浮盈 +5.1%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3029/technical-chart",
+            "war_room": "charts/3029_fund.html"
+          }
+        },
+        {
+          "stock_id": "2221",
+          "stock_name": "大甲",
+          "sector": "汽車零件-車身與外觀件",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢，右側突破配額上限為 0 檔，嚴禁執行右側追高策略。",
+          "close_at_pick": 167.0,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 5,
+            "latest_close": 144.5,
+            "period_low": 139.5,
+            "period_high": 181.0,
+            "effective_entry_price": 181.4,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 181.4)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-13.5%)",
+            "mfe_pct": 0.0,
+            "mae_pct": -23.1,
+            "pain_badge": "📉 最大套牢 -23.1% / 最高浮盈 +0.0%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2221/technical-chart",
+            "war_room": "charts/2221_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "status": "PENDING_AI",
+      "status_badge": "⏳ 等待 22:00 AI 審計",
+      "total_candidates": 7,
+      "analyzed_count": 0,
+      "ai_model": "",
+      "strategy_comment": "⏳ 等待 22:00 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [],
+      "pending_candidates": [
+        {
+          "stock_id": "6834",
+          "stock_name": "天二科技",
+          "sector": "被動元件-晶片電阻",
+          "close": 104.5,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.69x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6834/technical-chart",
+            "war_room": "charts/6834_fund.html"
+          }
+        },
+        {
+          "stock_id": "3518",
+          "stock_name": "柏騰",
+          "sector": "真空濺鍍與表面處理",
+          "close": 32.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.35x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3518/technical-chart",
+            "war_room": "charts/3518_fund.html"
+          }
+        },
+        {
+          "stock_id": "8039",
+          "stock_name": "台虹",
+          "sector": "PCB-軟性印刷電路板材料",
+          "close": 227.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.47x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/8039/technical-chart",
+            "war_room": "charts/8039_fund.html"
+          }
+        },
+        {
+          "stock_id": "3234",
+          "stock_name": "光環",
+          "sector": "光通訊元件與光收發模組",
+          "close": 144.5,
+          "signal": "",
+          "vol_status": "➡️ 量能平穩 (0.84x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3234/technical-chart",
+            "war_room": "charts/3234_fund.html"
+          }
+        },
+        {
+          "stock_id": "2377",
+          "stock_name": "微星",
+          "sector": "品牌電競PC與主機板",
+          "close": 145.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.56x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2377/technical-chart",
+            "war_room": "charts/2377_fund.html"
+          }
+        },
+        {
+          "stock_id": "2413",
+          "stock_name": "環科",
+          "sector": "變壓器與電源零組件",
+          "close": 47.9,
+          "signal": "",
+          "vol_status": "📈 溫和放量 (1.25x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2413/technical-chart",
+            "war_room": "charts/2413_fund.html"
+          }
+        },
+        {
+          "stock_id": "4938",
+          "stock_name": "和碩",
+          "sector": "筆記型電腦與伺服器代工",
+          "close": 96.2,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.55x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/4938/technical-chart",
+            "war_room": "charts/4938_fund.html"
+          }
+        }
+      ]
+    }
+  ]
+}

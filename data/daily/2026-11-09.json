@@ -1,0 +1,212 @@
+{
+  "date": "2026-11-09",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "",
+    "recommended_exposure_pct": 50,
+    "summary": "🔴紅燈｜TAIEX 收盤 41,661.70（17MA 45,151.63／45MA 46,642.94／117MA 45,464.18／189MA 41,655.83）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 7,040.3 億（單日 -564.2 億 / 5日 -838.4 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 3,
+      "analyzed_count": 3,
+      "ai_model": "gemini-4-argon",
+      "strategy_comment": "今日無符合高勝率標準之標的，建議空手觀望（Pass 1 紅藍軍審計全數淘汰）。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [
+        {
+          "stock_id": "2221",
+          "stock_name": "大甲",
+          "sector": "汽車零件-車身與外觀件",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 138.5,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2221/technical-chart",
+            "war_room": "charts/2221_fund.html"
+          }
+        },
+        {
+          "stock_id": "2618",
+          "stock_name": "長榮航",
+          "sector": "航空客貨運",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 43.9,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2618/technical-chart",
+            "war_room": "charts/2618_fund.html"
+          }
+        },
+        {
+          "stock_id": "6446",
+          "stock_name": "藥華藥",
+          "sector": "新藥開發與生物製藥",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 1370.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6446/technical-chart",
+            "war_room": "charts/6446_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "status": "PENDING_AI",
+      "status_badge": "⏳ 等待 22:00 AI 審計",
+      "total_candidates": 10,
+      "analyzed_count": 0,
+      "ai_model": "",
+      "strategy_comment": "⏳ 等待 22:00 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [],
+      "pending_candidates": [
+        {
+          "stock_id": "3564",
+          "stock_name": "其陽",
+          "sector": "網路安全設備與工業電腦",
+          "close": 50.8,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.38x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3564/technical-chart",
+            "war_room": "charts/3564_fund.html"
+          }
+        },
+        {
+          "stock_id": "3324",
+          "stock_name": "雙鴻",
+          "sector": "散熱模組與水冷散熱",
+          "close": 1150.0,
+          "signal": "",
+          "vol_status": "📈 溫和放量 (1.68x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3324/technical-chart",
+            "war_room": "charts/3324_fund.html"
+          }
+        },
+        {
+          "stock_id": "2340",
+          "stock_name": "台亞",
+          "sector": "光電-LED與感測元件",
+          "close": 37.3,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.19x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2340/technical-chart",
+            "war_room": "charts/2340_fund.html"
+          }
+        },
+        {
+          "stock_id": "8996",
+          "stock_name": "高力",
+          "sector": "熱交換器與氫能零組件",
+          "close": 1280.0,
+          "signal": "",
+          "vol_status": "➡️ 量能平穩 (0.96x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/8996/technical-chart",
+            "war_room": "charts/8996_fund.html"
+          }
+        },
+        {
+          "stock_id": "6526",
+          "stock_name": "達發",
+          "sector": "IC設計-網通與藍牙晶片",
+          "close": 666.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.76x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6526/technical-chart",
+            "war_room": "charts/6526_fund.html"
+          }
+        },
+        {
+          "stock_id": "6756",
+          "stock_name": "威鋒電子",
+          "sector": "IC設計-高速傳輸介面",
+          "close": 106.5,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.79x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6756/technical-chart",
+            "war_room": "charts/6756_fund.html"
+          }
+        },
+        {
+          "stock_id": "2855",
+          "stock_name": "統一證",
+          "sector": "證券商與綜合金融",
+          "close": 50.1,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.73x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2855/technical-chart",
+            "war_room": "charts/2855_fund.html"
+          }
+        },
+        {
+          "stock_id": "4961",
+          "stock_name": "天鈺",
+          "sector": "IC設計-驅動與電源IC",
+          "close": 169.5,
+          "signal": "",
+          "vol_status": "➡️ 量能平穩 (1.04x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/4961/technical-chart",
+            "war_room": "charts/4961_fund.html"
+          }
+        },
+        {
+          "stock_id": "2606",
+          "stock_name": "裕民",
+          "sector": "散裝航運",
+          "close": 69.1,
+          "signal": "",
+          "vol_status": "➡️ 量能平穩 (1.02x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2606/technical-chart",
+            "war_room": "charts/2606_fund.html"
+          }
+        },
+        {
+          "stock_id": "1815",
+          "stock_name": "富喬",
+          "sector": "PCB-玻纖布與基板材料",
+          "close": 129.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.62x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1815/technical-chart",
+            "war_room": "charts/1815_fund.html"
+          }
+        }
+      ]
+    }
+  ]
+}

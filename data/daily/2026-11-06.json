@@ -1,0 +1,152 @@
+{
+  "date": "2026-11-06",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "",
+    "recommended_exposure_pct": 50,
+    "summary": "🔴紅燈｜TAIEX 收盤 39,701.64（17MA 45,544.55／45MA 46,742.20／117MA 45,451.48／189MA 41,603.37）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 7,604.5 億（單日 -274.2 億 / 5日 -274.2 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 3,
+      "analyzed_count": 3,
+      "ai_model": "gemini-4-argon",
+      "strategy_comment": "今日無符合高勝率標準之標的，建議空手觀望（Pass 1 紅藍軍審計全數淘汰）。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [
+        {
+          "stock_id": "2221",
+          "stock_name": "大甲",
+          "sector": "汽車零件-車身與外觀件",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 143.5,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2221/technical-chart",
+            "war_room": "charts/2221_fund.html"
+          }
+        },
+        {
+          "stock_id": "2618",
+          "stock_name": "長榮航",
+          "sector": "航空客貨運",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 43.6,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2618/technical-chart",
+            "war_room": "charts/2618_fund.html"
+          }
+        },
+        {
+          "stock_id": "7711",
+          "stock_name": "永擎",
+          "sector": "伺服器與資料中心設備",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 565.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/7711/technical-chart",
+            "war_room": "charts/7711_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "status": "PENDING_AI",
+      "status_badge": "⏳ 等待 22:00 AI 審計",
+      "total_candidates": 5,
+      "analyzed_count": 0,
+      "ai_model": "",
+      "strategy_comment": "⏳ 等待 22:00 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [],
+      "pending_candidates": [
+        {
+          "stock_id": "4927",
+          "stock_name": "泰鼎-KY",
+          "sector": "PCB-印刷電路板",
+          "close": 44.85,
+          "signal": "",
+          "vol_status": "➡️ 量能平穩 (0.82x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/4927/technical-chart",
+            "war_room": "charts/4927_fund.html"
+          }
+        },
+        {
+          "stock_id": "1326",
+          "stock_name": "台化",
+          "sector": "石化塑膠-基礎化學品與塑膠原料",
+          "close": 62.7,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.74x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1326/technical-chart",
+            "war_room": "charts/1326_fund.html"
+          }
+        },
+        {
+          "stock_id": "1563",
+          "stock_name": "巧新",
+          "sector": "汽車零組件-車用鍛造鋁圈",
+          "close": 67.0,
+          "signal": "",
+          "vol_status": "🔥 放量點火 (2.15x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1563/technical-chart",
+            "war_room": "charts/1563_fund.html"
+          }
+        },
+        {
+          "stock_id": "2357",
+          "stock_name": "華碩",
+          "sector": "PC品牌與消費性電子",
+          "close": 859.0,
+          "signal": "",
+          "vol_status": "📈 溫和放量 (1.76x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2357/technical-chart",
+            "war_room": "charts/2357_fund.html"
+          }
+        },
+        {
+          "stock_id": "4770",
+          "stock_name": "上品",
+          "sector": "特用化學品-氟樹脂工程塑膠",
+          "close": 260.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.73x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/4770/technical-chart",
+            "war_room": "charts/4770_fund.html"
+          }
+        }
+      ]
+    }
+  ]
+}

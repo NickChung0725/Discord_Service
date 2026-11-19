@@ -1,0 +1,235 @@
+{
+  "date": "2026-11-03",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "",
+    "recommended_exposure_pct": null,
+    "summary": "🔴紅燈｜TAIEX 收盤 43,307.54（17MA 46,967.88／45MA 47,051.40／117MA 45,447.98／189MA 資料不足）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 9,
+      "analyzed_count": 8,
+      "ai_model": "gemini-4-argon",
+      "strategy_comment": "大盤跌破45MA且季線下彎，處於空頭防禦警戒。嚴格執行紅燈風控鐵則，top_picks上限縮減至2檔，僅鎖定具備「淨現金（淨負債比為負）、充沛正FCF、法人逆勢大買」之防禦型低本益比績優股，嚴禁追高。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [
+        {
+          "rank": 1,
+          "stock_id": "2615",
+          "stock_name": "萬海",
+          "sector": "航運業",
+          "score": 85,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": null,
+          "tactical_type": "🎯 短中期波段 (5~20日)（依附45MA防守）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2615/technical-chart",
+            "war_room": "charts/2615_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 115.5,
+            "chase_limit": 115.5,
+            "weighted_avg_entry": 115.5,
+            "tier1": {
+              "price": null,
+              "text": ""
+            },
+            "tier2": {
+              "price": null,
+              "text": ""
+            },
+            "tier3": {
+              "price": null,
+              "text": ""
+            },
+            "tp1": 123.0,
+            "tp2": 131.0,
+            "stop_loss": 110.88
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q2毛利率升至27.03%、營益率22.16%，TTM EPS達14.56元，2026-09月營收YoY暴增97.66%。單季FCF達66.34億且淨負債比-20.76%具千億淨現金護體。17MA連漲上揚回測45MA量縮至0.61x，2026-W45外資與投信近5日同步買超2,395張與736張。",
+            "invalidation_rule": "航運運價受地緣局勢波動劇烈且2026Q2業外佔比34.53%。若收盤有效跌破110.88元、外資與投信連3日反手大賣或單月營收YoY轉負，須無條件退場。"
+          }
+        },
+        {
+          "rank": 2,
+          "stock_id": "2618",
+          "stock_name": "長榮航",
+          "sector": "航運業",
+          "score": 80,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": null,
+          "tactical_type": "🎯 短中期波段 (5~20日)（依附17MA與45MA防守）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2618/technical-chart",
+            "war_room": "charts/2618_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 43.7,
+            "chase_limit": 43.7,
+            "weighted_avg_entry": 43.7,
+            "tier1": {
+              "price": null,
+              "text": ""
+            },
+            "tier2": {
+              "price": null,
+              "text": ""
+            },
+            "tier3": {
+              "price": null,
+              "text": ""
+            },
+            "tp1": 45.5,
+            "tp2": 47.4,
+            "stop_loss": 41.95
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q2 ROE達18.67%，TTM EPS 4.74元，2026-09月營收YoY+32.86%加速成長。合約負債高達347.16億、單季FCF達97.77億且淨負債比-35.81%呈強勁淨現金。全均線多頭排列且量比2.21x點火，2026-W45三大法人5日大買34,043張。",
+            "invalidation_rule": "2026Q2毛利率降至14.13%(QoQ-12.09%)壓抑獲利純度。若外資連3日賣超逾萬張，或收盤實質跌破45MA(42.37元)且17MA轉下彎，無條件停損。"
+          }
+        }
+      ],
+      "watchlist": [
+        {
+          "stock_id": "2027",
+          "stock_name": "大成鋼",
+          "sector": "鋼鐵工業-不鏽鋼與鋁板捲",
+          "reason": "2026Q2三率雙升、FCF達55.78億且三大法人5日買超5,958張基本面極佳，惟淨負債比+28.09%不符紅燈「淨負債比為負」鐵則。待大盤轉燈或拉回45MA(48.65元)守穩再佈局。",
+          "close_at_pick": 48.95,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2027/technical-chart",
+            "war_room": "charts/2027_fund.html"
+          }
+        },
+        {
+          "stock_id": "1808",
+          "stock_name": "潤隆",
+          "sector": "建材營造-住宅與商辦開發",
+          "reason": "2026Q2 ROE達27.48%、FCF 39.45億且合約負債28.34億，惟淨負債比81.86%不符紅燈淨現金要求，且量比0.37x量縮。待拉回45MA(34.27元)或帶量突破3MA(35.35元)再進場。",
+          "close_at_pick": 34.6,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1808/technical-chart",
+            "war_room": "charts/1808_fund.html"
+          }
+        },
+        {
+          "stock_id": "2834",
+          "stock_name": "臺企銀",
+          "sector": "銀行業-中小企業授信",
+          "reason": "符合2026Q2淨負債比-20.33%、FCF 72.13億及三大法人5日買超12,367張，惟受限紅燈top_picks最多2檔名額。待回測45MA(17.68元)守穩或站回3MA(17.93元)分批低接。",
+          "close_at_pick": 17.7,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2834/technical-chart",
+            "war_room": "charts/2834_fund.html"
+          }
+        },
+        {
+          "stock_id": "2882",
+          "stock_name": "國泰金",
+          "sector": "金控與綜合金融服務",
+          "reason": "2026Q2單季FCF為-922.47億元不符紅燈正FCF鐵則，且2026-09營收年減41.17%、外資5日調節5,897張。待回測45MA(111.94元)止跌且外資轉買再觀察。",
+          "close_at_pick": 113.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2882/technical-chart",
+            "war_room": "charts/2882_fund.html"
+          }
+        },
+        {
+          "stock_id": "1907",
+          "stock_name": "永豐餘",
+          "sector": "造紙與紙容器包裝",
+          "reason": "2026Q2淨負債比+21.90%不符紅燈淨現金鐵則，且營益率僅0.67%、ROE 3.34%本業獲利薄弱，量比0.40x量縮。待帶量突破3MA(28.95元)且日量逾4,763張再觀察。",
+          "close_at_pick": 29.15,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1907/technical-chart",
+            "war_room": "charts/1907_fund.html"
+          }
+        }
+      ],
+      "avoid": [
+        {
+          "stock_id": "2465",
+          "stock_name": "麗臺",
+          "sector": "顯示卡與AI工作站",
+          "reason": "觸發一票否決(c)：當日量比達6.13x(>4.5x天量過熱)，且收盤價114.00元已大幅突破17MA+12%極值(104.77元)，短線嚴重超漲且2026-09營收YoY-25.43%，強制排雷。",
+          "close_at_pick": 114.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2465/technical-chart",
+            "war_room": "charts/2465_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "status": "PENDING_AI",
+      "status_badge": "⏳ 等待 22:00 AI 審計",
+      "total_candidates": 1,
+      "analyzed_count": 0,
+      "ai_model": "",
+      "strategy_comment": "⏳ 等待 22:00 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [],
+      "pending_candidates": [
+        {
+          "stock_id": "3055",
+          "stock_name": "蔚華科",
+          "sector": "半導體設備與測試代理",
+          "close": 135.0,
+          "signal": "",
+          "vol_status": "➡️ 量能平穩 (1.06x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3055/technical-chart",
+            "war_room": "charts/3055_fund.html"
+          }
+        }
+      ]
+    }
+  ]
+}

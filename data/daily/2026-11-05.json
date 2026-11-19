@@ -1,0 +1,104 @@
+{
+  "date": "2026-11-05",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "",
+    "recommended_exposure_pct": 25,
+    "summary": "🔴紅燈｜TAIEX 收盤 41,574.72（17MA 46,109.28／45MA 46,889.53／117MA 45,461.65／189MA 41,558.63）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 7,878.6 億（單日 +0.0 億 / 5日 +0.0 億｜🚨 散戶凹單未洗清（提防多殺多斷頭））｜🛡️ 建議總持倉上限：<= 25%",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 3,
+      "analyzed_count": 3,
+      "ai_model": "gemini-4-argon",
+      "strategy_comment": "今日無符合高勝率標準之標的，建議空手觀望（Pass 1 紅藍軍審計全數淘汰）。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [
+        {
+          "stock_id": "2618",
+          "stock_name": "長榮航",
+          "sector": "航空客貨運",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 45.1,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2618/technical-chart",
+            "war_room": "charts/2618_fund.html"
+          }
+        },
+        {
+          "stock_id": "5426",
+          "stock_name": "振發",
+          "sector": "電腦機構與機殼",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 27.95,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/5426/technical-chart",
+            "war_room": "charts/5426_fund.html"
+          }
+        },
+        {
+          "stock_id": "7711",
+          "stock_name": "永擎",
+          "sector": "伺服器與資料中心設備",
+          "reason": "【紅藍軍審計】審計無有效回覆，為保護本金暫不入選。",
+          "close_at_pick": 627.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/7711/technical-chart",
+            "war_room": "charts/7711_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "status": "PENDING_AI",
+      "status_badge": "⏳ 等待 22:00 AI 審計",
+      "total_candidates": 1,
+      "analyzed_count": 0,
+      "ai_model": "",
+      "strategy_comment": "⏳ 等待 22:00 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [],
+      "pending_candidates": [
+        {
+          "stock_id": "6620",
+          "stock_name": "漢達",
+          "sector": "生技醫療業",
+          "close": 100.5,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.66x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6620/technical-chart",
+            "war_room": "charts/6620_fund.html"
+          }
+        }
+      ]
+    }
+  ]
+}

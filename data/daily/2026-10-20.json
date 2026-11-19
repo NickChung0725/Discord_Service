@@ -1,0 +1,248 @@
+{
+  "date": "2026-10-20",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🟡黃燈 (震盪盤整環境)",
+    "regime_state": "",
+    "recommended_exposure_pct": null,
+    "summary": "🟡黃燈｜TAIEX 收盤 46,292.93（17MA 48,276.64／45MA 46,960.68／117MA 45,151.78）— 震盪盤整環境（跌破或測試 17MA 但守住長均線，提高型態 A 反彈權重）",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 18,
+      "analyzed_count": 18,
+      "ai_model": "gemini-3.8-flash",
+      "strategy_comment": "大盤處於 17MA 下方但守住 45MA/117MA 震盪盤整環境，本報告嚴控追高風險，精選基本面強勁、法人籌碼共振與技術面回踩反彈或金叉起漲之優質標的。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [
+        {
+          "rank": 1,
+          "stock_id": "3034",
+          "stock_name": "聯詠",
+          "sector": "IC設計-顯示驅動與SoC",
+          "score": 90,
+          "outlook_verdict": "高度可信",
+          "allocation_weight_pct": null,
+          "tactical_type": "🎯 短中期波段持有 (5~20日)（依附 17MA/45MA 區間操作）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3034/technical-chart",
+            "war_room": "charts/3034_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 568.0,
+            "chase_limit": 568.0,
+            "weighted_avg_entry": 568.0,
+            "tier1": {
+              "price": null,
+              "text": ""
+            },
+            "tier2": {
+              "price": null,
+              "text": ""
+            },
+            "tier3": {
+              "price": null,
+              "text": ""
+            },
+            "tp1": 614.55,
+            "tp2": 640.0,
+            "stop_loss": 545.28
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q2三率三升、EPS達10.4元，TTM EPS 28.67，ROE高達24.76%，自由現金流48.11億元；法人籌碼外資與投信近20日分別大買10,277.4與2,326.8張，技術面剛完成17MA與45MA金叉起漲，多頭動能強勁。",
+            "invalidation_rule": "2026Q2存貨上升至133.10億元，存貨週轉天數增加至66.8天，短期庫存去化壓力需持續追蹤。"
+          }
+        },
+        {
+          "rank": 2,
+          "stock_id": "2377",
+          "stock_name": "微星",
+          "sector": "品牌電競PC與主機板",
+          "score": 85,
+          "outlook_verdict": "高度可信",
+          "allocation_weight_pct": null,
+          "tactical_type": "🎯 短中期波段持有 (5~20日)（依附 17MA 向上趨勢線）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2377/technical-chart",
+            "war_room": "charts/2377_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 164.5,
+            "chase_limit": 164.5,
+            "weighted_avg_entry": 164.5,
+            "tier1": {
+              "price": null,
+              "text": ""
+            },
+            "tier2": {
+              "price": null,
+              "text": ""
+            },
+            "tier3": {
+              "price": null,
+              "text": ""
+            },
+            "tp1": 174.39,
+            "tp2": 185.0,
+            "stop_loss": 157.92
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q2營收與毛利率雙創新高，單季營收1061.7億元（年增73.15%），ROE高達23.30%；外資近20日大舉買超25,777.7張，籌碼高度集中，技術面放量點火（量比2.09x）剛完成均線金叉。",
+            "invalidation_rule": "2026Q2自由現金流為負（-40.53億元），且存貨攀升至585.65億元，需留意營業資金佔用與庫存去化風險。"
+          }
+        },
+        {
+          "rank": 3,
+          "stock_id": "3010",
+          "stock_name": "華立",
+          "sector": "電子通路業",
+          "score": 86,
+          "outlook_verdict": "高度可信",
+          "allocation_weight_pct": null,
+          "tactical_type": "🏦 長線價值抱單（依附 45MA/117MA 長線防守）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3010/technical-chart",
+            "war_room": "charts/3010_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 135.5,
+            "chase_limit": 135.5,
+            "weighted_avg_entry": 135.5,
+            "tier1": {
+              "price": null,
+              "text": ""
+            },
+            "tier2": {
+              "price": null,
+              "text": ""
+            },
+            "tier3": {
+              "price": null,
+              "text": ""
+            },
+            "tp1": 147.35,
+            "tp2": 155.0,
+            "stop_loss": 130.08
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q2營收456.83億元（年增125.86%），單季EPS 3.46元，ROE 13.89%，CCC天數大幅縮短至36.99天；三大法人近20日淨買超3,811.7張，合約負債回升至6.91億元，法說展望至2028/2030年訂單無虞。",
+            "invalidation_rule": "資本支出擴增至2.58億元，自由現金流與流動比率波動風險需持續追蹤。"
+          }
+        }
+      ],
+      "watchlist": [
+        {
+          "stock_id": "2357",
+          "stock_name": "華碩",
+          "sector": "PC品牌與消費性電子",
+          "reason": "2026Q2 EPS 25.64元創新高且伺服器大增，外資偏多，惟單季自由現金流-310.92億元與短期債務增加，待現金流回穩後尋找回踩 17MA 買點。",
+          "close_at_pick": 981.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2357/technical-chart",
+            "war_room": "charts/2357_fund.html"
+          }
+        },
+        {
+          "stock_id": "2637",
+          "stock_name": "慧洋-KY",
+          "sector": "散裝航運",
+          "reason": "2026Q2營收年增154.32%、自由現金流28.82億元，基本面極佳；惟短期量縮整理（量比0.59x），等待量能放大突破 17MA 正乖離區。",
+          "close_at_pick": 99.1,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2637/technical-chart",
+            "war_room": "charts/2637_fund.html"
+          }
+        },
+        {
+          "stock_id": "8383",
+          "stock_name": "千附",
+          "sector": "半導體業",
+          "reason": "2026Q2營收年增89.07%、EPS 1.62元，外資籌碼集中；毛利率受一次配佔比干擾下滑，待毛利回穩結構確認後介入。",
+          "close_at_pick": 70.2,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/8383/technical-chart",
+            "war_room": "charts/8383_fund.html"
+          }
+        }
+      ],
+      "avoid": [
+        {
+          "stock_id": "8476",
+          "stock_name": "台境*",
+          "sector": "綠能環保",
+          "reason": "2026Q2營收年增但9月單月營收年增率大降，且過往自由現金流連續大幅流出、存貨高達18.43億元（DIO 276.92天），體質待加強。",
+          "close_at_pick": 20.3,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/8476/technical-chart",
+            "war_room": "charts/8476_fund.html"
+          }
+        },
+        {
+          "stock_id": "5487",
+          "stock_name": "通泰",
+          "sector": "半導體業",
+          "reason": "本業長期虧損（2026Q2營益率-8.95%），自由現金流持續為負，無合約負債支撐，雖有資產題質但本業動能欠佳。",
+          "close_at_pick": 30.4,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/5487/technical-chart",
+            "war_room": "charts/5487_fund.html"
+          }
+        },
+        {
+          "stock_id": "6277",
+          "stock_name": "宏正",
+          "sector": "電腦及週邊設備業",
+          "reason": "技術面出現 8.19x 之極端天量過熱訊號，短線乖離過大且週轉天數高達180.94天，追高風險極高，暫列迴避。",
+          "close_at_pick": 96.1,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6277/technical-chart",
+            "war_room": "charts/6277_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    }
+  ]
+}

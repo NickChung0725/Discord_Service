@@ -1,0 +1,260 @@
+{
+  "date": "2026-11-12",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "RED_DEFENSIVE",
+    "recommended_exposure_pct": 50,
+    "summary": "🔴紅燈｜TAIEX 收盤 43,091.87（17MA 44,407.75／45MA 46,444.94／117MA 45,518.92／189MA 41,834.23）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 7,129.6 億（單日 +69.7 億 / 5日 -749.0 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 7,
+      "analyzed_count": 7,
+      "ai_model": "gemini-4-argon",
+      "strategy_comment": "加權跌破45MA(46,444.94)收43,091.87呈空頭防禦，櫃買與大盤5日融資斷頭大減749億（單日+69.7億），外資期現貨操作保守。紅燈關閉右側追高，總持倉嚴控35%~50%，僅取1檔三率擴張、現金流充沛且法人逆勢買超之真龍頭拉回低接。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [
+        {
+          "rank": 1,
+          "stock_id": "6446",
+          "stock_name": "藥華藥",
+          "sector": "新藥開發與生物製藥",
+          "score": 88,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": null,
+          "tactical_type": "🎯 短中期波段 (5~20日)（依附 17MA 1,232.65元 與 45MA 1,223.44元）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6446/technical-chart",
+            "war_room": "charts/6446_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 1365.0,
+            "chase_limit": 1412.77,
+            "weighted_avg_entry": 1365.0,
+            "tier1": {
+              "price": null,
+              "text": ""
+            },
+            "tier2": {
+              "price": null,
+              "text": ""
+            },
+            "tier3": {
+              "price": null,
+              "text": ""
+            },
+            "tp1": 1615.71,
+            "tp2": 1750.0,
+            "stop_loss": 1215.93
+          },
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 4,
+            "latest_close": 1245.0,
+            "period_low": 1245.0,
+            "period_high": 1405.0,
+            "effective_entry_price": 1381.87,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 1381.9)",
+            "outcome_badge": "⏳ 持有觀察中 (第 4 日，現價 1245.0)",
+            "mfe_pct": 1.67,
+            "mae_pct": -9.9,
+            "pain_badge": "📉 最大套牢 -9.9% / 最高浮盈 +1.7%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "details": {
+            "bull_thesis": "2026Q2毛利率94.23%(QoQ+6.36%, YoY+6.73%)、營益率46.03%(QoQ+5.28%, YoY+15.62%)呈三率擴張，TTM EPS達19.89元，ROE 21.41%。單季FCF達20.69億、淨負債比-66.35%現金流充沛。2026-10營收YoY+102.02%高速成長，外資與投信近20日逆勢同買4,805.3張，17MA剛金叉45MA且與電子大盤連動低。",
+            "invalidation_rule": "紅燈防禦期高PE(68.63倍)且殖利率僅0.11%易受流動性收縮影響，且11/12投顧喊價新聞見光後留上影線、原點位風報比僅1.68。若收盤跌破60日POC 1297.07元或三大法人連2日賣超逾500張則退場。"
+          }
+        }
+      ],
+      "watchlist": [
+        {
+          "stock_id": "2618",
+          "stock_name": "長榮航",
+          "sector": "航空客貨運",
+          "reason": "2026Q2單季FCF 97.77億、合約負債347.16億，外資20日狂買160,557.3張且融資減2,345張呈法人鎖碼；惟2026Q2毛利率14.13%(QoQ-12.09%)與營益率8.44%(QoQ-10.20%)雙降，加上大盤紅燈Style B配額僅1檔且原風報比1.3偏低，待拉回44.15~45.0元區間觀察。",
+          "close_at_pick": 46.9,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 4,
+            "latest_close": 46.8,
+            "period_low": 45.35,
+            "period_high": 48.95,
+            "effective_entry_price": 47.13,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 47.1)",
+            "outcome_badge": "⏳ 持有觀察中 (第 4 日，現價 46.8)",
+            "mfe_pct": 3.86,
+            "mae_pct": -3.78,
+            "pain_badge": "📉 最大套牢 -3.8% / 最高浮盈 +3.9%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2618/technical-chart",
+            "war_room": "charts/2618_fund.html"
+          }
+        }
+      ],
+      "avoid": [
+        {
+          "stock_id": "1326",
+          "stock_name": "台化",
+          "sector": "石化塑膠-基礎化學品與塑膠原料",
+          "reason": "【Stage 0 硬性攔截】最近一季本業虧損（營益率 -1.01%）且合約負債 0.00 億 < 1 億，無訂單保護",
+          "close_at_pick": 71.2,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1326/technical-chart",
+            "war_room": "charts/1326_fund.html"
+          }
+        },
+        {
+          "stock_id": "3617",
+          "stock_name": "碩天",
+          "sector": "不斷電系統與電源設備",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢（右側突破配額上限為 0 檔），逆勢追價極易遭遇系統性殺盤補跌",
+          "close_at_pick": 268.5,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 4,
+            "latest_close": 262.0,
+            "period_low": 251.0,
+            "period_high": 279.5,
+            "effective_entry_price": 275.37,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 275.4)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-2.4%)",
+            "mfe_pct": 1.5,
+            "mae_pct": -8.85,
+            "pain_badge": "📉 最大套牢 -8.8% / 最高浮盈 +1.5%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3617/technical-chart",
+            "war_room": "charts/3617_fund.html"
+          }
+        },
+        {
+          "stock_id": "3443",
+          "stock_name": "創意",
+          "sector": "矽智財與ASIC設計服務",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢（右側追高配額上限 0 檔），高價千金股與半導體權值股（如相關係數 0.6437 之日月光投控）高度連動，極易受大盤系統性賣壓拖累",
+          "close_at_pick": 7860.0,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 10,
+            "latest_close": null,
+            "period_low": null,
+            "period_high": null,
+            "effective_entry_price": 8688.22,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "STOP_LOSS_HIT",
+            "net_return_10d_pct": -16.63,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 8688.2)",
+            "outcome_badge": "⏳ 追蹤中 (第 10 日)",
+            "mfe_pct": 0.0,
+            "mae_pct": -19.72,
+            "pain_badge": "📉 最大套牢 -19.7% / 最高浮盈 +0.0%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3443/technical-chart",
+            "war_room": "charts/3443_fund.html"
+          }
+        },
+        {
+          "stock_id": "3029",
+          "stock_name": "零壹",
+          "sector": "資訊服務與資安代理",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢，右側突破配額為 0，逆勢追高風險極大",
+          "close_at_pick": 131.0,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 10,
+            "latest_close": null,
+            "period_low": null,
+            "period_high": null,
+            "effective_entry_price": 136.68,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "STOP_LOSS_HIT",
+            "net_return_10d_pct": -11.86,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 136.7)",
+            "outcome_badge": "⏳ 追蹤中 (第 10 日)",
+            "mfe_pct": 2.79,
+            "mae_pct": -14.03,
+            "pain_badge": "📉 最大套牢 -14.0% / 最高浮盈 +2.8%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3029/technical-chart",
+            "war_room": "charts/3029_fund.html"
+          }
+        },
+        {
+          "stock_id": "6715",
+          "stock_name": "嘉基",
+          "sector": "高速傳輸線與連接器",
+          "reason": "【紅藍軍審計 REJECT_TRAP】大盤處於 RED_DEFENSIVE 空頭防禦態勢，右側突破配額為 0 檔，且 Style B 配額僅限 1 檔（已由籌碼更明確的 2618 取得）",
+          "close_at_pick": 458.5,
+          "actual_verification": {
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 10,
+            "latest_close": null,
+            "period_low": null,
+            "period_high": null,
+            "effective_entry_price": 473.86,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "STOP_LOSS_HIT",
+            "net_return_10d_pct": -10.07,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 473.9)",
+            "outcome_badge": "⏳ 追蹤中 (第 10 日)",
+            "mfe_pct": 5.31,
+            "mae_pct": -15.69,
+            "pain_badge": "📉 最大套牢 -15.7% / 最高浮盈 +5.3%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6715/technical-chart",
+            "war_room": "charts/6715_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    }
+  ]
+}

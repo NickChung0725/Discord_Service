@@ -1,0 +1,394 @@
+{
+  "date": "2026-10-30",
+  "last_verified_date": "2026-11-19",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "",
+    "recommended_exposure_pct": null,
+    "summary": "🔴紅燈｜TAIEX 收盤 45,211.83（17MA 47,632.99／45MA 47,089.27／117MA 45,405.63）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 15,
+      "analyzed_count": 13,
+      "ai_model": "gemini-4-argon",
+      "strategy_comment": "大盤跌破45MA與117MA且季線下彎，啟動紅燈空頭防禦警戒。嚴格執行風控鐵則，top_picks上限縮至2檔，僅鎖定具備「淨負債比為負（淨現金）、正自由現金流、三大法人逆勢買超」之高防禦、高獲利成長績優股。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [
+        {
+          "rank": 1,
+          "stock_id": "3034",
+          "stock_name": "聯詠",
+          "sector": "半導體業",
+          "score": 88,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": null,
+          "tactical_type": "🎯 短中期波段 (5~20日)（依附 17MA 與 45MA 防守）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3034/technical-chart",
+            "war_room": "charts/3034_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 575.0,
+            "chase_limit": 575.0,
+            "weighted_avg_entry": 575.0,
+            "tier1": {
+              "price": null,
+              "text": ""
+            },
+            "tier2": {
+              "price": null,
+              "text": ""
+            },
+            "tier3": {
+              "price": null,
+              "text": ""
+            },
+            "tp1": 633.2,
+            "tp2": 688.0,
+            "stop_loss": 552.0
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q2毛利率42.42%(QoQ+3.36%)、營益率22.56%(QoQ+5.16%)、ROE 24.76%，2026-09營收YoY+24.99%。淨負債比-78.29%為強勁淨現金，單季FCF達48.11億元。17MA連漲上揚且剛金叉45MA，2026-W44三大法人5日逆勢買超1,431.8張(外資20日大買9,598張)。",
+            "invalidation_rule": "2026Q2 DIO升至66.80天需留意存貨去化。若日K收盤實質跌破45MA(552.53元)或三大法人轉為連續三日同步大幅賣超，無條件停損退場。"
+          }
+        },
+        {
+          "rank": 2,
+          "stock_id": "2615",
+          "stock_name": "萬海",
+          "sector": "航運業",
+          "score": 84,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": null,
+          "tactical_type": "🎯 短中期波段 (5~20日)（依附 17MA 與 45MA 防守）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2615/technical-chart",
+            "war_room": "charts/2615_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 120.0,
+            "chase_limit": 120.0,
+            "weighted_avg_entry": 120.0,
+            "tier1": {
+              "price": null,
+              "text": ""
+            },
+            "tier2": {
+              "price": null,
+              "text": ""
+            },
+            "tier3": {
+              "price": null,
+              "text": ""
+            },
+            "tp1": 131.47,
+            "tp2": 145.6,
+            "stop_loss": 115.2
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026-09月營收YoY暴增97.66%，2026Q2毛利率27.03%(QoQ+4.27%)、營益率22.16%(QoQ+4.84%)、TTM EPS達14.56元，ROE 16.88%。淨負債比-20.76%且單季FCF達66.34億元。均線剛金叉起漲且17MA上揚，2026-W44三大法人5日逆勢買超2,966.5張。",
+            "invalidation_rule": "航運屬高景氣循環股，PE受限於8~10倍天花板且殖利率偏低。若日K收盤跌破45MA(115.92元)或外資單日萬張規模連續出逃，即刻停損。"
+          }
+        }
+      ],
+      "watchlist": [
+        {
+          "stock_id": "2027",
+          "stock_name": "大成鋼",
+          "sector": "鋼鐵工業-不鏽鋼與鋁板捲",
+          "reason": "2026Q2三率雙升、單季FCF 55.78億且法人5日大買12,825.8張，惟淨負債比28.09%>0受紅燈淨現金鐵則限制。待站穩17MA(49.58元)且突破3MA(50.53元)觀察。",
+          "close_at_pick": 50.2,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2027/technical-chart",
+            "war_room": "charts/2027_fund.html"
+          }
+        },
+        {
+          "stock_id": "2637",
+          "stock_name": "慧洋-KY",
+          "sector": "散裝航運",
+          "reason": "2026Q2營益率33.36%、單季FCF 28.82億且17MA上揚，惟淨負債比35.27%>0未符紅燈淨現金標準。待回測17MA(100.38元)有守或帶量突破3MA(100.67元)觀察。",
+          "close_at_pick": 100.5,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2637/technical-chart",
+            "war_room": "charts/2637_fund.html"
+          }
+        },
+        {
+          "stock_id": "1216",
+          "stock_name": "統一",
+          "sector": "食品加工與綜合通路",
+          "reason": "2026Q2單季FCF達121.75億、外資20日狂買80,393.3張，具高防禦性，惟淨負債比16.46%>0未符紅燈鐵則。待拉回3MA~17MA(77.77~79.30元)量縮守穩觀察。",
+          "close_at_pick": 80.2,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1216/technical-chart",
+            "war_room": "charts/1216_fund.html"
+          }
+        },
+        {
+          "stock_id": "2618",
+          "stock_name": "長榮航",
+          "sector": "航空客貨運",
+          "reason": "符合淨負債比-35.81%與單季FCF 97.77億，惟受紅燈2檔名額限制，且2026Q2毛利率QoQ驟降12.09%並呈土洋對作。待拉回17MA~45MA(42.32~42.50元)守穩觀察。",
+          "close_at_pick": 42.7,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2618/technical-chart",
+            "war_room": "charts/2618_fund.html"
+          }
+        },
+        {
+          "stock_id": "2897",
+          "stock_name": "王道銀行",
+          "sector": "商業銀行",
+          "reason": "符合淨負債比-12.03%、單季FCF 18.75億與法人買超，惟受紅燈名額限制，且2026Q2 ROE僅5.42%、17MA 5日斜率微幅下彎(-0.03%)。待金叉確立並站穩10.85元觀察。",
+          "close_at_pick": 10.9,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2897/technical-chart",
+            "war_room": "charts/2897_fund.html"
+          }
+        }
+      ],
+      "avoid": [
+        {
+          "stock_id": "3231",
+          "stock_name": "緯創",
+          "sector": "伺服器與筆記型電腦代工",
+          "reason": "觸發一票否決d與均線扣分：2026Q2單季FCF為-1,252.44億(淨負債比147.52%)，且2026-W44三大法人5日大賣10,119.5張，同時17MA持續下彎(-0.16%)跌破月季線。",
+          "close_at_pick": 183.5,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3231/technical-chart",
+            "war_room": "charts/3231_fund.html"
+          }
+        },
+        {
+          "stock_id": "5426",
+          "stock_name": "振發",
+          "sector": "電腦機構與機殼",
+          "reason": "觸發一票否決d：2026Q2單季FCF為-0.37億，且爆天量後2026-W44三大法人5日逆勢大賣2,735.4張(外資賣2,860.6張)，PE高達46.72倍，主力拉高出貨明顯。",
+          "close_at_pick": 29.9,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/5426/technical-chart",
+            "war_room": "charts/5426_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "status": "PENDING_AI",
+      "status_badge": "⏳ 等待 22:00 AI 審計",
+      "total_candidates": 13,
+      "analyzed_count": 0,
+      "ai_model": "",
+      "strategy_comment": "⏳ 等待 22:00 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [],
+      "pending_candidates": [
+        {
+          "stock_id": "3311",
+          "stock_name": "閎暉",
+          "sector": "機構與模組元件",
+          "close": 39.65,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.52x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3311/technical-chart",
+            "war_room": "charts/3311_fund.html"
+          }
+        },
+        {
+          "stock_id": "6187",
+          "stock_name": "萬潤",
+          "sector": "其他電子類",
+          "close": 1190.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.75x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6187/technical-chart",
+            "war_room": "charts/6187_fund.html"
+          }
+        },
+        {
+          "stock_id": "3624",
+          "stock_name": "光頡",
+          "sector": "被動元件-薄膜電阻",
+          "close": 126.5,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.28x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3624/technical-chart",
+            "war_room": "charts/3624_fund.html"
+          }
+        },
+        {
+          "stock_id": "2305",
+          "stock_name": "全友",
+          "sector": "電子工業",
+          "close": 49.4,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.25x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2305/technical-chart",
+            "war_room": "charts/2305_fund.html"
+          }
+        },
+        {
+          "stock_id": "3037",
+          "stock_name": "欣興",
+          "sector": "電子工業",
+          "close": 989.0,
+          "signal": "",
+          "vol_status": "📈 溫和放量 (1.22x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3037/technical-chart",
+            "war_room": "charts/3037_fund.html"
+          }
+        },
+        {
+          "stock_id": "3219",
+          "stock_name": "倚強科",
+          "sector": "其他電子類",
+          "close": 102.5,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.48x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3219/technical-chart",
+            "war_room": "charts/3219_fund.html"
+          }
+        },
+        {
+          "stock_id": "4939",
+          "stock_name": "亞電",
+          "sector": "電子零組件業",
+          "close": 66.5,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.23x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/4939/technical-chart",
+            "war_room": "charts/4939_fund.html"
+          }
+        },
+        {
+          "stock_id": "1727",
+          "stock_name": "中華化",
+          "sector": "電子化學品與基礎化工",
+          "close": 90.5,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.19x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1727/technical-chart",
+            "war_room": "charts/1727_fund.html"
+          }
+        },
+        {
+          "stock_id": "3189",
+          "stock_name": "景碩",
+          "sector": "PCB-ABF載板",
+          "close": 932.0,
+          "signal": "",
+          "vol_status": "➡️ 量能平穩 (0.95x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3189/technical-chart",
+            "war_room": "charts/3189_fund.html"
+          }
+        },
+        {
+          "stock_id": "2059",
+          "stock_name": "川湖",
+          "sector": "伺服器與筆電滑軌及鉸鏈",
+          "close": 9650.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.67x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2059/technical-chart",
+            "war_room": "charts/2059_fund.html"
+          }
+        },
+        {
+          "stock_id": "2413",
+          "stock_name": "環科",
+          "sector": "變壓器與電源零組件",
+          "close": 50.2,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.24x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2413/technical-chart",
+            "war_room": "charts/2413_fund.html"
+          }
+        },
+        {
+          "stock_id": "8103",
+          "stock_name": "瀚荃",
+          "sector": "電子工業",
+          "close": 102.0,
+          "signal": "",
+          "vol_status": "💧 量縮整理 (0.60x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/8103/technical-chart",
+            "war_room": "charts/8103_fund.html"
+          }
+        },
+        {
+          "stock_id": "3653",
+          "stock_name": "健策",
+          "sector": "電子工業",
+          "close": 6315.0,
+          "signal": "",
+          "vol_status": "➡️ 量能平穩 (1.11x｜5MA>20MA)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3653/technical-chart",
+            "war_room": "charts/3653_fund.html"
+          }
+        }
+      ]
+    }
+  ]
+}
