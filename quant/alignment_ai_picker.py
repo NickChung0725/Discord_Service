@@ -3192,6 +3192,93 @@ def _row_lookup(frame: pd.DataFrame) -> dict[str, dict[str, object]]:
     return {str(r["stock_id"]): r for r in frame.to_dict("records")}
 
 
+def format_compact_pick_notification(
+    target_date: date,
+    decision: dict | None,
+    frame: pd.DataFrame,
+    *,
+    total_signals: int,
+    analyzed_count: int = 0,
+    audit_records: Mapping[str, Mapping[str, object]] | None = None,
+    market_regime: Mapping[str, object] | None = None,
+    title_label: str = "AI 嚴選進場決策快報",
+    weekly_summary_md: str = "",
+) -> list[str]:
+    """精簡單則 Discord 作戰通知卡片（完整 AI 理由、觀察/避開名單與歷史對答案導流至戰情總部）。"""
+    from github_uploader import get_github_pages_base_url
+    from signal_audit_service import parse_plan_price
+
+    rows = _row_lookup(frame)
+    portal_base = get_github_pages_base_url()
+    top_picks = list((decision or {}).get("top_picks") or [])
+    watchlist = list((decision or {}).get("watchlist") or [])
+    avoid = list((decision or {}).get("avoid") or [])
+    audits = audit_records or {}
+
+    lines: list[str] = []
+    if portal_base:
+        lines.append(f"🌐 [開啟今日量化戰情總部]({portal_base}/?date={target_date.isoformat()})")
+    lines.append(
+        f"🎯 **【{title_label}】{target_date.isoformat()}**"
+        f"｜候選 {total_signals} ➔ 深度 {analyzed_count} ➔ 嚴選 **{len(top_picks)} 檔**"
+    )
+
+    regime_parts: list[str] = []
+    if market_regime and market_regime.get("light"):
+        light_s = str(market_regime.get("light")).strip()
+        status_s = str(market_regime.get("status") or "").split("（")[0].strip()
+        regime_parts.append(f"{light_s} {status_s}".strip())
+    rec_exp = (decision or {}).get("recommended_total_exposure_pct")
+    if rec_exp is not None and rec_exp != "":
+        regime_parts.append(f"建議總持倉 {rec_exp}%")
+    if regime_parts:
+        lines.append("🚦 " + " ｜ ".join(regime_parts))
+
+    if decision is None:
+        lines.append("⚠️ AI 輸出解析異常，請至戰情總部或本地日誌檢視。")
+    elif not top_picks:
+        lines.append(f"🛡️ **今日防禦空手觀望（0 檔嚴選）**｜觀察 {len(watchlist)} 檔・避開 {len(avoid)} 檔（詳見戰情總部）")
+    else:
+        for idx, pick in enumerate(top_picks, start=1):
+            sid = str(pick.get("stock_id") or "")
+            row = rows.get(sid, {})
+            sname = str(pick.get("stock_name") or row.get("stock_name") or "").strip()
+            rank_emoji = _RANK_EMOJI.get(pick.get("rank", idx), "🏅")
+            score = pick.get("score", "N/A")
+            aud = audits.get(sid) or (pick.get("audit") if isinstance(pick.get("audit"), Mapping) else {}) or {}
+            w_pct = aud.get("Allocation_Weight_Pct")
+            w_part = f"｜權重 {w_pct}%" if w_pct not in (None, "") else ""
+
+            t1 = _parse_optional_num(aud.get("Tier1_Entry_Price")) or parse_plan_price(aud.get("Tier1_Entry_Plan"))
+            t2 = _parse_optional_num(aud.get("Tier2_Entry_Price")) or parse_plan_price(aud.get("Tier2_Entry_Plan"))
+            t3 = _parse_optional_num(aud.get("Tier3_Entry_Price")) or parse_plan_price(aud.get("Tier3_Entry_Plan"))
+            tp1 = _parse_optional_num(aud.get("TP1_Target_Or_POC")) or parse_plan_price(pick.get("target_price_1"))
+            sl = _parse_optional_num(aud.get("Hard_Stop_Loss")) or parse_plan_price(pick.get("stop_loss_price"), pick="low")
+
+            tiers_txt = " / ".join(f"{p:.1f}" for p in (t1, t2, t3) if p is not None)
+            plan_parts: list[str] = []
+            if tiers_txt:
+                plan_parts.append(f"低接 `{tiers_txt}`")
+            if tp1 is not None:
+                plan_parts.append(f"TP1 `{tp1:.1f}`")
+            if sl is not None:
+                plan_parts.append(f"停損 `{sl:.1f}`")
+            plan_parts.append(f"[📈玩股網]({wantgoo_chart_url(sid)})")
+
+            lines.append(f"{rank_emoji} **#{pick.get('rank', idx)} `{sid}` {sname}**（分 {score}{w_part}）")
+            lines.append("   └ " + "｜".join(plan_parts))
+
+        lines.append(
+            f"👀 次佳觀察 {len(watchlist)} 檔 ｜ ⚠️ 建議避開 {len(avoid)} 檔"
+            "（完整理由、財報戰情室與歷史對答案請點上方總部）"
+        )
+
+    out = ["\n".join(lines)[:DISCORD_CHUNK_LIMIT]]
+    if weekly_summary_md:
+        out.append(weekly_summary_md[:DISCORD_CHUNK_LIMIT])
+    return out
+
+
 def format_pick_report(
     target_date: date,
     decision: dict | None,
@@ -3851,6 +3938,7 @@ async def run_pipeline(
 
     # Phase 3.5: 週五盤後勝率歸因與 False Negative 檢討報告 + Signal_Audit_Log 同步
     audit_store = None
+    weekly_summary_md = ""
     if bool(_cfg(config, "enable_signal_audit", False)):
         try:
             from signal_audit_service import SignalAuditStore, format_weekly_summary_markdown
@@ -3861,11 +3949,10 @@ async def run_pipeline(
                 if (weekly_summary.get("settled_trades", 0) or 0) > 0 or (
                     weekly_summary.get("false_negative_rate") is not None
                 ):
-                    messages.append(
-                        format_weekly_summary_markdown(weekly_summary, as_of_str=target_date.isoformat())[
-                            :DISCORD_CHUNK_LIMIT
-                        ]
-                    )
+                    weekly_summary_md = format_weekly_summary_markdown(
+                        weekly_summary, as_of_str=target_date.isoformat()
+                    )[:DISCORD_CHUNK_LIMIT]
+                    messages.append(weekly_summary_md)
         except Exception as error:  # noqa: BLE001
             print(f"[warn] 產生週五訊號勝率歸因摘要失敗（略過）：{error}")
 
@@ -3919,10 +4006,7 @@ async def run_pipeline(
         except Exception as error:  # noqa: BLE001
             print(f"[warn] 同步訊號留痕至 Google Sheets 失敗：{error}")
 
-    if post_discord:
-        sent = post_messages_to_discord(messages, channel_id, bot_token)
-        print(f"已推播 AI 嚴選報告（{sent} 則訊息）。")
-
+    # 先發布戰情總部網頁再發 Discord，確保點開通知連結即見最新資料
     if bool(_cfg(config, "enable_portal_publish", False)):
         try:
             from portal_publisher import publish_portal_data
@@ -3935,6 +4019,24 @@ async def run_pipeline(
             )
         except Exception as error:  # noqa: BLE001
             print(f"[warn] 21:30 戰情總部發布失敗（略過）：{error}")
+
+    if post_discord:
+        discord_msgs = (
+            format_compact_pick_notification(
+                target_date,
+                decision,
+                selected_all,
+                total_signals=total_signals,
+                analyzed_count=len(results),
+                audit_records=audit_records,
+                market_regime=market_regime,
+                weekly_summary_md=weekly_summary_md,
+            )
+            if bool(_cfg(config, "discord_compact_mode", False))
+            else messages
+        )
+        sent = post_messages_to_discord(discord_msgs, channel_id, bot_token)
+        print(f"已推播 AI 嚴選報告（{sent} 則訊息）。")
 
     _cleanup_old_daily_reports(daily_dir, target_date, int(config["local_retention_days"]))
     flush_bq_archives()
@@ -4290,7 +4392,22 @@ async def run_rebound_pipeline(
             print("\n\n" + "\n\n".join(ai_messages))
         return 0
 
+    # 先發布戰情總部網頁再發 Discord，確保點開通知連結即見最新資料
+    if bool(_cfg(config, "enable_portal_publish", False)):
+        try:
+            from portal_publisher import publish_portal_data
+
+            publish_portal_data(
+                config,
+                as_of=target_date,
+                output_root=output_root,
+                commit_message=f"Update quant portal 22:00 rebound ({target_date.isoformat()})",
+            )
+        except Exception as error:  # noqa: BLE001
+            print(f"[warn] 22:00 戰情總部發布失敗（略過）：{error}")
+
     if post_discord:
+        compact_mode = bool(_cfg(config, "discord_compact_mode", False))
         rebound_channel_id = str(
             config.get("rebound_channel_id")
             or config.get("alignment_channel_id")
@@ -4307,24 +4424,26 @@ async def run_rebound_pipeline(
             failed_count=scan_fail_count,
             market_regime=market_regime,
             ai_executed=bool(ai_messages),
+            compact=compact_mode,
         )
         print(f"[rebound] 已推播型態 A 反彈清單快報（{sent_scan} 則訊息）。")
         if ai_messages:
-            sent_ai = post_messages_to_discord(ai_messages, channel_id, bot_token)
-            print(f"[rebound] 已推播型態 A 反彈 AI 嚴選報告（{sent_ai} 則訊息）。")
-
-    if bool(_cfg(config, "enable_portal_publish", False)):
-        try:
-            from portal_publisher import publish_portal_data
-
-            publish_portal_data(
-                config,
-                as_of=target_date,
-                output_root=output_root,
-                commit_message=f"Update quant portal 22:00 rebound ({target_date.isoformat()})",
+            discord_ai_msgs = (
+                format_compact_pick_notification(
+                    target_date,
+                    decision,
+                    analyzed,
+                    total_signals=total_rebounds,
+                    analyzed_count=len(ai_results),
+                    audit_records=audit_records,
+                    market_regime=market_regime,
+                    title_label="型態 A 反彈 AI 嚴選快報",
+                )
+                if compact_mode
+                else ai_messages
             )
-        except Exception as error:  # noqa: BLE001
-            print(f"[warn] 22:00 戰情總部發布失敗（略過）：{error}")
+            sent_ai = post_messages_to_discord(discord_ai_msgs, channel_id, bot_token)
+            print(f"[rebound] 已推播型態 A 反彈 AI 嚴選報告（{sent_ai} 則訊息）。")
 
     _cleanup_old_daily_reports(daily_dir, target_date, int(config["local_retention_days"]))
     flush_bq_archives()

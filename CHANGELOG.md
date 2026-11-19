@@ -4,6 +4,15 @@
 
 ---
 
+## [v6.2.1] - 2026-11-19
+### 🔧 優化與修正 — Discord 選股推播瘦身為單則精簡卡片，並改為「先發布網頁、再發 Discord 通知」
+* **新增單則精簡 Discord 通知模式（`discord_compact_mode: true`）（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`finmind_scanner.json`](/finmind_scanner.json)）**：
+  * 新增 `format_compact_pick_notification()`、`format_compact_alignment_notification()` 與 `format_compact_rebound_notification()`：19:00、21:30 與 22:00 公開選股推播全面瘦身為**單則精簡作戰卡片**（頂部戰情總部連結、大盤紅綠燈與總持倉水位、嚴選股三批低接價／TP1／停損／玩股網直達、觀察與避開檔數統計），完整藍紅軍長文與明細留存於戰情總部網頁與本機 `.md`；08:15 晨報、13:15 0050、22:45 記憶與 `/stock_ai` 維持完整推播不變。
+* **調整發布順序（先網頁、後通知）**：19:00 `scan-all`、21:30 `analyze-alignment` 與 22:00 `analyze-rebound` 皆調整為先執行 `publish_portal_data()` 推送至 GitHub Pages 後再發送 Discord 推播，確保收到通知當下點開總部連結即為最新資料。
+* **補充單元測試（[`tests/test_v62_step3_portal_publisher.py`](/tests/test_v62_step3_portal_publisher.py)）**。
+
+---
+
 ## [v6.2.0] - 2026-11-19
 ### ✨ 新增功能 — SASD v6.2.0 Step 3 & Step 4（量化戰情總部網頁、GitHub Git Trees 單次發布與 30 交易日自動清理）
 * **Step 3 — 新增 GitHub Git Trees API 單次批次同步（[`services/github_uploader.py`](/services/github_uploader.py)）**：

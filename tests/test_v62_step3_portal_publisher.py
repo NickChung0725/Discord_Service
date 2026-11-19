@@ -437,6 +437,94 @@ class TestStep4WebPortalAndDiscordHeader(unittest.TestCase):
             self.assertIn("開啟今日量化戰情總部", first_line)
             self.assertIn(expected, first_line)
 
+    def test_compact_discord_notifications_fit_single_message(self) -> None:
+        from alignment_ai_picker import format_compact_pick_notification
+        from finmind_stock_scanner import (
+            format_compact_alignment_notification,
+            format_compact_rebound_notification,
+        )
+
+        # 20 檔初選股仍必須濃縮在單則 <= 1950 字元訊息內
+        align_df = pd.DataFrame(
+            [
+                {
+                    "stock_id": f"{2300 + i}",
+                    "stock_name": f"測試股{i}",
+                    "close": 100.0 + i,
+                    "signal": "剛金叉起漲",
+                    "vol_lots": 2500,
+                    "vol_status": "🔥 放量點火 (2.5x)",
+                }
+                for i in range(20)
+            ]
+        )
+        rebound_df = pd.DataFrame(
+            [
+                {
+                    "stock_id": "2379",
+                    "stock_name": "瑞昱",
+                    "close": 717.0,
+                    "drop_pct": 15.15,
+                    "support_ma": "117MA",
+                }
+            ]
+        )
+        decision = {
+            "recommended_total_exposure_pct": 40,
+            "top_picks": [
+                {
+                    "rank": 1,
+                    "stock_id": "3617",
+                    "stock_name": "碩天",
+                    "score": 95,
+                    "target_price_1": "289.0",
+                    "stop_loss_price": "225.0",
+                    "bull_thesis": "很長的藍軍基本面分析不應出現在精簡推播中" * 20,
+                    "bear_case_and_invalidation": "很長的紅軍失效條件不應出現在精簡推播中" * 20,
+                }
+            ],
+            "watchlist": [{"stock_id": "3017", "reason": "觀察"}],
+            "avoid": [{"stock_id": "2606", "reason": "避開"}],
+        }
+        audits = {
+            "3617": {
+                "Allocation_Weight_Pct": 30,
+                "Tier1_Entry_Price": 252.5,
+                "Tier2_Entry_Price": 247.5,
+                "Tier3_Entry_Price": 241.0,
+                "TP1_Target_Or_POC": 289.0,
+                "Hard_Stop_Loss": 225.0,
+            }
+        }
+
+        with patch.dict("os.environ", {"GITHUB_REPO": "NickChung0725/Discord_Service"}):
+            c_align = format_compact_alignment_notification(
+                align_df, as_of=date(2026, 11, 19), market_regime={"light": "🟢綠燈"}
+            )
+            c_reb = format_compact_rebound_notification(
+                rebound_df, as_of=date(2026, 11, 19), market_regime={"light": "🔴紅燈"}, ai_executed=True
+            )
+            c_pick = format_compact_pick_notification(
+                date(2026, 11, 19),
+                decision,
+                align_df,
+                total_signals=20,
+                analyzed_count=15,
+                audit_records=audits,
+                market_regime={"light": "🔴紅燈", "status": "空頭防禦警戒（跌破45MA）"},
+            )
+
+        self.assertEqual(len(c_align), 1)
+        self.assertIn("另有 5 檔", c_align[0])
+        self.assertEqual(len(c_reb), 1)
+        self.assertIn("2379", c_reb[0])
+        self.assertEqual(len(c_pick), 1)
+        self.assertIn("252.5 / 247.5 / 241.0", c_pick[0])
+        self.assertIn("https://www.wantgoo.com/stock/3617/technical-chart", c_pick[0])
+        self.assertNotIn("很長的藍軍基本面分析", c_pick[0])
+        self.assertIn("次佳觀察 1 檔", c_pick[0])
+        self.assertIn("建議避開 1 檔", c_pick[0])
+
 
 if __name__ == "__main__":
     unittest.main()

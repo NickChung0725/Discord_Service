@@ -2803,6 +2803,49 @@ def _trim_reply_continuation(content: str, *, marker: str = "（續）", scan_li
     return content
 
 
+def format_compact_alignment_notification(
+    alignment_signals: pd.DataFrame,
+    as_of: date | None = None,
+    failed_count: int = 0,
+    market_regime: Mapping[str, object] | None = None,
+    *,
+    max_preview: int = 15,
+) -> list[str]:
+    """精簡單則 19:00 均線掃描 Discord 通知（完整名單導流至戰情總部網頁）。"""
+    from github_uploader import get_github_pages_base_url
+
+    report_date = (as_of or _today_in_taipei()).isoformat()
+    count = len(alignment_signals)
+    regime_tag = _format_compact_regime_tag(market_regime)
+    regime_part = f" ｜ 🚦 大盤：{regime_tag}" if regime_tag else ""
+    portal_base = get_github_pages_base_url()
+
+    lines: list[str] = []
+    if portal_base:
+        lines.append(f"🌐 [開啟今日量化戰情總部]({portal_base}/?date={report_date})")
+    lines.append(f"📊 **【MA 均線排列初選快報】{report_date}**")
+    lines.append(f"🎯 符合標的：**{count} 檔**{regime_part}")
+    if failed_count:
+        lines.append(f"⚠️ {failed_count} 檔資料抓取失敗（已略過）")
+
+    if alignment_signals.empty:
+        lines.append("今日沒有符合條件的股票。")
+    else:
+        for idx, row in enumerate(alignment_signals.head(max_preview).itertuples(index=False), start=1):
+            sig = str(getattr(row, "signal", "") or "").strip()
+            vol_lots = _parse_optional_float(getattr(row, "vol_lots", None))
+            vol_tag = _compact_vol_tag(getattr(row, "vol_status", None))
+            vol_part = f"｜量 {int(round(vol_lots)):,}張" + (f"({vol_tag})" if vol_tag else "") if vol_lots is not None else ""
+            sig_part = f"｜{sig}" if sig else ""
+            lines.append(f"{idx}. `{row.stock_id}` {row.stock_name} `{float(row.close):,.1f}`{sig_part}{vol_part}")
+        if count > max_preview:
+            lines.append(f"… 另有 {count - max_preview} 檔，完整清單請點上方戰情總部。")
+        lines.append("⏳ 21:30 AI 深度財報與三階低接點位將自動更新至總部網頁。")
+
+    text = "\n".join(lines)
+    return [text[:1950]]
+
+
 def post_alignment_report_to_discord(
     alignment_signals: pd.DataFrame,
     channel_id: str,
@@ -2810,18 +2853,28 @@ def post_alignment_report_to_discord(
     as_of: date | None = None,
     failed_count: int = 0,
     market_regime: Mapping[str, object] | None = None,
+    *,
+    compact: bool = False,
 ) -> int:
     if not channel_id.isdigit():
         raise ValueError("STOCK_CHANNEL_ID 必須是 Discord 頻道 ID 數字。")
     if not bot_token.strip():
         raise ValueError("DISCORD_TOKEN (or BOT_TOKEN) is required to post the report.")
 
-    messages = format_alignment_report(
-        alignment_signals,
-        as_of,
-        failed_count=failed_count,
-        market_regime=market_regime,
-    )
+    if compact:
+        messages = format_compact_alignment_notification(
+            alignment_signals,
+            as_of,
+            failed_count=failed_count,
+            market_regime=market_regime,
+        )
+    else:
+        messages = format_alignment_report(
+            alignment_signals,
+            as_of,
+            failed_count=failed_count,
+            market_regime=market_regime,
+        )
     sent_count = 0
     first_message_id: str | None = None
     for index, content in enumerate(messages):
@@ -2982,6 +3035,50 @@ def format_rebound_report(
     return chunks
 
 
+def format_compact_rebound_notification(
+    rebound_signals: pd.DataFrame,
+    as_of: date | None = None,
+    failed_count: int = 0,
+    market_regime: Mapping[str, object] | None = None,
+    ai_executed: bool = False,
+    *,
+    max_preview: int = 12,
+) -> list[str]:
+    """精簡單則 22:00 型態 A 反彈掃描 Discord 通知（完整名單導流至戰情總部網頁）。"""
+    from github_uploader import get_github_pages_base_url
+
+    report_date = (as_of or _today_in_taipei()).isoformat()
+    count = len(rebound_signals)
+    regime_tag = _format_compact_regime_tag(market_regime)
+    regime_part = f" ｜ 🚦 大盤：{regime_tag}" if regime_tag else ""
+    portal_base = get_github_pages_base_url()
+
+    lines: list[str] = []
+    if portal_base:
+        lines.append(f"🌐 [開啟今日量化戰情總部]({portal_base}/?date={report_date})")
+    lines.append(f"🪃 **【型態 A：長均線反彈快報】{report_date}**")
+    lines.append(f"🎯 符合標的：**{count} 檔**{regime_part}")
+    if failed_count:
+        lines.append(f"⚠️ {failed_count} 檔分析過程異常（已略過）")
+
+    if rebound_signals.empty:
+        lines.append("今日沒有符合型態 A 反彈條件的股票。")
+    else:
+        for idx, row in enumerate(rebound_signals.head(max_preview).itertuples(index=False), start=1):
+            sup_ma = getattr(row, "support_ma", "") or ""
+            drop_pct = _parse_optional_float(getattr(row, "drop_pct", None))
+            drop_part = f"｜跌 -{drop_pct:.1f}%" if drop_pct is not None else ""
+            sup_part = f"｜踩 {sup_ma}" if sup_ma else ""
+            lines.append(f"{idx}. `{row.stock_id}` {row.stock_name} `{float(row.close):,.1f}`{drop_part}{sup_part}")
+        if count > max_preview:
+            lines.append(f"… 另有 {count - max_preview} 檔，完整清單請點上方戰情總部。")
+        if ai_executed:
+            lines.append("✅ 已完成 AI 深度診斷與三階低接布局（詳見總部網頁與 AI 嚴選快報）。")
+
+    text = "\n".join(lines)
+    return [text[:1950]]
+
+
 def post_rebound_report_to_discord(
     rebound_signals: pd.DataFrame,
     channel_id: str,
@@ -2990,19 +3087,30 @@ def post_rebound_report_to_discord(
     failed_count: int = 0,
     market_regime: Mapping[str, object] | None = None,
     ai_executed: bool = False,
+    *,
+    compact: bool = False,
 ) -> int:
     if not channel_id.isdigit():
         raise ValueError("STOCK_CHANNEL_ID 必須是 Discord 頻道 ID 數字。")
     if not bot_token.strip():
         raise ValueError("DISCORD_TOKEN (or BOT_TOKEN) is required to post the report.")
 
-    messages = format_rebound_report(
-        rebound_signals,
-        as_of=as_of,
-        failed_count=failed_count,
-        market_regime=market_regime,
-        ai_executed=ai_executed,
-    )
+    if compact:
+        messages = format_compact_rebound_notification(
+            rebound_signals,
+            as_of=as_of,
+            failed_count=failed_count,
+            market_regime=market_regime,
+            ai_executed=ai_executed,
+        )
+    else:
+        messages = format_rebound_report(
+            rebound_signals,
+            as_of=as_of,
+            failed_count=failed_count,
+            market_regime=market_regime,
+            ai_executed=ai_executed,
+        )
     sent_count = 0
     first_message_id: str | None = None
     for index, content in enumerate(messages):
@@ -4249,6 +4357,7 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
         "enable_dual_index_regime_router",
         "enable_signal_audit",
         "enable_portal_publish",
+        "discord_compact_mode",
     ):
         if bool_key in config and not isinstance(config.get(bool_key), bool):
             raise ValueError(f"設定 {bool_key} 必須是布林值。")
@@ -4946,6 +5055,20 @@ def scan_configured_universe(
         except Exception:
             logger.warning("盤後事後審計 (signal_audit) 回填略過", exc_info=True)
 
+    # SASD v6.2.0：先發布戰情總部網頁再發 Discord，確保點開連結即為最新資料
+    if config.get("enable_portal_publish"):
+        try:
+            from portal_publisher import publish_portal_data
+
+            publish_portal_data(
+                config,
+                as_of=today,
+                output_root=output_directory,
+                commit_message=f"Update quant portal 19:00 scan ({today.isoformat()})",
+            )
+        except Exception:
+            logger.warning("19:00 戰情總部發布失敗（略過，不影響主流程）", exc_info=True)
+
     if config["post_alignment_to_discord"]:
         bot_token = (
             os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN") or ""
@@ -4964,21 +5087,8 @@ def scan_configured_universe(
             as_of=today,
             failed_count=len(failures) + len(failed_groups),
             market_regime=market_regime,
+            compact=bool(config.get("discord_compact_mode", False)),
         )
-
-    # SASD v6.2.0 Step 3：19:00 盤後同步發布戰情總部（今日大盤＋19:00 均線初選＋過去 10 日對答案＋30 日 JSON 清理）
-    if config.get("enable_portal_publish"):
-        try:
-            from portal_publisher import publish_portal_data
-
-            publish_portal_data(
-                config,
-                as_of=today,
-                output_root=output_directory,
-                commit_message=f"Update quant portal 19:00 scan ({today.isoformat()})",
-            )
-        except Exception:
-            logger.warning("19:00 戰情總部發布失敗（略過，不影響主流程）", exc_info=True)
 
     _cleanup_old_daily_reports(
         daily_directory, today, int(config["local_retention_days"])

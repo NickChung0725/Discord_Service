@@ -294,5 +294,6 @@
   "signal_audit_db_path": "data/signal_audit.db",
   "signal_audit_gsheet_tab_name": "Signal_Audit_Log",
   "enable_portal_publish": true,
-  "portal_retention_trading_days": 30
+  "portal_retention_trading_days": 30,
+  "discord_compact_mode": true
 }
