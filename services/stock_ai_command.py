@@ -338,6 +338,21 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
 
         plan_embed = _build_trade_plan_embed(report.summary_json, stock_title)
 
+        # SASD v6.2.0 Step 3：同步將 `/stock_ai` 單股查詢收錄至戰情總部搜尋索引（非阻斷）
+        try:
+            from portal_publisher import record_manual_stock_ai_query
+
+            summary_dict = report.summary_json if isinstance(report.summary_json, dict) else {}
+            record_manual_stock_ai_query(
+                stock_id,
+                stock_name=stock_name or stock_id,
+                sector=str(summary_dict.get("sector") or summary_dict.get("industry") or ""),
+                score=summary_dict.get("health_score") or summary_dict.get("score"),
+                war_room_url=report.war_room_url,
+            )
+        except Exception:
+            logger.debug("Skipped recording manual /stock_ai query for %s", stock_id, exc_info=True)
+
         chunks = _split_discord_chunks(full_text)
         for i, chunk in enumerate(chunks):
             # 交易計畫 Embed 與互動按鈕掛載在最後一則訊息底下

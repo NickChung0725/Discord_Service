@@ -292,5 +292,7 @@
   "futures_total_net_short_limit": 42000,
   "enable_signal_audit": true,
   "signal_audit_db_path": "data/signal_audit.db",
-  "signal_audit_gsheet_tab_name": "Signal_Audit_Log"
+  "signal_audit_gsheet_tab_name": "Signal_Audit_Log",
+  "enable_portal_publish": true,
+  "portal_retention_trading_days": 30
 }

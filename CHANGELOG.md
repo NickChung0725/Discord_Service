@@ -4,6 +4,26 @@
 
 ---
 
+## [v6.2.0] - 2026-11-19
+### ✨ 新增功能 — SASD v6.2.0 Step 3 & Step 4（量化戰情總部網頁、GitHub Git Trees 單次發布與 30 交易日自動清理）
+* **Step 3 — 新增 GitHub Git Trees API 單次批次同步（[`services/github_uploader.py`](/services/github_uploader.py)）**：
+  * 新增 `sync_portal_batch()` 與 `get_github_pages_base_url()`，單一 Commit 完成多檔上傳與過期 `data/daily/*.json` 刪除（`sha: null`）。
+  * 內建 Git Blob SHA 本地比對（未變動檔案如未改版之 `index.html` 自動略過）、HTTP `422` non-fast-forward 併發衝突自動重試（最多 3 次）與 `charts/` 永久保留硬性護欄（絕不刪除任何個股戰情室 HTML）。
+* **Step 3 — 新增量化戰情總部資料打包與發布模組（[`services/portal_publisher.py`](/services/portal_publisher.py)）**：
+  * 本地唯一事實來源全量重建近 30 個交易日之 `data/daily/YYYY-MM-DD.json`、`data/manifest.json`（含近 30 日勝率摘要與跨策略＋`/stock_ai` 手動查詢搜尋索引）與永久統計 `data/audit_summary.json`（週／月／策略別勝率與獲利因子），並於 `web/index.html` 存在時自動納入發布。
+  * 透過跨平台檔案鎖 `finmind_reports/.state/portal_publish.lock`（Linux `fcntl` / Windows `msvcrt`）防止 21:30 與 22:00 併發發布衝突；發布失敗僅記 `[warn]` 絕不中斷主流程。
+  * 19:00 剛掃完尚未跑 21:30 AI 時自動輸出 `status: "PENDING_AI"` 與 `⏳ 等待 21:30 AI 審計` 初選清單；歷史日期自動組裝買點命中、TP1/TP2/停損、洗盤穿價與錯殺飆股等白話徽章。
+* **Step 3 — 排程、`/stock_ai` 與 CLI 整合（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`services/stock_ai_command.py`](/services/stock_ai_command.py)、[`finmind_scanner.json`](/finmind_scanner.json)）**：
+  * 於 19:00 `scan-all`、21:30 `analyze-alignment` 與 22:00 `analyze-rebound` 結尾自動觸發 `publish_portal_data()`（由 `enable_portal_publish` 與 `portal_retention_trading_days` 控管）；`/stock_ai` 單股查詢自動透過 `record_manual_stock_ai_query()` 收錄至搜尋索引。
+  * 新增 CLI 子命令 `publish-portal [--date YYYY-MM-DD] [--dry-run]` 供隨時本地預覽或手動發布。
+* **Step 4 — 建置純唯讀量化戰情總部前端與 Discord 頂部入口連結（[`web/index.html`](/web/index.html)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)）**：
+  * 撰寫零外部依賴暗黑看盤風格單頁戰情總部 `web/index.html`，支援近 30 日日曆切換（含 `?date=` 深層連結）、跨策略與 `/stock_ai` 即時搜尋、動態策略分頁、可展開長期週／月統計、T+0「明日掛單作戰模式」與 T+1+「預估 vs. 實際對答案模式」自動切換、紅燈空手防禦橫幅、外部看盤唯一玩股網直達鈕及 `cache: "no-store"` 防快取機制。
+  * 實作 `768px` RWD 差異化體驗：電腦版採右側滑出抽屜內嵌戰情室＋雙欄對照＋完整 7 點交錯價格尺規；手機版（含 Discord 內建瀏覽器）改直接開新分頁瀏覽戰情室＋單欄堆疊＋3 錨點簡化進度條，避免雙層捲動卡死與標籤重疊。
+  * 於 19:00、21:30 與 22:00 每日 Discord 推播報告第一行自動附上 `🌐 [開啟今日量化戰情總部](.../?date=YYYY-MM-DD)`。
+* **新增單元測試（[`tests/test_v62_step3_portal_publisher.py`](/tests/test_v62_step3_portal_publisher.py)）**。
+
+---
+
 ## [v6.2.0-phase1] - 2026-11-19
 ### ✨ 新增功能 & 🔧 優化與修正 — SASD v6.2.0 Step 1 & Step 2（玩股網直達連結、K 線點位標線與事後對答案引擎升級）
 * **Step 2 — 升級 `signal_audit.db` 事後對答案引擎與修復 v6.1 留痕 Bug（[`quant/signal_audit_service.py`](/quant/signal_audit_service.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)）**：

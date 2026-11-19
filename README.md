@@ -81,9 +81,12 @@ Discord_Service/
 ├── services/                    # [Discord 指令與共用外部服務層]
 │   ├── __init__.py
 │   ├── ai_service.py            # 雙軌 AI 服務：免費版 Google AI Studio 與付費版 Vertex AI 呼叫封裝與 /ai 指令
-│   ├── github_uploader.py       # 透過 GitHub Contents API 將 HTML 圖表與戰情室上傳至 GitHub Pages
+│   ├── github_uploader.py       # 透過 GitHub Contents API 與 Git Trees API 發布個股戰情室與戰情總部單次批次提交
+│   ├── portal_publisher.py      # 量化戰情總部打包器（近 30 交易日 JSON、manifest/audit_summary 重建、檔案鎖與 30 日過期清理）
 │   ├── stock_ai_command.py      # /stock_ai 指令註冊（單股診斷、專題問答、多股比較與戰情室互動按鈕）
 │   └── bot.py                   # /stock 技術面 K 線指令註冊與獨立啟動入口
+├── web/                         # [量化戰情總部靜態前端]
+│   └── index.html               # 純唯讀暗黑看盤戰情總部（30 日日曆、動態策略分頁、T+0/T+1 雙模式、RWD 抽屜/新分頁與玩股網直達）
 ├── quant/                       # [台股量化分析、財報快取與 AI 選股核心引擎]
 │   ├── __init__.py
 │   ├── fundamental_config.py    # 12 張 Google Sheets Schema、會計科目錨點與法人級 AI Prompt 模板
@@ -250,6 +253,10 @@ uv run python finmind_stock_scanner.py analyze-rebound --date YYYY-MM-DD --run-a
 uv run python finmind_stock_scanner.py audit-signals --date YYYY-MM-DD --dry-run
 uv run python finmind_stock_scanner.py audit-signals --date YYYY-MM-DD --weekly-summary
 uv run python finmind_stock_scanner.py audit-signals --date YYYY-MM-DD --weekly-summary --post-to-discord
+
+# v6.2.0：量化戰情總部資料打包與 GitHub Pages 單次發布（自動清理超過 30 交易日之每日 JSON，charts/ HTML 永久保留）
+uv run python finmind_stock_scanner.py publish-portal --dry-run
+uv run python finmind_stock_scanner.py publish-portal --date YYYY-MM-DD
 
 # --- 台新證券 Nova API 個人帳務、建倉記憶與開盤作戰指令 (SASD v5.2.0) ---
 # 1. 探測已安裝之 taishin_sdk 所有方法簽章；加 --live 則實際登入印出各 API 原始回傳欄位結構

@@ -2709,14 +2709,22 @@ def format_alignment_report(
     failed_count: int = 0,
     market_regime: Mapping[str, object] | None = None,
 ) -> list[str]:
+    from github_uploader import get_github_pages_base_url
+
     report_date = (as_of or _today_in_taipei()).isoformat()
     count = len(alignment_signals)
     regime_tag = _format_compact_regime_tag(market_regime)
     regime_part = f" ｜ 🚦 大盤：{regime_tag}" if regime_tag else ""
-    heading_lines = [
-        f"📊【MA 均線排列起漲訊號】{report_date}",
-        f"🎯 符合標的：{count} 檔{regime_part}",
-    ]
+    portal_base = get_github_pages_base_url()
+    heading_lines = []
+    if portal_base:
+        heading_lines.append(f"🌐 [開啟今日量化戰情總部]({portal_base}/?date={report_date})")
+    heading_lines.extend(
+        [
+            f"📊【MA 均線排列起漲訊號】{report_date}",
+            f"🎯 符合標的：{count} 檔{regime_part}",
+        ]
+    )
     regime_note = _format_compact_regime_note(market_regime, mode="alignment")
     if regime_note:
         heading_lines.append(regime_note)
@@ -2882,14 +2890,22 @@ def format_rebound_report(
     ai_executed: bool = False,
 ) -> list[str]:
     """格式化型態 A（高點急跌回踩長均線反彈）Discord 快報（手機/LINE 雙行卡片版）。"""
+    from github_uploader import get_github_pages_base_url
+
     report_date = (as_of or _today_in_taipei()).isoformat()
     count = len(rebound_signals)
     regime_tag = _format_compact_regime_tag(market_regime)
     regime_part = f" ｜ 🚦 大盤：{regime_tag}" if regime_tag else ""
-    heading_lines = [
-        f"🪃【型態 A：高點回跌回踩長均線反彈清單】{report_date}",
-        f"🎯 符合標的：{count} 檔{regime_part}",
-    ]
+    portal_base = get_github_pages_base_url()
+    heading_lines = []
+    if portal_base:
+        heading_lines.append(f"🌐 [開啟今日量化戰情總部]({portal_base}/?date={report_date})")
+    heading_lines.extend(
+        [
+            f"🪃【型態 A：高點回跌回踩長均線反彈清單】{report_date}",
+            f"🎯 符合標的：{count} 檔{regime_part}",
+        ]
+    )
     regime_note = _format_compact_regime_note(market_regime, mode="rebound")
     if regime_note:
         heading_lines.append(regime_note)
@@ -4232,6 +4248,7 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
         "ai_picker_red_blue_audit",
         "enable_dual_index_regime_router",
         "enable_signal_audit",
+        "enable_portal_publish",
     ):
         if bool_key in config and not isinstance(config.get(bool_key), bool):
             raise ValueError(f"設定 {bool_key} 必須是布林值。")
@@ -4239,6 +4256,7 @@ def load_scan_config(config_path: Path) -> dict[str, object]:
         "min_median_turnover_20d_twd",
         "futures_net_short_surge_lots",
         "futures_total_net_short_limit",
+        "portal_retention_trading_days",
     ):
         if num_key in config and (
             not isinstance(config.get(num_key), (int, float))
@@ -4948,6 +4966,20 @@ def scan_configured_universe(
             market_regime=market_regime,
         )
 
+    # SASD v6.2.0 Step 3：19:00 盤後同步發布戰情總部（今日大盤＋19:00 均線初選＋過去 10 日對答案＋30 日 JSON 清理）
+    if config.get("enable_portal_publish"):
+        try:
+            from portal_publisher import publish_portal_data
+
+            publish_portal_data(
+                config,
+                as_of=today,
+                output_root=output_directory,
+                commit_message=f"Update quant portal 19:00 scan ({today.isoformat()})",
+            )
+        except Exception:
+            logger.warning("19:00 戰情總部發布失敗（略過，不影響主流程）", exc_info=True)
+
     _cleanup_old_daily_reports(
         daily_directory, today, int(config["local_retention_days"])
     )
@@ -5424,6 +5456,20 @@ def _make_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("--post-to-discord", action="store_true", help="將審計週報推播至 Discord")
     audit_parser.add_argument("--no-gsheet", action="store_true", help="不同步 Google Sheets Signal_Audit_Log")
     audit_parser.add_argument("--dry-run", action="store_true", help="僅顯示審計摘要，不同步 Sheets / Discord")
+
+    portal_parser = subparsers.add_parser(
+        "publish-portal",
+        help="SASD v6.2.0 Step 3：打包近 30 個交易日戰情總部 JSON 並透過 GitHub Git Trees API 單次發布與清理舊檔",
+    )
+    portal_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("finmind_scanner.json"),
+        help="JSON 設定檔路徑（預設：finmind_scanner.json）",
+    )
+    portal_parser.add_argument("--date", help="指定發布基準日期 YYYY-MM-DD（預設今日）")
+    portal_parser.add_argument("--output-dir", type=Path, help="覆寫 finmind_reports 根目錄")
+    portal_parser.add_argument("--dry-run", action="store_true", help="僅於本地 finmind_reports/portal 產出預覽 JSON，不上傳 GitHub")
     return parser
 
 
@@ -5565,6 +5611,34 @@ def main(argv: list[str] | None = None) -> int:
             )
             if audit_res["summary_markdown"]:
                 print("\n" + audit_res["summary_markdown"])
+            return 0
+
+        if args.command == "publish-portal":
+            from portal_publisher import publish_portal_data
+
+            config = load_scan_config(args.config)
+            as_of_dt = date.fromisoformat(args.date) if args.date else _today_in_taipei()
+            pub_cfg = dict(config)
+            pub_cfg["enable_portal_publish"] = True
+            res = publish_portal_data(
+                pub_cfg,
+                as_of=as_of_dt,
+                output_root=args.output_dir,
+                dry_run=bool(args.dry_run),
+                raise_on_error=True,
+            )
+            if args.dry_run:
+                print(
+                    f"[publish-portal] --dry-run 完成：共打包 {res.get('dates_count', 0)} 個交易日"
+                    f"（{res.get('files_count', 0)} 個檔案）至 {res.get('mirror_dir')}。"
+                )
+            else:
+                print(
+                    f"[publish-portal] 發布完成：上傳 {len(res.get('uploaded', []))} 檔、"
+                    f"略過未變更 {len(res.get('skipped_unchanged', []))} 檔、"
+                    f"清理過期 {len(res.get('deleted', []))} 檔｜Commit: {res.get('commit_sha', '')[:8]}"
+                    + (f"｜網址：{res.get('portal_url')}" if res.get("portal_url") else "")
+                )
             return 0
 
         if args.command == "init-universe":

@@ -1,0 +1,1839 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>台股 AI 量化戰情總部</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --surface: #111827;
+      --surface-2: #161f30;
+      --surface-3: #0d131f;
+      --border: #243042;
+      --border-strong: #334155;
+      --text: #e6edf3;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --blue: #3b82f6;
+      --blue-soft: rgba(59, 130, 246, 0.14);
+      --blue-text: #93c5fd;
+      --green: #10b981;
+      --green-soft: rgba(16, 185, 129, 0.15);
+      --green-text: #34d399;
+      --amber: #f59e0b;
+      --amber-soft: rgba(245, 158, 11, 0.15);
+      --amber-text: #fbbf24;
+      --red: #ef4444;
+      --red-soft: rgba(239, 68, 68, 0.16);
+      --red-text: #f87171;
+      --purple-soft: rgba(168, 85, 247, 0.16);
+      --purple-text: #d8b4fe;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      line-height: 1.55;
+      -webkit-text-size-adjust: 100%;
+    }
+    a { color: inherit; }
+    button { font-family: inherit; cursor: pointer; }
+    .num { font-variant-numeric: tabular-nums; }
+
+    /* Top Sticky Header */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(11, 15, 20, 0.94);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+    }
+    .topbar-inner {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .topbar-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 19px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      color: #f8fafc;
+    }
+    .brand-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Controls */
+    .date-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .ctrl-select, .ctrl-btn, .search-input {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      height: 36px;
+      padding: 0 10px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .ctrl-select:focus, .search-input:focus {
+      outline: none;
+      border-color: var(--blue);
+    }
+    .ctrl-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      white-space: nowrap;
+      padding: 0 11px;
+    }
+    .ctrl-btn:hover:not(:disabled) {
+      background: #1e293b;
+      border-color: var(--blue);
+    }
+    .ctrl-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .search-wrap {
+      position: relative;
+      flex: 1 1 280px;
+      min-width: 220px;
+    }
+    .search-input {
+      width: 100%;
+      padding: 0 34px 0 12px;
+    }
+    .search-clear {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 14px;
+      padding: 4px 6px;
+      display: none;
+    }
+    .search-clear.visible { display: block; }
+    .search-results {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      max-height: 70vh;
+      overflow-y: auto;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+      z-index: 60;
+      display: none;
+    }
+    .search-results.open { display: block; }
+    .search-item {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .search-item:last-child { border-bottom: none; }
+    .search-item-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .search-item-title {
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .search-item-sector {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-left: 6px;
+      font-weight: 400;
+    }
+    .search-appearances {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .app-chip {
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 12px;
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .app-chip:hover {
+      border-color: var(--blue);
+      background: var(--blue-soft);
+    }
+
+    /* Main Layout */
+    .container {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 14px 16px 48px;
+    }
+
+    /* Overview & Stats Strips */
+    .overview-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .strip-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+    }
+    .market-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+      margin-bottom: 6px;
+    }
+    .regime-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 700;
+      font-size: 14px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface-2);
+    }
+    .regime-green { background: var(--green-soft); border-color: var(--green); color: var(--green-text); }
+    .regime-yellow { background: var(--amber-soft); border-color: var(--amber); color: var(--amber-text); }
+    .regime-red { background: var(--red-soft); border-color: var(--red); color: var(--red-text); }
+    .exposure-tag {
+      font-size: 13px;
+      color: var(--blue-text);
+      background: var(--blue-soft);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-weight: 600;
+    }
+    .market-summary {
+      font-size: 13px;
+      color: #cbd5e1;
+      margin: 0;
+    }
+    .us-market-line {
+      margin-top: 6px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+
+    .stats-strip {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .stats-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      font-size: 13px;
+    }
+    .stat-item {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 5px;
+      color: var(--text-muted);
+    }
+    .stat-item strong {
+      color: #f8fafc;
+      font-size: 14px;
+    }
+    .audit-summary-panel {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      display: none;
+    }
+    .audit-summary-panel.open { display: block; }
+    .mini-table-wrap { overflow-x: auto; }
+    .mini-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      margin-top: 6px;
+    }
+    .mini-table th, .mini-table td {
+      text-align: left;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .mini-table th { color: var(--text-muted); font-weight: 600; }
+
+    /* Strategy Tabs */
+    .tabs-bar {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      margin-bottom: 14px;
+      scrollbar-width: thin;
+    }
+    .tab-btn {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 9px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover { border-color: var(--border-strong); color: var(--text); }
+    .tab-btn.active {
+      background: var(--blue-soft);
+      border-color: var(--blue);
+      color: #f8fafc;
+    }
+    .tab-count {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.15);
+      color: #cbd5e1;
+    }
+    .tab-btn.active .tab-count {
+      background: rgba(59, 130, 246, 0.3);
+      color: #dbeafe;
+    }
+
+    /* Strategy Comment / Banners */
+    .callout {
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      margin-bottom: 14px;
+      font-size: 13.5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .callout-info { border-left: 4px solid var(--blue); }
+    .callout-pending {
+      background: rgba(245, 158, 11, 0.09);
+      border-color: rgba(245, 158, 11, 0.45);
+      border-left: 4px solid var(--amber);
+    }
+    .callout-defense {
+      background: rgba(239, 68, 68, 0.09);
+      border-color: rgba(239, 68, 68, 0.45);
+      border-left: 4px solid var(--red);
+    }
+    .callout-title {
+      font-weight: 700;
+      font-size: 14.5px;
+      margin-bottom: 4px;
+    }
+    .strategy-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    /* Section Headings & Collapsibles */
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #f8fafc;
+      margin: 16px 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    details.funnel-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-top: 12px;
+      overflow: hidden;
+    }
+    details.funnel-box.has-alert {
+      border-color: rgba(239, 68, 68, 0.65);
+    }
+    details.funnel-box > summary {
+      list-style: none;
+      padding: 12px 14px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      user-select: none;
+    }
+    details.funnel-box > summary::-webkit-details-marker { display: none; }
+    details.funnel-box > summary::before {
+      content: "▸";
+      display: inline-block;
+      margin-right: 6px;
+      transition: transform 0.15s;
+      color: var(--text-muted);
+    }
+    details.funnel-box[open] > summary::before { transform: rotate(90deg); }
+    .funnel-body {
+      padding: 0 14px 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Badges & Buttons */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+    }
+    .badge-green { background: var(--green-soft); color: var(--green-text); border-color: rgba(16, 185, 129, 0.35); }
+    .badge-red { background: var(--red-soft); color: var(--red-text); border-color: rgba(239, 68, 68, 0.4); }
+    .badge-amber { background: var(--amber-soft); color: var(--amber-text); border-color: rgba(245, 158, 11, 0.4); }
+    .badge-blue { background: var(--blue-soft); color: var(--blue-text); border-color: rgba(59, 130, 246, 0.4); }
+    .badge-purple { background: var(--purple-soft); color: var(--purple-text); border-color: rgba(168, 85, 247, 0.4); }
+    .badge-neutral { background: rgba(148, 163, 184, 0.14); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.25); }
+
+    .action-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .btn-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12.5px;
+      font-weight: 600;
+      padding: 6px 11px;
+      border-radius: 7px;
+      text-decoration: none;
+      border: 1px solid var(--border-strong);
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .btn-wantgoo {
+      background: #065f46;
+      border-color: #10b981;
+      color: #ecfdf5;
+    }
+    .btn-wantgoo:hover {
+      background: #10b981;
+      color: #052e16;
+    }
+    .btn-warroom {
+      background: #1e3a5f;
+      border-color: #3b82f6;
+      color: #dbeafe;
+    }
+    .btn-warroom:hover {
+      background: #3b82f6;
+      color: #ffffff;
+    }
+
+    /* Stock Pick Card */
+    .pick-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 14px;
+      overflow: hidden;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
+    }
+    .pick-head {
+      padding: 13px 16px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .pick-title-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .pick-title {
+      font-size: 16.5px;
+      font-weight: 700;
+      color: #f8fafc;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .pick-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+
+    .pick-body {
+      padding: 14px 16px;
+    }
+
+    /* Mode A: T+0 Order Action View */
+    .t0-price-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .price-box {
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 9px 11px;
+    }
+    .price-box-label {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      margin-bottom: 2px;
+    }
+    .price-box-val {
+      font-size: 17px;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    .price-box.tp { border-color: rgba(16, 185, 129, 0.45); }
+    .price-box.tp .price-box-val { color: var(--green-text); }
+    .price-box.sl { border-color: rgba(239, 68, 68, 0.45); }
+    .price-box.sl .price-box-val { color: var(--red-text); }
+    .price-box.chase { border-color: rgba(245, 158, 11, 0.4); }
+    .price-box.chase .price-box-val { color: var(--amber-text); }
+
+    .tiers-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .tier-card {
+      background: rgba(59, 130, 246, 0.08);
+      border: 1px solid rgba(59, 130, 246, 0.32);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+    }
+    .tier-card-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .tier-label { font-size: 12px; font-weight: 700; color: var(--blue-text); }
+    .tier-price { font-size: 18px; font-weight: 800; color: #f8fafc; }
+    .tier-desc { font-size: 12px; color: #cbd5e1; }
+
+    /* Mode B: T+1+ Historical Verification View */
+    .verify-banners {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .compare-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .compare-col {
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 11px 13px;
+    }
+    .compare-col h4 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      color: var(--blue-text);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+    .compare-col.actual h4 { color: var(--amber-text); }
+    .kv-list {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: 13px;
+    }
+    .kv-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+    }
+    .kv-k { color: var(--text-muted); font-size: 12.5px; }
+    .kv-v { font-weight: 600; text-align: right; }
+
+    /* Desktop Full 7-Point Price Ruler */
+    .ruler-desktop {
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px 14px;
+      margin-bottom: 12px;
+    }
+    .ruler-caption {
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+    .ruler-stage {
+      position: relative;
+      height: 76px;
+      margin: 0 22px;
+    }
+    .ruler-track {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 36px;
+      height: 4px;
+      background: #243042;
+      border-radius: 999px;
+    }
+    .ruler-actual-bar {
+      position: absolute;
+      top: 32px;
+      height: 12px;
+      background: linear-gradient(90deg, rgba(245, 158, 11, 0.75), rgba(251, 191, 36, 0.95));
+      border: 1px solid #fde68a;
+      border-radius: 999px;
+      z-index: 2;
+    }
+    .ruler-latest-dot {
+      position: absolute;
+      top: 31px;
+      width: 14px;
+      height: 14px;
+      margin-left: -7px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 3px solid var(--amber);
+      z-index: 4;
+    }
+    .ruler-tick {
+      position: absolute;
+      top: 0;
+      transform: translateX(-50%);
+      z-index: 3;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .ruler-tick-line {
+      position: absolute;
+      left: 50%;
+      top: 29px;
+      width: 2px;
+      height: 18px;
+      margin-left: -1px;
+      background: #64748b;
+    }
+    .ruler-tick.top .ruler-tick-label {
+      position: absolute;
+      left: 50%;
+      top: 2px;
+      transform: translateX(-50%);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(17, 24, 39, 0.92);
+    }
+    .ruler-tick.bottom .ruler-tick-label {
+      position: absolute;
+      left: 50%;
+      top: 52px;
+      transform: translateX(-50%);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(17, 24, 39, 0.92);
+    }
+
+    /* Mobile Simplified 3-Anchor Progress Bar */
+    .ruler-mobile {
+      display: none;
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+    .mob-bar-endpoints {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .mob-bar-track {
+      position: relative;
+      height: 10px;
+      background: #243042;
+      border-radius: 999px;
+      margin-bottom: 6px;
+    }
+    .mob-bar-actual {
+      position: absolute;
+      top: 0;
+      height: 10px;
+      background: linear-gradient(90deg, #f59e0b, #fbbf24);
+      border-radius: 999px;
+    }
+    .mob-bar-latest {
+      position: absolute;
+      top: -2px;
+      width: 14px;
+      height: 14px;
+      margin-left: -7px;
+      border-radius: 50%;
+      background: #fff;
+      border: 2.5px solid var(--amber);
+    }
+    .mob-bar-summary {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    /* AI Details */
+    .ai-details-box {
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      font-size: 13px;
+    }
+    .ai-details-box p { margin: 4px 0; }
+    details.ai-collapse > summary {
+      cursor: pointer;
+      color: var(--blue-text);
+      font-size: 13px;
+      font-weight: 600;
+      user-select: none;
+    }
+    details.ai-collapse > .ai-collapse-content {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Watchlist / Avoid / Pending rows */
+    .simple-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .simple-row {
+      background: var(--surface-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px 12px;
+    }
+    .simple-row.fn-miss {
+      border-color: rgba(239, 68, 68, 0.7);
+      background: rgba(239, 68, 68, 0.08);
+    }
+    .simple-row-main {
+      flex: 1 1 280px;
+      min-width: 0;
+    }
+    .simple-row-title {
+      font-weight: 700;
+      font-size: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .simple-row-reason {
+      font-size: 12.5px;
+      color: #cbd5e1;
+    }
+
+    /* Desktop Slide-Over War Room Drawer */
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(2px);
+      z-index: 90;
+      display: none;
+    }
+    .drawer-backdrop.open { display: block; }
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: min(84vw, 1180px);
+      background: var(--bg);
+      border-left: 1px solid var(--border-strong);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.2s ease-out;
+      box-shadow: -12px 0 36px rgba(0, 0, 0, 0.6);
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-head {
+      padding: 10px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .drawer-title {
+      font-weight: 700;
+      font-size: 15px;
+      color: #f8fafc;
+    }
+    .drawer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .drawer-iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      background: var(--bg);
+    }
+
+    /* Loading / Error */
+    .state-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px 18px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    /* Mobile RWD (< 768px) */
+    @media (max-width: 767px) {
+      .topbar-inner { padding: 10px 12px; gap: 8px; }
+      .brand h1 { font-size: 16.5px; }
+      .container { padding: 10px 10px 36px; }
+      .date-controls { width: 100%; }
+      .ctrl-select { flex: 1 1 auto; min-width: 140px; }
+      .pick-head, .pick-body { padding: 11px 12px; }
+      .pick-title { font-size: 15.5px; }
+      .tiers-grid { grid-template-columns: 1fr; }
+      .compare-grid { grid-template-columns: 1fr; gap: 8px; }
+      .ruler-desktop { display: none; }
+      .ruler-mobile { display: block; }
+      .action-links { width: 100%; }
+      .btn-link { flex: 1 1 auto; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-row">
+        <div class="brand">
+          <h1>🌐 台股 AI 量化戰情總部</h1>
+          <span class="brand-meta" id="updatedAtLabel">載入中...</span>
+        </div>
+        <div class="date-controls">
+          <select id="dateSelect" class="ctrl-select num" aria-label="選擇交易日期"></select>
+          <button id="prevDateBtn" class="ctrl-btn" type="button" title="切換到前一個交易日">◀ 前日</button>
+          <button id="nextDateBtn" class="ctrl-btn" type="button" title="切換到後一個交易日">後日 ▶</button>
+          <button id="latestDateBtn" class="ctrl-btn" type="button" title="回到最新交易日">今日</button>
+          <button id="refreshBtn" class="ctrl-btn" type="button" title="重新抓取最新資料（跳過快取）">🔄</button>
+        </div>
+      </div>
+      <div class="topbar-row">
+        <div class="search-wrap">
+          <input
+            id="stockSearchInput"
+            class="search-input"
+            type="search"
+            autocomplete="off"
+            placeholder="🔍 搜尋近 30 天上榜與 /stock_ai 查詢股：輸入代號或股名（例如 2379、瑞昱）..."
+          />
+          <button id="searchClearBtn" class="search-clear" type="button" aria-label="清除搜尋">✕</button>
+          <div id="searchResults" class="search-results"></div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="overview-grid">
+      <div class="strip-card" id="marketCard">
+        <div class="market-head">
+          <span class="regime-pill" id="marketLightPill">🚦 讀取大盤環境...</span>
+          <span class="exposure-tag num" id="exposureTag" style="display:none"></span>
+        </div>
+        <p class="market-summary" id="marketSummary"></p>
+        <div class="us-market-line" id="usMarketLine" style="display:none"></div>
+      </div>
+
+      <div class="strip-card" id="statsCard">
+        <div class="stats-strip">
+          <div class="stats-metrics num" id="rollingStatsMetrics">
+            <span class="stat-item">📈 載入近 30 日累計實戰統計...</span>
+          </div>
+          <button id="toggleAuditBtn" class="ctrl-btn" type="button" style="height:30px;font-size:12px;">
+            📊 週/月長期統計
+          </button>
+        </div>
+        <div id="auditSummaryPanel" class="audit-summary-panel"></div>
+      </div>
+    </section>
+
+    <nav class="tabs-bar" id="strategyTabs" aria-label="選股策略分頁"></nav>
+    <div id="mainContent">
+      <div class="state-box">⏳ 正在讀取戰情資料...</div>
+    </div>
+  </main>
+
+  <!-- Desktop Slide-Over War Room Drawer (>= 768px) -->
+  <div id="drawerBackdrop" class="drawer-backdrop"></div>
+  <aside id="warRoomDrawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div class="drawer-title" id="drawerTitle">📊 財報與 K 線戰情室</div>
+      <div class="drawer-actions">
+        <a id="drawerWantgooLink" class="btn-link btn-wantgoo" href="#" target="_blank" rel="noopener noreferrer">📈 玩股網 ↗</a>
+        <a id="drawerNewTabLink" class="btn-link btn-warroom" href="#" target="_blank" rel="noopener noreferrer">↗ 新分頁開啟</a>
+        <button id="drawerCloseBtn" class="ctrl-btn" type="button">✕ 關閉</button>
+      </div>
+    </div>
+    <iframe id="drawerIframe" class="drawer-iframe" title="個股財報與 K 線戰情室"></iframe>
+  </aside>
+
+  <script>
+    (() => {
+      const DESKTOP_MQ = window.matchMedia("(min-width: 768px)");
+      const RANK_EMOJI = { 1: "🥇", 2: "🥈", 3: "🥉" };
+      const STRATEGY_LABEL_FALLBACK = {
+        alignment_2130: "🔥 21:30 順勢",
+        rebound_2200: "🛡️ 22:00 反彈",
+        manual_stock_ai: "🔍 /stock_ai",
+      };
+      const CATEGORY_BADGE = {
+        TOP_PICK: { label: "🏆 嚴選", cls: "badge-green" },
+        WATCHLIST: { label: "👀 觀察", cls: "badge-blue" },
+        AVOID: { label: "⚠️ 避開", cls: "badge-red" },
+        PENDING_SCAN: { label: "⏳ 19:00初選", cls: "badge-amber" },
+        MANUAL_QUERY: { label: "🔍 手動查詢", cls: "badge-purple" },
+      };
+
+      const state = {
+        cacheSeed: Math.floor(Date.now() / 60000),
+        manifest: null,
+        auditSummary: null,
+        dailyCache: new Map(),
+        currentDate: null,
+        currentStrategyId: null,
+      };
+
+      const el = {
+        updatedAtLabel: document.getElementById("updatedAtLabel"),
+        dateSelect: document.getElementById("dateSelect"),
+        prevDateBtn: document.getElementById("prevDateBtn"),
+        nextDateBtn: document.getElementById("nextDateBtn"),
+        latestDateBtn: document.getElementById("latestDateBtn"),
+        refreshBtn: document.getElementById("refreshBtn"),
+        searchInput: document.getElementById("stockSearchInput"),
+        searchClearBtn: document.getElementById("searchClearBtn"),
+        searchResults: document.getElementById("searchResults"),
+        marketLightPill: document.getElementById("marketLightPill"),
+        exposureTag: document.getElementById("exposureTag"),
+        marketSummary: document.getElementById("marketSummary"),
+        usMarketLine: document.getElementById("usMarketLine"),
+        rollingStatsMetrics: document.getElementById("rollingStatsMetrics"),
+        toggleAuditBtn: document.getElementById("toggleAuditBtn"),
+        auditSummaryPanel: document.getElementById("auditSummaryPanel"),
+        strategyTabs: document.getElementById("strategyTabs"),
+        mainContent: document.getElementById("mainContent"),
+        drawerBackdrop: document.getElementById("drawerBackdrop"),
+        warRoomDrawer: document.getElementById("warRoomDrawer"),
+        drawerTitle: document.getElementById("drawerTitle"),
+        drawerWantgooLink: document.getElementById("drawerWantgooLink"),
+        drawerNewTabLink: document.getElementById("drawerNewTabLink"),
+        drawerCloseBtn: document.getElementById("drawerCloseBtn"),
+        drawerIframe: document.getElementById("drawerIframe"),
+      };
+
+      function escapeHtml(val) {
+        return String(val ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function fmtNum(val, digits = 1) {
+        if (val === null || val === undefined || val === "" || Number.isNaN(Number(val))) return "--";
+        return Number(val).toFixed(digits);
+      }
+
+      function fmtPct(val, digits = 1, signed = false) {
+        if (val === null || val === undefined || val === "" || Number.isNaN(Number(val))) return "N/A";
+        const n = Number(val);
+        const sign = signed && n > 0 ? "+" : "";
+        return `${sign}${n.toFixed(digits)}%`;
+      }
+
+      async function fetchJson(path) {
+        const sep = path.includes("?") ? "&" : "?";
+        const resp = await fetch(`${path}${sep}t=${state.cacheSeed}`, { cache: "no-store" });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} (${path})`);
+        return resp.json();
+      }
+
+      function wantgooUrl(stockId) {
+        return `https://www.wantgoo.com/stock/${encodeURIComponent(stockId)}/technical-chart`;
+      }
+
+      function renderActionButtons(stockId, stockName, links) {
+        const wg = (links && links.wantgoo) || wantgooUrl(stockId);
+        const wr = (links && links.war_room) || `charts/${encodeURIComponent(stockId)}_fund.html`;
+        const labelTitle = `${stockId} ${stockName || ""}`.trim();
+        return `
+          <div class="action-links">
+            <a class="btn-link btn-wantgoo" href="${escapeHtml(wg)}" target="_blank" rel="noopener noreferrer">📈 玩股網技術線圖</a>
+            <a class="btn-link btn-warroom js-warroom-link" href="${escapeHtml(wr)}" target="_blank" rel="noopener noreferrer" data-stock-id="${escapeHtml(stockId)}" data-stock-title="${escapeHtml(labelTitle)}" data-wantgoo="${escapeHtml(wg)}">📊 財報與K線戰情室</a>
+          </div>
+        `;
+      }
+
+      function openWarRoomDrawer(url, title, wgUrl) {
+        el.drawerTitle.textContent = `📊 ${title} 財報與 K 線戰情室`;
+        el.drawerWantgooLink.href = wgUrl;
+        el.drawerNewTabLink.href = url;
+        el.drawerIframe.src = `${url}?t=${state.cacheSeed}`;
+        el.drawerBackdrop.classList.add("open");
+        el.warRoomDrawer.classList.add("open");
+        el.warRoomDrawer.setAttribute("aria-hidden", "false");
+        document.body.style.overflow = "hidden";
+      }
+
+      function closeWarRoomDrawer() {
+        el.drawerBackdrop.classList.remove("open");
+        el.warRoomDrawer.classList.remove("open");
+        el.warRoomDrawer.setAttribute("aria-hidden", "true");
+        el.drawerIframe.src = "about:blank";
+        document.body.style.overflow = "";
+      }
+
+      document.addEventListener("click", (evt) => {
+        const link = evt.target.closest(".js-warroom-link");
+        if (!link) return;
+        // 電腦版 (>= 768px) 使用右側抽屜；手機版 (< 768px) 放行原生 target="_blank" 開新分頁避免雙層捲動
+        if (DESKTOP_MQ.matches && !evt.ctrlKey && !evt.metaKey && !evt.shiftKey) {
+          evt.preventDefault();
+          openWarRoomDrawer(
+            link.getAttribute("href"),
+            link.getAttribute("data-stock-title") || link.getAttribute("data-stock-id") || "",
+            link.getAttribute("data-wantgoo") || "#"
+          );
+        }
+      });
+
+      el.drawerCloseBtn.addEventListener("click", closeWarRoomDrawer);
+      el.drawerBackdrop.addEventListener("click", closeWarRoomDrawer);
+      document.addEventListener("keydown", (evt) => {
+        if (evt.key === "Escape" && el.warRoomDrawer.classList.contains("open")) {
+          closeWarRoomDrawer();
+        }
+      });
+
+      function renderRollingStats() {
+        const summary = (state.manifest && state.manifest.rolling_30d_summary) || {};
+        const settled = summary.settled_trades ?? 0;
+        const wr = summary.win_rate_pct !== null && summary.win_rate_pct !== undefined
+          ? fmtPct(summary.win_rate_pct, 1)
+          : "N/A";
+        const pf = summary.profit_factor !== null && summary.profit_factor !== undefined
+          ? Number(summary.profit_factor).toFixed(2)
+          : "N/A";
+        const fn = summary.false_negative_rate_pct !== null && summary.false_negative_rate_pct !== undefined
+          ? fmtPct(summary.false_negative_rate_pct, 1)
+          : "N/A";
+
+        el.rollingStatsMetrics.innerHTML = `
+          <span class="stat-item">📈 近30日已結算 <strong>${escapeHtml(settled)} 筆</strong></span>
+          <span class="stat-item">勝率 <strong>${escapeHtml(wr)}</strong></span>
+          <span class="stat-item">獲利因子 <strong>${escapeHtml(pf)}</strong></span>
+          <span class="stat-item">淘汰區錯殺率 <strong>${escapeHtml(fn)}</strong></span>
+        `;
+      }
+
+      function renderAuditSummaryPanel() {
+        const data = state.auditSummary;
+        if (!data) {
+          el.auditSummaryPanel.innerHTML = `<div style="font-size:13px;color:var(--text-muted)">尚無長期統計資料。</div>`;
+          return;
+        }
+        const rowsHtml = (items) =>
+          (items || []).slice(0, 12).map((r) => `
+            <tr>
+              <td class="num">${escapeHtml(r.period)}</td>
+              <td class="num">${escapeHtml(r.settled_trades ?? 0)}</td>
+              <td class="num">${escapeHtml(fmtPct(r.win_rate_pct, 1))}</td>
+              <td class="num">${r.profit_factor != null ? escapeHtml(Number(r.profit_factor).toFixed(2)) : "N/A"}</td>
+              <td class="num">${escapeHtml(fmtPct(r.false_negative_rate_pct, 1))}</td>
+              <td class="num">${escapeHtml(r.whipsaw_count ?? 0)}</td>
+            </tr>
+          `).join("") || `<tr><td colspan="6" style="color:var(--text-muted)">尚無結算紀錄</td></tr>`;
+
+        const stratEntries = Object.entries(data.by_strategy || {});
+        const stratHtml = stratEntries.map(([sid, s]) => {
+          const label = STRATEGY_LABEL_FALLBACK[sid] || sid;
+          return `
+            <tr>
+              <td>${escapeHtml(label)}</td>
+              <td class="num">${escapeHtml(s.settled_trades ?? 0)}</td>
+              <td class="num">${escapeHtml(fmtPct(s.win_rate_pct, 1))}</td>
+              <td class="num">${s.profit_factor != null ? escapeHtml(Number(s.profit_factor).toFixed(2)) : "N/A"}</td>
+              <td class="num">${escapeHtml(fmtPct(s.false_negative_rate_pct, 1))}</td>
+              <td class="num">${escapeHtml(s.whipsaw_count ?? 0)}</td>
+            </tr>
+          `;
+        }).join("");
+
+        el.auditSummaryPanel.innerHTML = `
+          <div class="mini-table-wrap">
+            <div style="font-size:12.5px;font-weight:700;color:var(--blue-text);margin-bottom:4px;">各策略累計表現</div>
+            <table class="mini-table">
+              <thead><tr><th>策略</th><th>已結算</th><th>勝率</th><th>獲利因子</th><th>錯殺率</th><th>洗盤次數</th></tr></thead>
+              <tbody>${stratHtml || `<tr><td colspan="6" style="color:var(--text-muted)">尚無資料</td></tr>`}</tbody>
+            </table>
+          </div>
+          <div class="mini-table-wrap" style="margin-top:12px;">
+            <div style="font-size:12.5px;font-weight:700;color:var(--amber-text);margin-bottom:4px;">近 12 週實戰統計（永久冷統計）</div>
+            <table class="mini-table">
+              <thead><tr><th>週次</th><th>已結算</th><th>勝率</th><th>獲利因子</th><th>錯殺率</th><th>洗盤次數</th></tr></thead>
+              <tbody>${rowsHtml(data.weekly)}</tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      el.toggleAuditBtn.addEventListener("click", () => {
+        const isOpen = el.auditSummaryPanel.classList.toggle("open");
+        el.toggleAuditBtn.textContent = isOpen ? "📊 收合長期統計" : "📊 週/月長期統計";
+        if (isOpen) renderAuditSummaryPanel();
+      });
+
+      function populateDateSelect() {
+        const dates = (state.manifest && state.manifest.available_dates) || [];
+        el.dateSelect.innerHTML = dates.map((d, idx) => {
+          const suffix = idx === 0 ? "（最新）" : `（${idx} 個交易日前）`;
+          return `<option value="${escapeHtml(d)}">${escapeHtml(d)} ${suffix}</option>`;
+        }).join("");
+      }
+
+      function syncDateButtons() {
+        const dates = (state.manifest && state.manifest.available_dates) || [];
+        const idx = dates.indexOf(state.currentDate);
+        el.dateSelect.value = state.currentDate || "";
+        el.prevDateBtn.disabled = idx < 0 || idx >= dates.length - 1;
+        el.nextDateBtn.disabled = idx <= 0;
+        el.latestDateBtn.disabled = idx <= 0;
+      }
+
+      function renderMarketOverview(daily) {
+        const mo = (daily && daily.market_overview) || {};
+        const light = mo.light || "⚪ 尚無大盤資料";
+        let pillCls = "regime-pill";
+        if (light.includes("🟢")) pillCls += " regime-green";
+        else if (light.includes("🔴")) pillCls += " regime-red";
+        else if (light.includes("🟡")) pillCls += " regime-yellow";
+
+        el.marketLightPill.className = pillCls;
+        el.marketLightPill.textContent = `🚦 當日大盤：${light}`;
+
+        if (mo.recommended_exposure_pct !== null && mo.recommended_exposure_pct !== undefined && mo.recommended_exposure_pct !== "") {
+          el.exposureTag.style.display = "inline-flex";
+          el.exposureTag.textContent = `建議總持倉水位 ${mo.recommended_exposure_pct}%`;
+        } else {
+          el.exposureTag.style.display = "none";
+        }
+        el.marketSummary.textContent = mo.summary || "";
+        if (mo.us_market) {
+          el.usMarketLine.style.display = "block";
+          el.usMarketLine.textContent = `🌎 美股總經：${mo.us_market}`;
+        } else {
+          el.usMarketLine.style.display = "none";
+        }
+      }
+
+      function badgeClassForText(text, kind = "neutral") {
+        const s = String(text || "");
+        if (s.includes("🚨") || s.includes("🛑") || s.includes("⚡")) return "badge-red";
+        if (s.includes("🏆") || s.includes("🚀") || s.includes("🟢") || s.includes("✅") || s.includes("🛡️")) return "badge-green";
+        if (s.includes("🏃") || s.includes("⏳") || s.includes("📉")) return "badge-amber";
+        return `badge-${kind}`;
+      }
+
+      function renderPriceRulers(plan, verify) {
+        const pLow = Number(verify.period_low);
+        const pHigh = Number(verify.period_high);
+        const latest = Number(verify.latest_close);
+
+        const rawPoints = [
+          { key: "sl", label: "🛑", val: Number(plan.stop_loss), color: "#f87171" },
+          { key: "t3", label: "💎", val: Number(plan.tier3 && plan.tier3.price), color: "#93c5fd" },
+          { key: "t2", label: "🛡️", val: Number(plan.tier2 && plan.tier2.price), color: "#93c5fd" },
+          { key: "t1", label: "🎯", val: Number(plan.tier1 && plan.tier1.price), color: "#60a5fa" },
+          { key: "close", label: "📌", val: Number(plan.close_at_pick), color: "#e2e8f0" },
+          { key: "tp1", label: "🏁", val: Number(plan.tp1), color: "#34d399" },
+          { key: "tp2", label: "🚀", val: Number(plan.tp2), color: "#6ee7b7" },
+        ].filter((pt) => Number.isFinite(pt.val) && pt.val > 0);
+
+        const allVals = [...rawPoints.map((p) => p.val)];
+        if (Number.isFinite(pLow) && pLow > 0) allVals.push(pLow);
+        if (Number.isFinite(pHigh) && pHigh > 0) allVals.push(pHigh);
+        if (Number.isFinite(latest) && latest > 0) allVals.push(latest);
+        if (allVals.length < 2) return "";
+
+        const minV = Math.min(...allVals);
+        const maxV = Math.max(...allVals);
+        const span = Math.max(maxV - minV, 0.01);
+        const pctOf = (v) => Math.max(0, Math.min(100, ((v - minV) / span) * 100));
+
+        // 依價位排序後上下交錯放置，避免相鄰點位文字重疊
+        const sortedPts = [...rawPoints].sort((a, b) => a.val - b.val);
+        const ticksHtml = sortedPts.map((pt, i) => {
+          const pos = pctOf(pt.val);
+          const side = i % 2 === 0 ? "bottom" : "top";
+          return `
+            <div class="ruler-tick ${side}" style="left:${pos.toFixed(2)}%">
+              <div class="ruler-tick-line" style="background:${pt.color}"></div>
+              <div class="ruler-tick-label num" style="color:${pt.color}">${pt.label}${fmtNum(pt.val, 1)}</div>
+            </div>
+          `;
+        }).join("");
+
+        const hasRange = Number.isFinite(pLow) && Number.isFinite(pHigh) && pHigh >= pLow && pLow > 0;
+        const barLeft = hasRange ? pctOf(pLow) : 0;
+        const barWidth = hasRange ? Math.max(1.5, pctOf(pHigh) - barLeft) : 0;
+        const latestPos = Number.isFinite(latest) && latest > 0 ? pctOf(latest) : null;
+
+        // 手機簡化版 3 錨點進度條：SL ── 實際高低區間 ── TP1
+        const slVal = Number(plan.stop_loss);
+        const tp1Val = Number(plan.tp1);
+        const mobMin = Math.min(...[slVal, pLow, latest].filter((v) => Number.isFinite(v) && v > 0));
+        const mobMax = Math.max(...[tp1Val, pHigh, latest].filter((v) => Number.isFinite(v) && v > 0));
+        const mobSpan = Math.max(mobMax - mobMin, 0.01);
+        const mobPct = (v) => Math.max(0, Math.min(100, ((v - mobMin) / mobSpan) * 100));
+        const mobLeft = hasRange ? mobPct(pLow) : 0;
+        const mobWidth = hasRange ? Math.max(3, mobPct(pHigh) - mobLeft) : 0;
+        const mobLatest = Number.isFinite(latest) && latest > 0 ? mobPct(latest) : null;
+
+        return `
+          <div class="ruler-desktop">
+            <div class="ruler-caption">
+              <span>📏 預估點位 vs. 實際高低價區間尺規（金色實條為 T+1 後實際走過區間）</span>
+              <span class="num">${hasRange ? `實際區間：${fmtNum(pLow, 1)} ～ ${fmtNum(pHigh, 1)}｜最新收盤：${fmtNum(latest, 1)}` : ""}</span>
+            </div>
+            <div class="ruler-stage">
+              <div class="ruler-track"></div>
+              ${hasRange ? `<div class="ruler-actual-bar" style="left:${barLeft.toFixed(2)}%;width:${barWidth.toFixed(2)}%"></div>` : ""}
+              ${latestPos !== null ? `<div class="ruler-latest-dot" style="left:${latestPos.toFixed(2)}%" title="最新收盤 ${fmtNum(latest, 1)}"></div>` : ""}
+              ${ticksHtml}
+            </div>
+          </div>
+
+          <div class="ruler-mobile">
+            <div class="mob-bar-endpoints num">
+              <span style="color:var(--red-text)">🛑 停損 ${fmtNum(plan.stop_loss, 1)}</span>
+              <span style="color:var(--green-text)">🏁 TP1 ${fmtNum(plan.tp1, 1)}</span>
+            </div>
+            <div class="mob-bar-track">
+              ${hasRange ? `<div class="mob-bar-actual" style="left:${mobLeft.toFixed(2)}%;width:${mobWidth.toFixed(2)}%"></div>` : ""}
+              ${mobLatest !== null ? `<div class="mob-bar-latest" style="left:${mobLatest.toFixed(2)}%"></div>` : ""}
+            </div>
+            <div class="mob-bar-summary num">
+              <span>實際低～高：${fmtNum(pLow, 1)} ～ ${fmtNum(pHigh, 1)}</span>
+              <span>最新收盤：<strong>${fmtNum(latest, 1)}</strong></span>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderTopPickCard(pick, dailyDate, lastVerifiedDate) {
+        const plan = pick.predicted_plan || {};
+        const verify = pick.actual_verification || { is_pending: true, trading_days_elapsed: 0 };
+        const details = pick.details || {};
+        const isT0 = verify.is_pending === true || !verify.trading_days_elapsed;
+        const rankEmoji = RANK_EMOJI[pick.rank] || "🏅";
+
+        const weightTxt = pick.allocation_weight_pct != null ? `建議權重 ${pick.allocation_weight_pct}%` : "";
+        const scoreTxt = pick.score ? `推薦分 ${pick.score}` : "";
+        const modeBadge = isT0
+          ? `<span class="badge badge-blue">🎯 明日掛單作戰模式</span>`
+          : `<span class="badge badge-amber">🔍 T+1 對答案（第 ${escapeHtml(verify.trading_days_elapsed)} 日）</span>`;
+
+        const headHtml = `
+          <div class="pick-head">
+            <div class="pick-title-group">
+              <div class="pick-title">
+                <span>${rankEmoji} #${escapeHtml(pick.rank)} ${escapeHtml(pick.stock_id)} ${escapeHtml(pick.stock_name)}</span>
+                ${pick.sector ? `<span class="badge badge-neutral">${escapeHtml(pick.sector)}</span>` : ""}
+                ${modeBadge}
+              </div>
+              <div class="pick-meta num">
+                ${scoreTxt ? `<span>${escapeHtml(scoreTxt)}</span>` : ""}
+                ${pick.outlook_verdict ? `<span>展望：${escapeHtml(pick.outlook_verdict)}</span>` : ""}
+                ${weightTxt ? `<span>${escapeHtml(weightTxt)}</span>` : ""}
+                ${pick.tactical_type ? `<span>${escapeHtml(pick.tactical_type)}</span>` : ""}
+              </div>
+            </div>
+            ${renderActionButtons(pick.stock_id, pick.stock_name, pick.links)}
+          </div>
+        `;
+
+        if (isT0) {
+          // 模式 A：T+0 明日掛單作戰視圖（無空白右欄，聚焦掛單價與核心理由）
+          const t1 = plan.tier1 || {};
+          const t2 = plan.tier2 || {};
+          const t3 = plan.tier3 || {};
+          return `
+            <article class="pick-card">
+              ${headHtml}
+              <div class="pick-body">
+                <div class="t0-price-strip num">
+                  <div class="price-box">
+                    <div class="price-box-label">📌 今日收盤</div>
+                    <div class="price-box-val">${fmtNum(plan.close_at_pick, 1)}</div>
+                  </div>
+                  <div class="price-box chase">
+                    <div class="price-box-label">🚧 嚴禁追高上限</div>
+                    <div class="price-box-val">${fmtNum(plan.chase_limit, 1)}</div>
+                  </div>
+                  <div class="price-box">
+                    <div class="price-box-label">⚖️ 預估加權均價</div>
+                    <div class="price-box-val">${fmtNum(plan.weighted_avg_entry, 1)}</div>
+                  </div>
+                  <div class="price-box tp">
+                    <div class="price-box-label">🏁 第一目標價 TP1</div>
+                    <div class="price-box-val">${fmtNum(plan.tp1, 1)}</div>
+                  </div>
+                  ${plan.tp2 ? `
+                    <div class="price-box tp">
+                      <div class="price-box-label">🚀 第二目標價 TP2</div>
+                      <div class="price-box-val">${fmtNum(plan.tp2, 1)}</div>
+                    </div>
+                  ` : ""}
+                  <div class="price-box sl">
+                    <div class="price-box-label">🛑 嚴格硬停損 SL</div>
+                    <div class="price-box-val">${fmtNum(plan.stop_loss, 1)}</div>
+                  </div>
+                </div>
+
+                <div class="tiers-grid">
+                  <div class="tier-card">
+                    <div class="tier-card-top">
+                      <span class="tier-label">🎯 第 1 批（30% 試單）</span>
+                      <span class="tier-price num">${fmtNum(t1.price, 1)}</span>
+                    </div>
+                    <div class="tier-desc">${escapeHtml(t1.text || "回測短線支撐分批試單")}</div>
+                  </div>
+                  <div class="tier-card">
+                    <div class="tier-card-top">
+                      <span class="tier-label">🛡️ 第 2 批（40% 核心）</span>
+                      <span class="tier-price num">${fmtNum(t2.price, 1)}</span>
+                    </div>
+                    <div class="tier-desc">${escapeHtml(t2.text || "回踩波段均線核心加碼")}</div>
+                  </div>
+                  <div class="tier-card">
+                    <div class="tier-card-top">
+                      <span class="tier-label">💎 第 3 批（30% 黃金坑）</span>
+                      <span class="tier-price num">${fmtNum(t3.price, 1)}</span>
+                    </div>
+                    <div class="tier-desc">${escapeHtml(t3.text || "深回測大量支撐低接")}</div>
+                  </div>
+                </div>
+
+                ${(details.bull_thesis || details.invalidation_rule) ? `
+                  <div class="ai-details-box">
+                    ${details.bull_thesis ? `<p><strong>💡 選拔理由與籌碼底氣：</strong>${escapeHtml(details.bull_thesis)}</p>` : ""}
+                    ${details.invalidation_rule ? `<p style="color:#fca5a5"><strong>🚨 失效退場條件：</strong>${escapeHtml(details.invalidation_rule)}</p>` : ""}
+                  </div>
+                ` : ""}
+              </div>
+            </article>
+          `;
+        }
+
+        // 模式 B：T+1+ 歷史預估 vs 事後實際對答案模式
+        const badges = [
+          verify.entry_result_badge ? `<span class="badge ${badgeClassForText(verify.entry_result_badge, "blue")}">${escapeHtml(verify.entry_result_badge)}</span>` : "",
+          verify.outcome_badge ? `<span class="badge ${badgeClassForText(verify.outcome_badge, "neutral")}">${escapeHtml(verify.outcome_badge)}</span>` : "",
+          verify.pain_badge ? `<span class="badge ${badgeClassForText(verify.pain_badge, "neutral")}">${escapeHtml(verify.pain_badge)}</span>` : "",
+        ].filter(Boolean).join("");
+
+        return `
+          <article class="pick-card">
+            ${headHtml}
+            <div class="pick-body">
+              <div class="verify-banners">${badges}</div>
+              ${renderPriceRulers(plan, verify)}
+
+              <div class="compare-grid num">
+                <div class="compare-col">
+                  <h4>📌 【${escapeHtml(dailyDate)} 推薦當下預估點位】</h4>
+                  <div class="kv-list">
+                    <div class="kv-row"><span class="kv-k">推薦日收盤價</span><span class="kv-v">${fmtNum(plan.close_at_pick, 1)} 元</span></div>
+                    <div class="kv-row"><span class="kv-k">嚴禁追高上限</span><span class="kv-v" style="color:var(--amber-text)">${fmtNum(plan.chase_limit, 1)} 元</span></div>
+                    <div class="kv-row"><span class="kv-k">🎯 第 1 批 (30%)</span><span class="kv-v">${fmtNum(plan.tier1 && plan.tier1.price, 1)} 元</span></div>
+                    <div class="kv-row"><span class="kv-k">🛡️ 第 2 批 (40%)</span><span class="kv-v">${fmtNum(plan.tier2 && plan.tier2.price, 1)} 元</span></div>
+                    <div class="kv-row"><span class="kv-k">💎 第 3 批 (30%)</span><span class="kv-v">${fmtNum(plan.tier3 && plan.tier3.price, 1)} 元</span></div>
+                    <div class="kv-row"><span class="kv-k">🏁 第一目標價 TP1</span><span class="kv-v" style="color:var(--green-text)">${fmtNum(plan.tp1, 1)} 元</span></div>
+                    ${plan.tp2 ? `<div class="kv-row"><span class="kv-k">🚀 第二目標價 TP2</span><span class="kv-v" style="color:var(--green-text)">${fmtNum(plan.tp2, 1)} 元</span></div>` : ""}
+                    <div class="kv-row"><span class="kv-k">🛑 嚴格硬停損 SL</span><span class="kv-v" style="color:var(--red-text)">${fmtNum(plan.stop_loss, 1)} 元</span></div>
+                  </div>
+                </div>
+
+                <div class="compare-col actual">
+                  <h4>🔍 【T+1 ～ ${escapeHtml(lastVerifiedDate || "最新")} 實際走勢對答案】</h4>
+                  <div class="kv-list">
+                    <div class="kv-row"><span class="kv-k">已過交易日</span><span class="kv-v">第 ${escapeHtml(verify.trading_days_elapsed)} 日</span></div>
+                    <div class="kv-row"><span class="kv-k">最新收盤價</span><span class="kv-v">${fmtNum(verify.latest_close, 1)} 元</span></div>
+                    <div class="kv-row"><span class="kv-k">期間最低價</span><span class="kv-v">${fmtNum(verify.period_low, 1)} 元</span></div>
+                    <div class="kv-row"><span class="kv-k">期間最高價</span><span class="kv-v">${fmtNum(verify.period_high, 1)} 元</span></div>
+                    <div class="kv-row"><span class="kv-k">實質成交均價（含0.5%）</span><span class="kv-v">${verify.effective_entry_price != null ? `${fmtNum(verify.effective_entry_price, 1)} 元` : "未成交"}</span></div>
+                    <div class="kv-row"><span class="kv-k">成交批次</span><span class="kv-v">${escapeHtml(verify.filled_tiers_text || verify.entry_fill_status || "--")}</span></div>
+                    <div class="kv-row"><span class="kv-k">期間最高浮盈 (MFE)</span><span class="kv-v" style="color:var(--green-text)">${fmtPct(verify.mfe_pct, 2, true)}</span></div>
+                    <div class="kv-row"><span class="kv-k">期間最大套牢 (MAE)</span><span class="kv-v" style="color:var(--red-text)">${fmtPct(verify.mae_pct, 2, true)}</span></div>
+                  </div>
+                </div>
+              </div>
+
+              ${(details.bull_thesis || details.invalidation_rule) ? `
+                <details class="ai-details-box ai-collapse">
+                  <summary>💡 點擊展開當日 AI 選拔理由、籌碼底氣與失效退場條件</summary>
+                  <div class="ai-collapse-content">
+                    ${details.bull_thesis ? `<p><strong>選拔理由：</strong>${escapeHtml(details.bull_thesis)}</p>` : ""}
+                    ${details.invalidation_rule ? `<p style="color:#fca5a5"><strong>失效條件：</strong>${escapeHtml(details.invalidation_rule)}</p>` : ""}
+                  </div>
+                </details>
+              ` : ""}
+            </div>
+          </article>
+        `;
+      }
+
+      function renderSimpleRows(items, mode) {
+        if (!items || !items.length) {
+          return `<div style="padding-top:10px;font-size:13px;color:var(--text-muted)">無資料。</div>`;
+        }
+        return `<div class="simple-list">` + items.map((it) => {
+          const v = it.actual_verification || {};
+          const isFn = mode === "avoid" && Boolean(v.is_false_negative_miss);
+          const verifyBadge = v.is_pending === false && v.outcome_badge
+            ? `<span class="badge ${badgeClassForText(v.outcome_badge, "neutral")}">${escapeHtml(v.outcome_badge)}</span>`
+            : "";
+          const priceNote = it.close_at_pick != null
+            ? `<span class="badge badge-neutral num">當日收盤 ${fmtNum(it.close_at_pick, 1)}</span>`
+            : "";
+          return `
+            <div class="simple-row ${isFn ? "fn-miss" : ""}">
+              <div class="simple-row-main">
+                <div class="simple-row-title">
+                  <span>${escapeHtml(it.stock_id)} ${escapeHtml(it.stock_name || "")}</span>
+                  ${it.sector ? `<span class="badge badge-neutral">${escapeHtml(it.sector)}</span>` : ""}
+                  ${priceNote}
+                  ${verifyBadge}
+                </div>
+                <div class="simple-row-reason">${escapeHtml(it.reason || "")}</div>
+              </div>
+              ${renderActionButtons(it.stock_id, it.stock_name, it.links)}
+            </div>
+          `;
+        }).join("") + `</div>`;
+      }
+
+      function renderPendingCandidates(strat) {
+        const list = strat.pending_candidates || [];
+        const rowsHtml = list.map((c) => `
+          <div class="simple-row">
+            <div class="simple-row-main">
+              <div class="simple-row-title">
+                <span>${escapeHtml(c.stock_id)} ${escapeHtml(c.stock_name || "")}</span>
+                ${c.sector ? `<span class="badge badge-neutral">${escapeHtml(c.sector)}</span>` : ""}
+                ${c.close != null ? `<span class="badge badge-blue num">收盤 ${fmtNum(c.close, 1)}</span>` : ""}
+                ${c.signal ? `<span class="badge badge-amber">${escapeHtml(c.signal)}</span>` : ""}
+              </div>
+              ${c.vol_status ? `<div class="simple-row-reason">量能：${escapeHtml(c.vol_status)}</div>` : ""}
+            </div>
+            ${renderActionButtons(c.stock_id, c.stock_name, c.links)}
+          </div>
+        `).join("");
+
+        return `
+          <div class="callout callout-pending">
+            <div class="callout-title">${escapeHtml(strat.status_badge || "⏳ 等待 AI 審計")}</div>
+            <div>${escapeHtml(strat.strategy_comment || "以下為盤後量化初選清單，AI 深度審計完成後將自動更新。")}</div>
+          </div>
+          <div class="section-title">📋 盤後量化初選清單（共 ${list.length} 檔）</div>
+          <div class="simple-list">${rowsHtml || `<div class="state-box">今日初選名單為空。</div>`}</div>
+        `;
+      }
+
+      function renderStrategyView(daily) {
+        const strategies = (daily && daily.strategies) || [];
+        if (!strategies.length) {
+          el.strategyTabs.innerHTML = "";
+          el.mainContent.innerHTML = `<div class="state-box">📭 ${escapeHtml(daily ? daily.date : "")} 尚無策略選股資料。</div>`;
+          return;
+        }
+
+        if (!strategies.some((s) => s.id === state.currentStrategyId)) {
+          state.currentStrategyId = strategies[0].id;
+        }
+
+        el.strategyTabs.innerHTML = strategies.map((s) => {
+          const active = s.id === state.currentStrategyId ? "active" : "";
+          let countLabel = "";
+          if (s.status === "PENDING_AI") {
+            countLabel = `⏳ 初選 ${s.total_candidates ?? 0}`;
+          } else {
+            const tpLen = (s.top_picks || []).length;
+            countLabel = tpLen > 0
+              ? `嚴選 ${tpLen} / 候選 ${s.total_candidates ?? 0}`
+              : `🛡️ 空手 0 / 候選 ${s.total_candidates ?? 0}`;
+          }
+          return `
+            <button type="button" class="tab-btn ${active}" data-strategy-id="${escapeHtml(s.id)}">
+              <span>${escapeHtml(s.tab_name || s.id)}</span>
+              <span class="tab-count num">${escapeHtml(countLabel)}</span>
+            </button>
+          `;
+        }).join("");
+
+        const strat = strategies.find((s) => s.id === state.currentStrategyId) || strategies[0];
+        if (strat.status === "PENDING_AI") {
+          el.mainContent.innerHTML = renderPendingCandidates(strat);
+          return;
+        }
+
+        const topPicks = strat.top_picks || [];
+        const watchlist = strat.watchlist || [];
+        const avoid = strat.avoid || [];
+        const fnCount = avoid.filter((a) => a.actual_verification && a.actual_verification.is_false_negative_miss).length;
+
+        const commentBox = strat.strategy_comment ? `
+          <div class="callout ${topPicks.length === 0 ? "callout-defense" : "callout-info"}">
+            ${topPicks.length === 0 ? `<div class="callout-title">🛡️ 今日大盤防禦空手觀望（0 檔嚴選）</div>` : ""}
+            <div>${escapeHtml(strat.strategy_comment)}</div>
+            <div class="strategy-meta-row num">
+              <span>候選 ${escapeHtml(strat.total_candidates ?? 0)} 檔</span>
+              <span>深度分析 ${escapeHtml(strat.analyzed_count ?? 0)} 檔</span>
+              ${strat.ai_model ? `<span>決策模型：${escapeHtml(strat.ai_model)}</span>` : ""}
+            </div>
+          </div>
+        ` : (topPicks.length === 0 ? `
+          <div class="callout callout-defense">
+            <div class="callout-title">🛡️ 今日大盤防禦空手觀望（0 檔嚴選）</div>
+            <div>今日無符合風控與品質標準之進場標的，系統依紀律維持空手觀望；下方仍可展開觀察與淘汰名單檢視。</div>
+          </div>
+        ` : "");
+
+        const picksHtml = topPicks.length > 0
+          ? `<div class="section-title">🏆 Top Picks 嚴選進場名單（共 ${topPicks.length} 檔）</div>`
+            + topPicks.map((p) => renderTopPickCard(p, daily.date, daily.last_verified_date)).join("")
+          : "";
+
+        const watchHtml = `
+          <details class="funnel-box">
+            <summary>
+              <span>👀 Watchlist 次佳觀察名單（${watchlist.length} 檔）</span>
+              <span style="font-size:12px;color:var(--text-muted);font-weight:400;">點擊展開查看等待理由與事後表現</span>
+            </summary>
+            <div class="funnel-body">${renderSimpleRows(watchlist, "watchlist")}</div>
+          </details>
+        `;
+
+        const avoidAlert = fnCount > 0
+          ? `<span class="badge badge-red">🚨 發現 ${fnCount} 檔錯殺飆股，點擊檢討</span>`
+          : `<span style="font-size:12px;color:var(--text-muted);font-weight:400;">點擊展開檢視排除理由與事後驗證</span>`;
+        const avoidHtml = `
+          <details class="funnel-box ${fnCount > 0 ? "has-alert" : ""}">
+            <summary>
+              <span>⚠️ Avoid 建議避開與硬性排雷（${avoid.length} 檔）</span>
+              ${avoidAlert}
+            </summary>
+            <div class="funnel-body">${renderSimpleRows(avoid, "avoid")}</div>
+          </details>
+        `;
+
+        el.mainContent.innerHTML = commentBox + picksHtml + watchHtml + avoidHtml;
+      }
+
+      el.strategyTabs.addEventListener("click", (evt) => {
+        const btn = evt.target.closest(".tab-btn");
+        if (!btn) return;
+        const sid = btn.getAttribute("data-strategy-id");
+        if (!sid || sid === state.currentStrategyId) return;
+        state.currentStrategyId = sid;
+        const daily = state.dailyCache.get(state.currentDate);
+        if (daily) renderStrategyView(daily);
+      });
+
+      async function loadDate(dateStr, preferredStrategyId = null) {
+        if (!dateStr) return;
+        state.currentDate = dateStr;
+        if (preferredStrategyId) state.currentStrategyId = preferredStrategyId;
+        syncDateButtons();
+
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set("date", dateStr);
+          window.history.replaceState({}, "", url.toString());
+        } catch (_) {}
+
+        let daily = state.dailyCache.get(dateStr);
+        if (!daily) {
+          el.mainContent.innerHTML = `<div class="state-box">⏳ 正在載入 ${escapeHtml(dateStr)} 戰情資料...</div>`;
+          try {
+            daily = await fetchJson(`data/daily/${encodeURIComponent(dateStr)}.json`);
+            state.dailyCache.set(dateStr, daily);
+          } catch (err) {
+            el.mainContent.innerHTML = `<div class="state-box">❌ 無法載入 ${escapeHtml(dateStr)} 資料：${escapeHtml(err.message)}</div>`;
+            return;
+          }
+        }
+        renderMarketOverview(daily);
+        renderStrategyView(daily);
+      }
+
+      // 搜尋近 30 天上榜與 /stock_ai 查詢股
+      function renderSearchResults(query) {
+        const q = (query || "").trim().toLowerCase();
+        el.searchClearBtn.classList.toggle("visible", q.length > 0);
+        if (!q || !state.manifest || !state.manifest.stock_search_index) {
+          el.searchResults.classList.remove("open");
+          el.searchResults.innerHTML = "";
+          return;
+        }
+
+        const idx = state.manifest.stock_search_index;
+        const matches = Object.entries(idx)
+          .filter(([sid, info]) =>
+            sid.toLowerCase().includes(q) ||
+            String(info.stock_name || "").toLowerCase().includes(q) ||
+            String(info.sector || "").toLowerCase().includes(q)
+          )
+          .slice(0, 15);
+
+        if (!matches.length) {
+          el.searchResults.innerHTML = `<div class="search-item" style="color:var(--text-muted)">查無符合「${escapeHtml(query)}」的近 30 日上榜或 /stock_ai 查詢紀錄。</div>`;
+          el.searchResults.classList.add("open");
+          return;
+        }
+
+        el.searchResults.innerHTML = matches.map(([sid, info]) => {
+          const appsHtml = (info.appearances || []).slice(0, 12).map((ap) => {
+            const cat = CATEGORY_BADGE[ap.category] || { label: ap.category, cls: "badge-neutral" };
+            const stratName = STRATEGY_LABEL_FALLBACK[ap.strategy_id] || ap.strategy_id;
+            const scorePart = ap.score ? ` ${ap.score}分` : "";
+            const isManual = ap.strategy_id === "manual_stock_ai";
+            return `
+              <button type="button" class="app-chip js-jump-appearance num" data-date="${escapeHtml(ap.date)}" data-strategy="${escapeHtml(ap.strategy_id)}" ${isManual ? "disabled title='此筆為 /stock_ai 手動查詢紀錄，請直接點右側戰情室或玩股網'" : ""}>
+                <span>${escapeHtml(ap.date)}</span>
+                <span>${escapeHtml(stratName)}</span>
+                <span class="badge ${cat.cls}" style="padding:1px 5px;font-size:11px;">${escapeHtml(cat.label)}${escapeHtml(scorePart)}</span>
+              </button>
+            `;
+          }).join("");
+
+          return `
+            <div class="search-item">
+              <div class="search-item-head">
+                <div>
+                  <span class="search-item-title num">${escapeHtml(sid)} ${escapeHtml(info.stock_name || "")}</span>
+                  ${info.sector ? `<span class="search-item-sector">${escapeHtml(info.sector)}</span>` : ""}
+                </div>
+                ${renderActionButtons(sid, info.stock_name, { wantgoo: info.wantgoo_url, war_room: info.war_room_url })}
+              </div>
+              <div class="search-appearances">${appsHtml}</div>
+            </div>
+          `;
+        }).join("");
+        el.searchResults.classList.add("open");
+      }
+
+      el.searchInput.addEventListener("input", () => renderSearchResults(el.searchInput.value));
+      el.searchInput.addEventListener("focus", () => {
+        if (el.searchInput.value.trim()) renderSearchResults(el.searchInput.value);
+      });
+      el.searchClearBtn.addEventListener("click", () => {
+        el.searchInput.value = "";
+        renderSearchResults("");
+        el.searchInput.focus();
+      });
+      el.searchResults.addEventListener("click", (evt) => {
+        const chip = evt.target.closest(".js-jump-appearance");
+        if (!chip || chip.disabled) return;
+        const dt = chip.getAttribute("data-date");
+        const st = chip.getAttribute("data-strategy");
+        const dates = (state.manifest && state.manifest.available_dates) || [];
+        if (dt && dates.includes(dt)) {
+          el.searchResults.classList.remove("open");
+          loadDate(dt, st);
+        }
+      });
+      document.addEventListener("click", (evt) => {
+        if (!evt.target.closest(".search-wrap")) {
+          el.searchResults.classList.remove("open");
+        }
+      });
+
+      // 日期切換事件
+      el.dateSelect.addEventListener("change", () => loadDate(el.dateSelect.value));
+      el.prevDateBtn.addEventListener("click", () => {
+        const dates = (state.manifest && state.manifest.available_dates) || [];
+        const idx = dates.indexOf(state.currentDate);
+        if (idx >= 0 && idx < dates.length - 1) loadDate(dates[idx + 1]);
+      });
+      el.nextDateBtn.addEventListener("click", () => {
+        const dates = (state.manifest && state.manifest.available_dates) || [];
+        const idx = dates.indexOf(state.currentDate);
+        if (idx > 0) loadDate(dates[idx - 1]);
+      });
+      el.latestDateBtn.addEventListener("click", () => {
+        const dates = (state.manifest && state.manifest.available_dates) || [];
+        if (dates.length) loadDate(dates[0]);
+      });
+      el.refreshBtn.addEventListener("click", () => {
+        state.cacheSeed = Date.now();
+        state.dailyCache.clear();
+        initPortal(state.currentDate);
+      });
+
+      async function initPortal(targetDateOverride = null) {
+        try {
+          const [manifest, auditSummary] = await Promise.all([
+            fetchJson("data/manifest.json"),
+            fetchJson("data/audit_summary.json").catch(() => null),
+          ]);
+          state.manifest = manifest;
+          state.auditSummary = auditSummary;
+          el.updatedAtLabel.textContent = manifest.updated_at ? `最後更新：${manifest.updated_at}` : "";
+          populateDateSelect();
+          renderRollingStats();
+          if (el.auditSummaryPanel.classList.contains("open")) {
+            renderAuditSummaryPanel();
+          }
+
+          const dates = manifest.available_dates || [];
+          if (!dates.length) {
+            el.mainContent.innerHTML = `<div class="state-box">📭 目前尚無任何選股資料，將於每日 19:00 / 21:30 / 22:00 排程完成後自動更新。</div>`;
+            return;
+          }
+
+          const params = new URLSearchParams(window.location.search);
+          const urlDate = targetDateOverride || params.get("date");
+          const initialDate = urlDate && dates.includes(urlDate) ? urlDate : dates[0];
+          await loadDate(initialDate);
+        } catch (err) {
+          el.updatedAtLabel.textContent = "載入失敗";
+          el.mainContent.innerHTML = `
+            <div class="state-box">
+              <div style="font-size:15px;font-weight:700;color:var(--red-text);margin-bottom:6px;">❌ 無法讀取戰情總部總目錄 (data/manifest.json)</div>
+              <div style="font-size:13px;">${escapeHtml(err.message)}</div>
+              <div style="font-size:12px;margin-top:8px;">請確認排程已執行 <code>publish-portal</code> 並成功推送至 GitHub Pages。</div>
+            </div>
+          `;
+        }
+      }
+
+      initPortal();
+    })();
+  </script>
+</body>
+</html>

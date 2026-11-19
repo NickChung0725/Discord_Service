@@ -3208,9 +3208,18 @@ def format_pick_report(
     title_label: str = "AI 嚴選進場決策報告",
 ) -> list[str]:
     """Render Discord messages (each <= DISCORD_CHUNK_LIMIT chars)."""
+    from github_uploader import get_github_pages_base_url
+
     rows = _row_lookup(frame)
     top_count = len(decision["top_picks"]) if decision else 0
+    portal_base = get_github_pages_base_url()
+    portal_line = (
+        f"🌐 [開啟今日量化戰情總部]({portal_base}/?date={target_date.isoformat()})\n"
+        if portal_base
+        else ""
+    )
     heading = (
+        f"{portal_line}"
         f"🎯 【{title_label}】{target_date.isoformat()}"
         f"\n候選訊號股 {total_signals} 檔 ➔ 深度分析 {len(results)} 檔 ➔ 嚴選 {top_count} 檔"
         f"｜決策模型：Vertex AI ({model})"
@@ -3914,6 +3923,19 @@ async def run_pipeline(
         sent = post_messages_to_discord(messages, channel_id, bot_token)
         print(f"已推播 AI 嚴選報告（{sent} 則訊息）。")
 
+    if bool(_cfg(config, "enable_portal_publish", False)):
+        try:
+            from portal_publisher import publish_portal_data
+
+            publish_portal_data(
+                config,
+                as_of=target_date,
+                output_root=output_root,
+                commit_message=f"Update quant portal 21:30 alignment ({target_date.isoformat()})",
+            )
+        except Exception as error:  # noqa: BLE001
+            print(f"[warn] 21:30 戰情總部發布失敗（略過）：{error}")
+
     _cleanup_old_daily_reports(daily_dir, target_date, int(config["local_retention_days"]))
     flush_bq_archives()
     return 0
@@ -4290,6 +4312,19 @@ async def run_rebound_pipeline(
         if ai_messages:
             sent_ai = post_messages_to_discord(ai_messages, channel_id, bot_token)
             print(f"[rebound] 已推播型態 A 反彈 AI 嚴選報告（{sent_ai} 則訊息）。")
+
+    if bool(_cfg(config, "enable_portal_publish", False)):
+        try:
+            from portal_publisher import publish_portal_data
+
+            publish_portal_data(
+                config,
+                as_of=target_date,
+                output_root=output_root,
+                commit_message=f"Update quant portal 22:00 rebound ({target_date.isoformat()})",
+            )
+        except Exception as error:  # noqa: BLE001
+            print(f"[warn] 22:00 戰情總部發布失敗（略過）：{error}")
 
     _cleanup_old_daily_reports(daily_dir, target_date, int(config["local_retention_days"]))
     flush_bq_archives()
