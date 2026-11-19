@@ -5,7 +5,10 @@
 ---
 
 ## [v6.2.1] - 2026-11-19
-### 🔧 優化與修正 — Discord 選股推播瘦身為單則精簡卡片，並改為「先發布網頁、再發 Discord 通知」
+### 🔧 優化與修正 — Discord 選股推播瘦身為單則精簡卡片、先發布網頁再推播，並修正晨報反彈新星篩選邏輯
+* **修正 08:15 晨間報告「型態 A 反彈潛力新星」誤納 AI 剔除股之問題（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * `build_fresh_top_picks_block()` 讀取 `Rebound_Watchlist` 時改為嚴格過濾僅納入已通過 AI 戰略布局（具合法 `Audit_Grade` 或 `Allocation_Weight_Pct > 0`，且排除 `REJECT`/`AVOID`/`FAIL`/`DROP`）之標的，並依 `Allocation_Weight_Pct`（降冪）→ `Audit_Grade` 評級階層（降冪）→ `potential_return_pct`（降冪）排序取前 3 檔；若當日無任何通過 AI 嚴選之反彈標的，則不再回退推薦純量化初篩股，改輸出明確無嚴選提示。
+  * 補充單元測試（[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)）。
 * **新增單則精簡 Discord 通知模式（`discord_compact_mode: true`）（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`finmind_scanner.json`](/finmind_scanner.json)）**：
   * 新增 `format_compact_pick_notification()`、`format_compact_alignment_notification()` 與 `format_compact_rebound_notification()`：19:00、21:30 與 22:00 公開選股推播全面瘦身為**單則精簡作戰卡片**（頂部戰情總部連結、大盤紅綠燈與總持倉水位、嚴選股三批低接價／TP1／停損／玩股網直達、觀察與避開檔數統計），完整藍紅軍長文與明細留存於戰情總部網頁與本機 `.md`；08:15 晨報、13:15 0050、22:45 記憶與 `/stock_ai` 維持完整推播不變。
 * **調整發布順序（先網頁、後通知）**：19:00 `scan-all`、21:30 `analyze-alignment` 與 22:00 `analyze-rebound` 皆調整為先執行 `publish_portal_data()` 推送至 GitHub Pages 後再發送 Discord 推播，確保收到通知當下點開總部連結即為最新資料。

@@ -44,6 +44,7 @@ from taishin_portfolio_service import (
     TaishinSheetManager,
     apply_ai_diagnosis_to_holdings,
     backfill_history,
+    build_fresh_top_picks_block,
     build_portfolio_holdings_rows,
     compute_0050_technical_indicators,
     compute_ratchet_trailing_stop,
@@ -1286,6 +1287,117 @@ class TestTaishinNova(unittest.TestCase):
             now_utc=datetime(2026, 11, 16, 2, 0, tzinfo=timezone.utc),
         )
         self.assertEqual([h["source"] for h in headlines], ["鉅亨網", "Reuters"])
+
+    def test_build_fresh_top_picks_block_filters_ai_selected_rebound_and_sorts_by_weight_and_grade(self) -> None:
+        picks_bundle = {
+            "ai_daily_picks": [],
+            "rebound_watchlist": [
+                # 量化反彈空間高但被 AI 剔除（無 Audit_Grade、無 Allocation_Weight_Pct）
+                {
+                    "scan_date": "2026-11-18",
+                    "stock_id": "3311",
+                    "stock_name": "閎暉",
+                    "close_price": 38.25,
+                    "support_ma": "189MA",
+                    "support_price": 35.3,
+                    "TP1_Target_Or_POC": 37.5,
+                    "potential_return_pct": 10.57,
+                    "Ideal_Buy_Or_Ref": "35.50~35.85",
+                    "Hard_Stop_Loss": 31.95,
+                    "Audit_Grade": "",
+                    "Allocation_Weight_Pct": "",
+                },
+                # 明確被拒絕的評級也必須排除
+                {
+                    "scan_date": "2026-11-18",
+                    "stock_id": "8050",
+                    "stock_name": "廣積",
+                    "close_price": 72.0,
+                    "support_ma": "189MA",
+                    "support_price": 70.0,
+                    "TP1_Target_Or_POC": 80.0,
+                    "potential_return_pct": 15.0,
+                    "Audit_Grade": "REJECT",
+                    "Allocation_Weight_Pct": 0,
+                },
+                # 通過 AI 戰略布局：和碩（權重 25%、A_TIER_GROWTH）
+                {
+                    "scan_date": "2026-11-18",
+                    "stock_id": "4938",
+                    "stock_name": "和碩",
+                    "close_price": 85.4,
+                    "support_ma": "189MA",
+                    "support_price": 84.04,
+                    "TP1_Target_Or_POC": 90.1,
+                    "potential_return_pct": 12.94,
+                    "Ideal_Buy_Or_Ref": "預估均價 83.02（權重 25.0%）",
+                    "Hard_Stop_Loss": 78.6,
+                    "Audit_Grade": "A_TIER_GROWTH",
+                    "Allocation_Weight_Pct": 25.0,
+                },
+                # 通過 AI 戰略布局：日月光投控（權重 35%、S_TIER_CORE）
+                {
+                    "scan_date": "2026-11-18",
+                    "stock_id": "3711",
+                    "stock_name": "日月光投控",
+                    "close_price": 548,
+                    "support_ma": "189MA",
+                    "support_price": 547.95,
+                    "TP1_Target_Or_POC": 603,
+                    "potential_return_pct": 10.54,
+                    "Ideal_Buy_Or_Ref": "預估均價 529.25（權重 35.0%）",
+                    "Hard_Stop_Loss": 492,
+                    "Audit_Grade": "S_TIER_CORE",
+                    "Allocation_Weight_Pct": 35.0,
+                },
+                # 通過 AI 戰略布局：達發（權重 40%、S_TIER_CORE，應排第 1）
+                {
+                    "scan_date": "2026-11-18",
+                    "stock_id": "6526",
+                    "stock_name": "達發",
+                    "close_price": 620,
+                    "support_ma": "117MA",
+                    "support_price": 612,
+                    "TP1_Target_Or_POC": 680,
+                    "potential_return_pct": 9.68,
+                    "Ideal_Buy_Or_Ref": "預估均價 605.00（權重 40.0%）",
+                    "Hard_Stop_Loss": 570,
+                    "Audit_Grade": "S_TIER_CORE",
+                    "Allocation_Weight_Pct": 40.0,
+                },
+            ],
+        }
+        block = build_fresh_top_picks_block(picks_bundle, max_picks=3)
+        self.assertNotIn("3311 閎暉", block)
+        self.assertNotIn("8050 廣積", block)
+        self.assertIn("6526 達發", block)
+        self.assertIn("3711 日月光投控", block)
+        self.assertIn("4938 和碩", block)
+        # 順序須依 Allocation_Weight_Pct / Audit_Grade 降冪：6526 (40%) > 3711 (35%) > 4938 (25%)
+        self.assertLess(block.index("6526 達發"), block.index("3711 日月光投控"))
+        self.assertLess(block.index("3711 日月光投控"), block.index("4938 和碩"))
+
+    def test_build_fresh_top_picks_block_skips_rebound_when_no_ai_selected_picks(self) -> None:
+        picks_bundle = {
+            "ai_daily_picks": [],
+            "rebound_watchlist": [
+                {
+                    "scan_date": "2026-11-18",
+                    "stock_id": "3311",
+                    "stock_name": "閎暉",
+                    "close_price": 38.25,
+                    "support_ma": "189MA",
+                    "support_price": 35.3,
+                    "TP1_Target_Or_POC": 37.5,
+                    "potential_return_pct": 10.57,
+                    "Audit_Grade": "",
+                    "Allocation_Weight_Pct": "",
+                }
+            ],
+        }
+        block = build_fresh_top_picks_block(picks_bundle, max_picks=3)
+        self.assertNotIn("3311 閎暉", block)
+        self.assertIn("無通過 AI 戰略布局之嚴選標的", block)
 
 
 if __name__ == "__main__":

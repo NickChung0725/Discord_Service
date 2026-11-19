@@ -1330,8 +1330,33 @@ def load_public_deep_fundamental_context(
     return result
 
 
+def _rebound_audit_grade_rank(grade: Any) -> int:
+    """Return ordinal rank for a Rebound_Watchlist `Audit_Grade` (-1=rejected, 0=missing, 1..4=valid)."""
+    text = str(grade or "").strip().upper()
+    if not text:
+        return 0
+    if any(token in text for token in ("REJECT", "AVOID", "FAIL", "DROP")):
+        return -1
+    if text == "S" or text.startswith("S_"):
+        return 4
+    if text == "A" or text.startswith("A_"):
+        return 3
+    if text == "B" or text.startswith("B_"):
+        return 2
+    return 1
+
+
+def _is_ai_selected_rebound_row(row: Mapping[str, Any]) -> bool:
+    """Return True only when a `Rebound_Watchlist` row passed AI strategic selection."""
+    grade_rank = _rebound_audit_grade_rank(row.get("Audit_Grade"))
+    if grade_rank < 0:
+        return False
+    alloc_w = _to_float(row.get("Allocation_Weight_Pct"), default=0.0)
+    return grade_rank > 0 or alloc_w > 0.0
+
+
 def build_fresh_top_picks_block(picks_bundle: Mapping[str, Any] | None, max_picks: int = 3) -> str:
-    """Format latest `AI_Daily_Picks` (TOP_PICK / WATCHLIST) and `Rebound_Watchlist` as opportunity-cost candidates."""
+    """Format latest `AI_Daily_Picks` (TOP_PICK) and AI-selected `Rebound_Watchlist` as opportunity-cost candidates."""
     if not picks_bundle:
         return "- 暫無昨晚最新 AI 嚴選清單快取（以既有部位控管為主）。"
 
@@ -1367,12 +1392,26 @@ def build_fresh_top_picks_block(picks_bundle: Mapping[str, Any] | None, max_pick
         r_dates = [str(r.get("scan_date") or "").strip() for r in reb_picks if str(r.get("scan_date") or "").strip()]
         if r_dates:
             latest_r_date = max(r_dates)
-            r_rows = [r for r in reb_picks if str(r.get("scan_date") or "").strip() == latest_r_date][:max_picks]
+            r_candidates = [
+                r for r in reb_picks
+                if str(r.get("scan_date") or "").strip() == latest_r_date
+                and _is_ai_selected_rebound_row(r)
+            ]
+            r_candidates.sort(
+                key=lambda r: (
+                    -_to_float(r.get("Allocation_Weight_Pct"), default=-1.0),
+                    -_rebound_audit_grade_rank(r.get("Audit_Grade")),
+                    -_to_float(r.get("potential_return_pct"), default=-1.0),
+                )
+            )
+            r_rows = r_candidates[:max_picks]
             if r_rows:
-                lines.append(f"- **【型態 A 急跌回踩長均線反彈 (`{latest_r_date}` Rebound_Watchlist)】**：")
+                lines.append(f"- **【型態 A 急跌回踩長均線反彈 (`{latest_r_date}` Rebound_Watchlist AI 嚴選)】**：")
                 for idx, row in enumerate(r_rows, start=1):
                     sid = clean_leading_zero_code(row.get("stock_id") or "")
                     sname = str(row.get("stock_name") or "").strip()
+                    audit_grade = str(row.get("Audit_Grade") or "").strip()
+                    grade_prefix = f"`{audit_grade}`｜" if audit_grade else ""
                     close_p = row.get("close_price", "")
                     sup_ma = row.get("support_ma", "45/117/189MA")
                     sup_p = row.get("support_price", "")
@@ -1386,9 +1425,11 @@ def build_fresh_top_picks_block(picks_bundle: Mapping[str, Any] | None, max_pick
                         else ""
                     )
                     lines.append(
-                        f"  {idx}. **`{sid} {sname}`**（收盤 `{close_p}` 回踩 `{sup_ma}` 支撐 `{sup_p}`"
+                        f"  {idx}. **`{sid} {sname}`**（{grade_prefix}收盤 `{close_p}` 回踩 `{sup_ma}` 支撐 `{sup_p}`"
                         f"｜反彈目標 `{t_ma17}` 空間 `+{pot_ret}%`{extra_setup}）"
                     )
+            else:
+                lines.append(f"- 型態 A 反彈 (`{latest_r_date}`) 無通過 AI 戰略布局之嚴選標的（不列入換股建議）。")
 
     return "\n".join(lines) if lines else "- 暫無昨晚最新 AI 嚴選或型態 A 反彈紀錄。"
 
