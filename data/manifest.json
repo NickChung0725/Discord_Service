@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-19 10:17:55",
+  "updated_at": "2026-11-19 10:32:49",
   "available_dates": [
     "2026-11-18",
     "2026-11-17",
@@ -38,9 +38,9 @@
     }
   ],
   "rolling_30d_summary": {
-    "settled_trades": 2,
-    "win_rate_pct": 0.0,
-    "profit_factor": 0.0,
+    "settled_trades": 3,
+    "win_rate_pct": 33.3,
+    "profit_factor": 0.13,
     "false_negative_rate_pct": 24.0
   },
   "stock_search_index": {
@@ -90,7 +90,7 @@
     },
     "1326": {
       "stock_name": "台化",
-      "sector": "石化塑膠-基礎化學品與塑膠原料",
+      "sector": "塑膠工業",
       "wantgoo_url": "https://www.wantgoo.com/stock/1326/technical-chart",
       "war_room_url": "charts/1326_fund.html",
       "appearances": [
@@ -339,7 +339,7 @@
     },
     "2061": {
       "stock_name": "風青",
-      "sector": "特殊線材與漆包線",
+      "sector": "電器電纜",
       "wantgoo_url": "https://www.wantgoo.com/stock/2061/technical-chart",
       "war_room_url": "charts/2061_fund.html",
       "appearances": [
@@ -354,7 +354,7 @@
     },
     "2207": {
       "stock_name": "和泰車",
-      "sector": "汽車銷售與租賃通路",
+      "sector": "汽車工業",
       "wantgoo_url": "https://www.wantgoo.com/stock/2207/technical-chart",
       "war_room_url": "charts/2207_fund.html",
       "appearances": [
@@ -369,7 +369,7 @@
     },
     "2221": {
       "stock_name": "大甲",
-      "sector": "汽車零件-車身與外觀件",
+      "sector": "其他",
       "wantgoo_url": "https://www.wantgoo.com/stock/2221/technical-chart",
       "war_room_url": "charts/2221_fund.html",
       "appearances": [
@@ -485,7 +485,7 @@
     },
     "2323": {
       "stock_name": "中環",
-      "sector": "光碟片與記憶媒體製造",
+      "sector": "光電業",
       "wantgoo_url": "https://www.wantgoo.com/stock/2323/technical-chart",
       "war_room_url": "charts/2323_fund.html",
       "appearances": [
@@ -2047,7 +2047,7 @@
     },
     "3714": {
       "stock_name": "富采",
-      "sector": "LED與Micro LED光電元件",
+      "sector": "光電業",
       "wantgoo_url": "https://www.wantgoo.com/stock/3714/technical-chart",
       "war_room_url": "charts/3714_fund.html",
       "appearances": [
@@ -2586,7 +2586,7 @@
     },
     "6467": {
       "stock_name": "泰合",
-      "sector": "新藥開發與特殊製劑",
+      "sector": "化學生技醫療",
       "wantgoo_url": "https://www.wantgoo.com/stock/6467/technical-chart",
       "war_room_url": "charts/6467_fund.html",
       "appearances": [

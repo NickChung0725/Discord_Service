@@ -236,7 +236,7 @@
         {
           "stock_id": "2207",
           "stock_name": "和泰車",
-          "sector": "汽車銷售與租賃通路",
+          "sector": "汽車工業",
           "reason": "前三季累計EPS達31.86元且前三季累計FCF高達171.87億元，千張大戶持股83.27%質地優良；惟近期日成交量僅約330張流動性偏冷，且缺乏明確成長催化劑，故列觀察。",
           "close_at_pick": 538.0,
           "actual_verification": {
@@ -253,7 +253,7 @@
         {
           "stock_id": "2323",
           "stock_name": "中環",
-          "sector": "光碟片與記憶媒體製造",
+          "sector": "光電業",
           "reason": "本業結構性虧損且獲利能見度極低，近8季有4季自由現金流大額失血（2026Q2流出21.53億元），近期重訊皆為頻繁進出股市有價證券，缺乏本業成長支撐。",
           "close_at_pick": 12.05,
           "actual_verification": {
@@ -268,7 +268,7 @@
         {
           "stock_id": "3714",
           "stock_name": "富采",
-          "sector": "LED與Micro LED光電元件",
+          "sector": "光電業",
           "reason": "2023至2025年連續三年虧損，2026Q1至Q3自由現金流連3季為負，本業仍處虧損收斂階段且Q3 EPS轉正受減資股本變動影響，近5日法人亦呈調節賣超。",
           "close_at_pick": 82.3,
           "actual_verification": {
@@ -283,7 +283,7 @@
         {
           "stock_id": "2221",
           "stock_name": "大甲",
-          "sector": "汽車零件-車身與外觀件",
+          "sector": "其他",
           "reason": "雖受惠AI液冷管件帶動10月營收大增95%且三率擴張，但外資近5日大賣1,091張（持股驟降）、融資逆勢增加，呈現「法人倒貨、散戶融資接刀」且PE高達47.7倍，觸及籌碼淘汰底線。",
           "close_at_pick": 144.5,
           "actual_verification": {
