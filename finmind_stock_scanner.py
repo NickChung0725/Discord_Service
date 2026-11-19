@@ -688,6 +688,9 @@ def compute_rebound_trade_setup(
         "tp1_source": tp1_source,
         "deterministic_rr_ratio": rr_ratio,
         "rr_warning": rr_warning,
+        "tier1_price": buy_high,
+        "tier2_price": tier2_high,
+        "tier3_price": tier3_high,
         "anchor_tiers": {
             "tier1_aggressive_support": f"{buy_low:.2f}~{buy_high:.2f}（{resolved_ma_name or '長均線'}與整數關卡）",
             "tier2_steady_washout": f"{tier2_low:.2f}~{tier2_high:.2f}（0.786深度回檔/破線洗盤區）",
@@ -949,6 +952,9 @@ def build_strategic_tech_and_chip_package(
         t1_ref = str(anchor_tiers.get("tier1_aggressive_support") or f"{round_tw_tick(close_t * 0.98):.2f}")
         t2_ref = str(anchor_tiers.get("tier2_steady_washout") or f"{fib_618:.2f}~{fib_500:.2f}")
         t3_ref = str(anchor_tiers.get("tier3_extreme_left_foot") or f"{l60_val:.2f}~{fib_786:.2f}")
+        t1_price = float(base_setup.get("tier1_price") or base_setup.get("ideal_buy_zone_high") or round_tw_tick(close_t * 0.98))
+        t2_price = float(base_setup.get("tier2_price") or round_tw_tick(max(fib_618, fib_500)))
+        t3_price = float(base_setup.get("tier3_price") or round_tw_tick(max(l60_val, fib_786)))
         chase_lim = float(base_setup.get("chase_limit_price") or round_tw_tick(close_t))
         hard_sl = float(base_setup.get("hard_stop_loss") or round_tw_tick(l60_val * 0.98))
         tp1_def = float(base_setup.get("tp1_price") or round_tw_tick(float(last_r["MA17"])))
@@ -965,6 +971,9 @@ def build_strategic_tech_and_chip_package(
         t1_ref = f"{min(t1_low, t1_high):.2f}~{max(t1_low, t1_high):.2f}（回測5MA~17MA/0.236回檔量縮區）"
         t2_ref = f"{t2_low:.2f}~{t2_high:.2f}（回測17MA與0.382黃金分割核心支撐區）"
         t3_ref = f"{t3_low:.2f}~{t3_high:.2f}（大盤急殺回測45MA季線/0.618黃金坑防守區）"
+        t1_price = max(t1_low, t1_high)
+        t2_price = t2_high
+        t3_price = t3_high
         chase_lim = round_tw_tick(min(close_t, ma17_v * 1.06))
         hard_sl = round_tw_tick(min(ma45_v * 0.97, ma117_v, close_t - 2.2 * atr))
         tp1_def = round_tw_tick(max(h60_val, close_t + 2.5 * atr))
@@ -1011,6 +1020,9 @@ def build_strategic_tech_and_chip_package(
         "tier1_default": t1_ref,
         "tier2_default": t2_ref,
         "tier3_default": t3_ref,
+        "tier1_price": t1_price,
+        "tier2_price": t2_price,
+        "tier3_price": t3_price,
         "chase_limit_price": chase_lim,
         "hard_stop_loss": hard_sl,
         "tp1_price": tp1_def,
@@ -4901,7 +4913,7 @@ def scan_configured_universe(
                 futures_total_limit=float(config.get("futures_total_net_short_limit", 42000.0)),
             )
 
-    # SASD v5.4.0 Phase 3：盤後自動回填 signal_audit_log 之 T+1~T+10 實盤路徑並同步 Google Sheets
+    # SASD v6.2.0：盤後自動回填 signal_audit_log 之 T+1~T+10 實盤路徑（含速率控管之 FinMind 備援）並同步 Google Sheets
     if config.get("enable_signal_audit"):
         try:
             run_signal_audit_backfill(
@@ -4910,6 +4922,7 @@ def scan_configured_universe(
                 daily_directory=daily_directory,
                 extra_prices_df=report_files["prices"],
                 loader=loader,
+                limiter=limiter,
                 sync_gsheet=bool(config.get("sync_alignment_to_gsheet") or config.get("sync_signals_to_gsheet")),
             )
         except Exception:
@@ -5421,6 +5434,7 @@ def run_signal_audit_backfill(
     daily_directory: Path | None = None,
     extra_prices_df: pd.DataFrame | None = None,
     loader: DataLoader | None = None,
+    limiter: FinMindRequestLimiter | None = None,
     db_path: Path | None = None,
     sync_gsheet: bool = True,
     emit_weekly_summary: bool = False,
@@ -5445,7 +5459,16 @@ def run_signal_audit_backfill(
     fetcher = build_local_and_finmind_bars_fetcher(
         daily_dir, loader=loader, extra_prices_df=extra_prices_df
     )
-    updated_count = store.backfill_pending(fetcher)
+    if loader is not None:
+        resolved_limiter = limiter or FinMindRequestLimiter(
+            output_root / ".state" / "finmind_request_history.sqlite3",
+            int(config.get("max_requests_per_hour") or DEFAULT_MAX_REQUESTS_PER_HOUR),
+            float(config.get("min_request_interval_seconds") or DEFAULT_MIN_REQUEST_INTERVAL_SECONDS),
+        )
+        with _rate_limit_finmind_http_requests(resolved_limiter, only_hosts=("finmindtrade.com",)):
+            updated_count = store.backfill_pending(fetcher)
+    else:
+        updated_count = store.backfill_pending(fetcher)
     synced_rows = store.sync_to_gsheet(tab_name=tab_name) if sync_gsheet else 0
 
     is_friday = today.weekday() == 4

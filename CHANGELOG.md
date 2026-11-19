@@ -4,6 +4,19 @@
 
 ---
 
+## [v6.2.0-phase1] - 2026-11-19
+### ✨ 新增功能 & 🔧 優化與修正 — SASD v6.2.0 Step 1 & Step 2（玩股網直達連結、K 線點位標線與事後對答案引擎升級）
+* **Step 2 — 升級 `signal_audit.db` 事後對答案引擎與修復 v6.1 留痕 Bug（[`quant/signal_audit_service.py`](/quant/signal_audit_service.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)）**：
+  * **資料表重建遷移與自動備份**：`SignalAuditStore._ensure_schema()` 偵測舊版 `UNIQUE (signal_date, stock_id)` 資料表時，自動備份為 `signal_audit.db.bak_YYYYMMDD` 並於單一交易內無痛遷移至新結構 `UNIQUE (signal_date, strategy_id, stock_id)`，擴充 `strategy_id`、`pick_category`（`TOP_PICK` / `WATCHLIST` / `AVOID`）、`tier1/2/3_entry_price`、`tp2_price`、`filled_tiers_text`、`period_high_price`、`period_low_price`、`latest_close_price` 與 `bars_elapsed` 欄位（同步更新 `Signal_Audit_Log` Google Sheets 表頭）。
+  * **三批低接 5 交易日判定與 TP2 延伸觀察**：將 `PULLBACK_FILL_WINDOW` 統一由 3 日改為 **5 個交易日**，`evaluate_forward_path()` 支援三批（30%/40%/30%）各自觸價與權重正規化加權成本計算、即時記錄期間高低價，並於觸及 TP1 後持續觀察至 T+10 是否觸及 TP2（勝率與獲利因子維持保守 TP1 口徑）；新增 `parse_plan_price()` 過濾非價格數字並自動退回 Python 確定性錨點。
+  * **修復 `execute_v61_quality_and_strategic_pipeline()` 留痕鍵名不一致 Bug**：改以 `_record_v62_decision_signals()` 正確寫入 `21:30`（`alignment_2130`）與 `22:00`（`rebound_2200`）之 `Top Picks`、`Watchlist` 與 `Avoid`（含 Stage 0 預篩淘汰股）；`run_signal_audit_backfill()` 於啟用 FinMind 備援時套用 `FinMindRequestLimiter` 速率控管。
+* **Step 1 — 植入玩股網唯一外部看盤入口與 K 線目標價/低接區/停損標線（[`quant/chart_generator.py`](/quant/chart_generator.py)、[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`services/stock_ai_command.py`](/services/stock_ai_command.py)）**：
+  * 統一外部看盤連結僅保留 **玩股網技術線圖**（`https://www.wantgoo.com/stock/{stock_id}/technical-chart`），同步植入每日 Discord 選股推播 `_links()`、`/stock_ai` 互動按鈕 `StockWarRoomView` 與戰情室網頁頂部導覽列。
+  * `chart_generator.py` 新增 `_add_trade_level_overlays()`，於個股 Plotly K 線主圖自動疊加 **TP1 綠虛線**、**TP2 淺綠點線**、**低接支撐區藍框 (`add_hrect`)** 與 **硬停損紅虛線**；`alignment_ai_picker.py` 對每日嚴選股自動帶入確定性價位重新發布戰情室，`/stock_ai` 亦自動從 `trade_plan` 解析標線。
+* **新增單元測試（[`tests/test_v62_step1_and_step2.py`](/tests/test_v62_step1_and_step2.py)）**：涵蓋舊版 DB 自動備份遷移、價格解析、三批 5 日加權成交與 TP2 判定、Top/Watchlist/Avoid 留痕、玩股網連結與 Plotly K 線標線渲染。
+
+---
+
 ## [v6.1.2] - 2026-11-18
 ### 🔧 優化與修正 — 修復 Discord 報告單一區塊超過 2000 字元導致 HTTP 400 推播失敗
 * **修復 `format_pick_report` 與 `post_messages_to_discord` 超長訊息分段（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`tests/test_alignment_ai_picker.py`](/tests/test_alignment_ai_picker.py)）**：

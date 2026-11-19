@@ -114,8 +114,17 @@ class StockWarRoomView(discord.ui.View):
         *,
         war_room_url: str | None,
         chart_url: str | None = None,
+        stock_id: str | None = None,
     ) -> None:
         super().__init__(timeout=None)
+        if stock_id:
+            self.add_item(
+                discord.ui.Button(
+                    label="📈 玩股網技術線圖",
+                    style=discord.ButtonStyle.link,
+                    url=f"https://www.wantgoo.com/stock/{stock_id.strip()}/technical-chart",
+                )
+            )
         if war_room_url:
             self.add_item(
                 discord.ui.Button(
@@ -316,11 +325,12 @@ def register_stock_ai_command(tree: app_commands.CommandTree) -> None:
         if report.cache_period:
             full_text += f"\n\n*(資料水位：{report.cache_period} | cached={report.cached})*"
 
-        has_links = bool(report.war_room_url or chart_url)
+        has_links = bool(stock_id or report.war_room_url or chart_url)
         view = (
             StockWarRoomView(
                 war_room_url=report.war_room_url,
                 chart_url=chart_url,
+                stock_id=stock_id,
             )
             if has_links
             else None

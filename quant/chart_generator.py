@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import os
 import re
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -335,7 +337,116 @@ def _add_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def _generate_stock_chart(stock_id: str) -> tuple[str, float, str]:
+def _parse_positive_level(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if (num == num and num > 0) else None
+
+
+def _add_trade_level_overlays(
+    figure: go.Figure,
+    trade_levels: Mapping[str, Any] | None,
+) -> None:
+    """在 K 線主圖 (row=1, col=1) 疊加 TP1/TP2 綠線、低接支撐區藍框與硬停損紅線。"""
+    if not trade_levels:
+        return
+
+    zone_low = _parse_positive_level(trade_levels.get("buy_zone_low"))
+    zone_high = _parse_positive_level(trade_levels.get("buy_zone_high"))
+    if zone_low is None or zone_high is None:
+        tier_vals = [
+            p
+            for p in (
+                _parse_positive_level(trade_levels.get("tier1")),
+                _parse_positive_level(trade_levels.get("tier2")),
+                _parse_positive_level(trade_levels.get("tier3")),
+            )
+            if p is not None
+        ]
+        if tier_vals:
+            zone_low = min(tier_vals)
+            zone_high = max(tier_vals)
+
+    if zone_low is not None and zone_high is not None and zone_high > zone_low:
+        figure.add_hrect(
+            y0=zone_low,
+            y1=zone_high,
+            fillcolor="rgba(59, 130, 246, 0.14)",
+            line_width=1,
+            line_dash="dot",
+            line_color="#60a5fa",
+            annotation_text=f"🎯 低接支撐區 {zone_low:.1f}~{zone_high:.1f}",
+            annotation_position="top left",
+            annotation_font_color="#93c5fd",
+            row=1,
+            col=1,
+        )
+    elif zone_high is not None or zone_low is not None:
+        buy_single = zone_high if zone_high is not None else zone_low
+        assert buy_single is not None
+        figure.add_hline(
+            y=buy_single,
+            line_dash="dash",
+            line_color="#60a5fa",
+            line_width=1.5,
+            annotation_text=f"🎯 低接參考 {buy_single:.1f}",
+            annotation_position="top left",
+            annotation_font_color="#93c5fd",
+            row=1,
+            col=1,
+        )
+
+    tp1 = _parse_positive_level(trade_levels.get("tp1"))
+    tp2 = _parse_positive_level(trade_levels.get("tp2"))
+    stop_loss = _parse_positive_level(trade_levels.get("stop_loss"))
+
+    if tp1 is not None:
+        figure.add_hline(
+            y=tp1,
+            line_dash="dash",
+            line_color="#10b981",
+            line_width=1.8,
+            annotation_text=f"🏁 TP1 {tp1:.1f}",
+            annotation_position="top right",
+            annotation_font_color="#34d399",
+            row=1,
+            col=1,
+        )
+    if tp2 is not None and (tp1 is None or tp2 > tp1):
+        figure.add_hline(
+            y=tp2,
+            line_dash="dot",
+            line_color="#34d399",
+            line_width=1.3,
+            annotation_text=f"🚀 TP2 {tp2:.1f}",
+            annotation_position="top right",
+            annotation_font_color="#6ee7b7",
+            row=1,
+            col=1,
+        )
+    if stop_loss is not None:
+        figure.add_hline(
+            y=stop_loss,
+            line_dash="dash",
+            line_color="#ef4444",
+            line_width=1.8,
+            annotation_text=f"🛑 硬停損 {stop_loss:.1f}",
+            annotation_position="bottom right",
+            annotation_font_color="#f87171",
+            row=1,
+            col=1,
+        )
+
+
+def _generate_stock_chart(
+    stock_id: str,
+    *,
+    trade_levels: Mapping[str, Any] | None = None,
+) -> tuple[str, float, str]:
     normalized_id = _validate_stock_id(stock_id)
     frame = _add_indicators(_fetch_stock_data(normalized_id))
     chart_start_date = pd.Timestamp(date.today()) - pd.DateOffset(
@@ -416,6 +527,7 @@ def _generate_stock_chart(stock_id: str) -> tuple[str, float, str]:
         row=1,
         col=1,
     )
+    _add_trade_level_overlays(figure, trade_levels)
 
     volume_colors = [
         "#ef5350" if close >= opening else "#26a69a"
@@ -541,21 +653,30 @@ def _generate_stock_chart(stock_id: str) -> tuple[str, float, str]:
     return str(output_path), float(latest["close"]), latest["date"].strftime("%Y-%m-%d")
 
 
-def generate_stock_html(stock_id: str) -> str:
+def generate_stock_html(
+    stock_id: str,
+    *,
+    trade_levels: Mapping[str, Any] | None = None,
+) -> str:
     """Generate the stock's HTML chart and return its local file path."""
-    file_path, _, _ = _generate_stock_chart(stock_id)
+    file_path, _, _ = _generate_stock_chart(stock_id, trade_levels=trade_levels)
     return file_path
 
 
-def generate_stock_html_with_summary(stock_id: str) -> tuple[str, float, str]:
+def generate_stock_html_with_summary(
+    stock_id: str,
+    *,
+    trade_levels: Mapping[str, Any] | None = None,
+) -> tuple[str, float, str]:
     """Generate the chart once and return its path, latest close, and trading date."""
-    return _generate_stock_chart(stock_id)
+    return _generate_stock_chart(stock_id, trade_levels=trade_levels)
 
 
 def build_stock_technical_chart_html(
     stock_id: str,
     *,
     include_plotlyjs: str | bool = False,
+    trade_levels: Mapping[str, Any] | None = None,
 ) -> str:
     """Return an embeddable HTML fragment of the 4-panel technical K-line chart."""
     normalized_id = _validate_stock_id(stock_id)
@@ -637,6 +758,7 @@ def build_stock_technical_chart_html(
         row=1,
         col=1,
     )
+    _add_trade_level_overlays(figure, trade_levels)
 
     volume_colors = [
         "#ef5350" if close >= opening else "#26a69a"

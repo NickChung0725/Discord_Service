@@ -1,16 +1,20 @@
 """無未來函數事後審計閉環 (`quant/signal_audit_service.py`).
 
-SASD v5.4.0-Phase3：
-- SQLite `signal_audit_log` 審計表（預設 `data/signal_audit.db`）。
-- `evaluate_forward_path()`：三條防自欺鐵律（Open_{T+1}+0.5% 摩擦成本、停損優先悲觀認定、
-  REJECT_TRAP 錯殺率追蹤）。純函式，不依賴網路，方便單元測試。
-- `SignalAuditStore`：記錄訊號、盤後回填、週報統計。
+SASD v6.2.0：
+- SQLite `signal_audit_log` 審計表（預設 `data/signal_audit.db`），支援多策略
+  (`alignment_2130` / `rebound_2200`)、三級名單 (`TOP_PICK` / `WATCHLIST` / `AVOID`)、
+  三階買點 (`tier1/2/3_entry_price`) 與自動備份重建遷移。
+- `evaluate_forward_path()`：三條防自欺鐵律（0.5% 摩擦成本、停損優先悲觀認定、
+  REJECT_TRAP/AVOID 錯殺率追蹤），加上 5 交易日三批低接加權成本與 TP2 延伸觀察。
+- `SignalAuditStore`：記錄訊號、盤後回填、週報統計與 Google Sheets 同步。
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
@@ -27,6 +31,8 @@ SIGNAL_AUDIT_GSHEET_TAB = "Signal_Audit_Log"
 SIGNAL_AUDIT_GSHEET_HEADERS: list[str] = [
     "audit_id",
     "signal_date",
+    "strategy_id",
+    "pick_category",
     "stock_id",
     "stock_name",
     "sector_name",
@@ -35,17 +41,26 @@ SIGNAL_AUDIT_GSHEET_HEADERS: list[str] = [
     "ai_verdict_grade",
     "execution_strategy_type",
     "close_t",
+    "tier1_entry_price",
+    "tier2_entry_price",
+    "tier3_entry_price",
     "ideal_buy_zone_low",
     "ideal_buy_zone_high",
     "chase_limit_price",
     "hard_stop_loss",
     "tp1_price",
+    "tp2_price",
     "deterministic_rr_ratio",
     "open_t1",
     "effective_entry_price",
     "entry_fill_status",
+    "filled_tiers_text",
     "was_buy_zone_filled",
     "outcome_status_10d",
+    "period_high_price",
+    "period_low_price",
+    "latest_close_price",
+    "bars_elapsed",
     "net_return_5d_pct",
     "net_return_10d_pct",
     "mfe_10d_pct",
@@ -58,8 +73,16 @@ SIGNAL_AUDIT_GSHEET_HEADERS: list[str] = [
 
 FRICTION_MULTIPLIER = 1.005  # 0.5% 雙邊摩擦成本（手續費、證交稅、滑價）
 HORIZON_BARS = 10  # 追蹤 T+1 ~ T+10
-PULLBACK_FILL_WINDOW = 3  # Style B 限價單有效 T+1 ~ T+3
+PULLBACK_FILL_WINDOW = 5  # SASD v6.2.0：三批低接 / Style B 限價單有效 T+1 ~ T+5
 FALSE_NEGATIVE_MFE_PCT = 8.0
+TIER_WEIGHTS: tuple[tuple[int, float], ...] = ((1, 0.30), (2, 0.40), (3, 0.30))
+
+STRATEGY_ALIGNMENT_2130 = "alignment_2130"
+STRATEGY_REBOUND_2200 = "rebound_2200"
+
+CATEGORY_TOP_PICK = "TOP_PICK"
+CATEGORY_WATCHLIST = "WATCHLIST"
+CATEGORY_AVOID = "AVOID"
 
 SIGNAL_RIGHT_BREAKOUT = "RIGHT_BREAKOUT"
 SIGNAL_STYLE_B_PULLBACK = "STYLE_B_PULLBACK"
@@ -74,47 +97,94 @@ FILL_SKIPPED = "SKIPPED_GAP_TOO_HIGH"
 
 OUTCOME_PENDING = "PENDING"
 OUTCOME_TP1 = "TP1_HIT_WIN"
+OUTCOME_TP2 = "TP2_HIT_WIN"
 OUTCOME_STOP = "STOP_LOSS_HIT"
 OUTCOME_TIME_EXIT = "TIME_EXIT_HOLD"
 OUTCOME_UNFILLED = "UNFILLED"
 
-SIGNAL_AUDIT_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS signal_audit_log (
+_SIGNAL_AUDIT_TABLE_DEF = """
     audit_id INTEGER PRIMARY KEY AUTOINCREMENT
-    , signal_date TEXT NOT NULL
-    , stock_id TEXT NOT NULL
-    , stock_name TEXT NOT NULL
-    , sector_name TEXT
-    , regime_state TEXT NOT NULL
-    , scanner_signal_type TEXT NOT NULL
-    , ai_verdict_grade TEXT NOT NULL
-    , execution_strategy_type TEXT NOT NULL
-    , close_t REAL NOT NULL
-    , ideal_buy_zone_low REAL
-    , ideal_buy_zone_high REAL
-    , chase_limit_price REAL NOT NULL
-    , hard_stop_loss REAL NOT NULL
-    , tp1_price REAL NOT NULL
-    , deterministic_rr_ratio REAL NOT NULL
-    , open_t1 REAL
-    , effective_entry_price REAL
-    , entry_fill_status TEXT DEFAULT 'PENDING'
-    , was_buy_zone_filled INTEGER DEFAULT 0
-    , outcome_status_10d TEXT DEFAULT 'PENDING'
-    , net_return_5d_pct REAL
-    , net_return_10d_pct REAL
-    , mfe_10d_pct REAL
-    , mae_10d_pct REAL
-    , is_whipsawed INTEGER DEFAULT 0
-    , is_false_negative_miss INTEGER DEFAULT 0
-    , created_at TEXT NOT NULL
-    , updated_at TEXT NOT NULL
-    , UNIQUE (signal_date, stock_id)
+  , signal_date TEXT NOT NULL
+  , strategy_id TEXT NOT NULL DEFAULT 'alignment_2130'
+  , pick_category TEXT NOT NULL DEFAULT 'TOP_PICK'
+  , stock_id TEXT NOT NULL
+  , stock_name TEXT NOT NULL
+  , sector_name TEXT
+  , regime_state TEXT NOT NULL
+  , scanner_signal_type TEXT NOT NULL
+  , ai_verdict_grade TEXT NOT NULL
+  , execution_strategy_type TEXT NOT NULL
+  , close_t REAL NOT NULL
+  , tier1_entry_price REAL
+  , tier2_entry_price REAL
+  , tier3_entry_price REAL
+  , ideal_buy_zone_low REAL
+  , ideal_buy_zone_high REAL
+  , chase_limit_price REAL NOT NULL
+  , hard_stop_loss REAL NOT NULL
+  , tp1_price REAL NOT NULL
+  , tp2_price REAL
+  , deterministic_rr_ratio REAL NOT NULL
+  , open_t1 REAL
+  , effective_entry_price REAL
+  , entry_fill_status TEXT DEFAULT 'PENDING'
+  , filled_tiers_text TEXT DEFAULT ''
+  , was_buy_zone_filled INTEGER DEFAULT 0
+  , outcome_status_10d TEXT DEFAULT 'PENDING'
+  , period_high_price REAL
+  , period_low_price REAL
+  , latest_close_price REAL
+  , bars_elapsed INTEGER DEFAULT 0
+  , net_return_5d_pct REAL
+  , net_return_10d_pct REAL
+  , mfe_10d_pct REAL
+  , mae_10d_pct REAL
+  , is_whipsawed INTEGER DEFAULT 0
+  , is_false_negative_miss INTEGER DEFAULT 0
+  , created_at TEXT NOT NULL
+  , updated_at TEXT NOT NULL
+  , UNIQUE (signal_date, strategy_id, stock_id)
+"""
+
+SIGNAL_AUDIT_SCHEMA_SQL = f"""
+CREATE TABLE IF NOT EXISTS signal_audit_log (
+{_SIGNAL_AUDIT_TABLE_DEF}
 );
+
+CREATE INDEX IF NOT EXISTS idx_signal_audit_lookup
+    ON signal_audit_log (signal_date, strategy_id, pick_category);
 
 CREATE INDEX IF NOT EXISTS idx_signal_audit_date_grade
     ON signal_audit_log (signal_date, ai_verdict_grade);
 """
+
+_EXPECTED_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("strategy_id", "TEXT NOT NULL DEFAULT 'alignment_2130'"),
+    ("pick_category", "TEXT NOT NULL DEFAULT 'TOP_PICK'"),
+    ("tier1_entry_price", "REAL"),
+    ("tier2_entry_price", "REAL"),
+    ("tier3_entry_price", "REAL"),
+    ("tp2_price", "REAL"),
+    ("filled_tiers_text", "TEXT DEFAULT ''"),
+    ("period_high_price", "REAL"),
+    ("period_low_price", "REAL"),
+    ("latest_close_price", "REAL"),
+    ("bars_elapsed", "INTEGER DEFAULT 0"),
+)
+
+_RE_BRACKET_PREFIX = re.compile(r"【[^】]*】")
+_RE_NON_PRICE_TOKENS = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*%"
+    r"|\b\d+\s*MA\b"
+    r"|第\s*\d+\s*批"
+    r"|\d+\s*[日天週周月季年]"
+    r"|\bT\+\d+\b"
+    r"|\b0\.(?:236|382|500|618|786)\b)",
+    re.IGNORECASE,
+)
+_RE_PRICE_RANGE = re.compile(r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*[~～\-－至到]\s*(\d+(?:,\d{3})*(?:\.\d+)?)")
+_RE_PAREN_PRICE = re.compile(r"[（(]\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*元?\s*[)）]")
+_RE_PLAIN_PRICE = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
 
 
 def _f(value: Any) -> float | None:
@@ -125,6 +195,61 @@ def _f(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if result == result else None
+
+
+def parse_plan_price(
+    value: Any,
+    *,
+    close_ref: float | None = None,
+    fallback: float | None = None,
+    pick: str = "high",
+) -> float | None:
+    """從文字或數值解析價格（如 `【第1批 30% 試單】回測 17MA (500.0)` 或 `498.5~502.0`）。
+
+    過濾百分比、均線天數 (`17MA`)、天數 (`60日`)、批次 (`第1批`) 與費波那契比率 (`0.618`)，
+    解析失敗或不合理時退回 `fallback`。
+    """
+    direct = _f(value)
+    if direct is not None and direct > 0:
+        if close_ref is None or close_ref <= 0 or (close_ref * 0.2 <= direct <= close_ref * 5.0):
+            return round(direct, 2)
+
+    if not isinstance(value, str) or not value.strip():
+        return round(fallback, 2) if (fallback is not None and fallback > 0) else None
+
+    cleaned = _RE_BRACKET_PREFIX.sub(" ", value)
+    cleaned = _RE_NON_PRICE_TOKENS.sub(" ", cleaned)
+
+    def _plausible(num: float) -> bool:
+        if num <= 0:
+            return False
+        if close_ref is not None and close_ref > 0:
+            return close_ref * 0.25 <= num <= close_ref * 4.0
+        return True
+
+    def _to_float(token: str) -> float | None:
+        return _f(token.replace(",", ""))
+
+    # 1. 優先匹配區間格式 `low~high`
+    for m in _RE_PRICE_RANGE.finditer(cleaned):
+        a, b = _to_float(m.group(1)), _to_float(m.group(2))
+        if a is not None and b is not None and _plausible(a) and _plausible(b):
+            chosen = max(a, b) if pick == "high" else (min(a, b) if pick == "low" else (a + b) / 2.0)
+            return round(chosen, 2)
+
+    # 2. 次優先：括號內明確標示價位 `(500.0)` / `（500.0元）`
+    for m in _RE_PAREN_PRICE.finditer(cleaned):
+        num = _to_float(m.group(1))
+        if num is not None and _plausible(num):
+            return round(num, 2)
+
+    # 3. 最後取文字中第一個合理價位
+    for m in _RE_PLAIN_PRICE.finditer(cleaned):
+        num = _to_float(m.group(0))
+        if num is not None and _plausible(num):
+            return round(num, 2)
+
+    return round(fallback, 2) if (fallback is not None and fallback > 0) else None
 
 
 def _ret_pct(exit_price: float, entry_price: float) -> float:
@@ -138,6 +263,7 @@ def _walk_path(
     tp1: float,
     *,
     bars_before_entry: int,
+    tp2: float | None = None,
 ) -> dict[str, Any]:
     """自成交日起逐日走停損優先路徑。`bars` 為成交日(含)起至 T+10 的 K 線。"""
     outcome = OUTCOME_TIME_EXIT
@@ -146,6 +272,7 @@ def _walk_path(
     whipsawed = 0
     mfe_high = entry_price
     mae_low = entry_price
+    valid_tp2 = tp2 if (tp2 is not None and tp2 > tp1) else None
 
     for idx, bar in enumerate(bars):
         high = float(bar["high"])
@@ -164,8 +291,14 @@ def _walk_path(
             break
         if high >= tp1:
             outcome = OUTCOME_TP1
-            exit_price = tp1
+            exit_price = tp1  # 保守口徑：勝率與獲利因子鎖定 TP1 出場報酬
             exit_day = day_no
+            # SASD v6.2.0：觸及 TP1 後持續沿路徑觀察至 T+10 是否進一步觸及 TP2
+            if valid_tp2 is not None:
+                tp2_max = max((float(b["high"]) for b in bars[idx:]), default=0.0)
+                if tp2_max >= valid_tp2:
+                    outcome = OUTCOME_TP2
+                    mfe_high = max(mfe_high, tp2_max)
             break
 
     if exit_price is None and bars:
@@ -182,11 +315,19 @@ def _walk_path(
     }
 
 
+def _format_filled_tiers_text(filled_tiers: Sequence[tuple[int, float, float]]) -> str:
+    if not filled_tiers:
+        return ""
+    nums = "+".join(str(t_no) for t_no, _, _ in filled_tiers)
+    total_pct = int(round(sum(w for _, w, _ in filled_tiers) * 100))
+    return f"第{nums}批({total_pct}%)"
+
+
 def evaluate_forward_path(
     signal: Mapping[str, Any],
     forward_bars: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """依三條鐵律計算單筆訊號的事後績效。
+    """依三條鐵律與三階低接規則計算單筆訊號的事後績效。
 
     `forward_bars`：T+1 起升冪的日 K（open/high/low/close）。回傳可直接寫入
     `signal_audit_log` 對應欄位之 dict。資料不足以完成成交判定時回傳 PENDING。
@@ -196,8 +337,13 @@ def evaluate_forward_path(
         "open_t1": None,
         "effective_entry_price": None,
         "entry_fill_status": FILL_PENDING,
+        "filled_tiers_text": "",
         "was_buy_zone_filled": 0,
         "outcome_status_10d": OUTCOME_PENDING,
+        "period_high_price": None,
+        "period_low_price": None,
+        "latest_close_price": None,
+        "bars_elapsed": len(bars),
         "net_return_5d_pct": None,
         "net_return_10d_pct": None,
         "mfe_10d_pct": None,
@@ -210,12 +356,26 @@ def evaluate_forward_path(
 
     open_t1 = float(bars[0]["open"])
     result["open_t1"] = open_t1
+    result["period_high_price"] = round(max(float(b["high"]) for b in bars), 2)
+    result["period_low_price"] = round(min(float(b["low"]) for b in bars), 2)
+    result["latest_close_price"] = round(float(bars[-1]["close"]), 2)
+
     signal_type = str(signal.get("scanner_signal_type") or "")
     grade = str(signal.get("ai_verdict_grade") or "")
+    category = str(signal.get("pick_category") or "").upper()
     chase_limit = float(signal["chase_limit_price"])
     hard_stop = float(signal["hard_stop_loss"])
     tp1 = float(signal["tp1_price"])
-    is_reject = grade == GRADE_REJECT_TRAP
+    tp2 = _f(signal.get("tp2_price"))
+    if tp2 is not None and tp2 <= tp1:
+        tp2 = None
+    is_reject = grade == GRADE_REJECT_TRAP or category == CATEGORY_AVOID
+
+    tier_defs: list[tuple[int, float, float]] = []
+    for tier_no, weight in TIER_WEIGHTS:
+        tp_val = _f(signal.get(f"tier{tier_no}_entry_price"))
+        if tp_val is not None and tp_val > 0:
+            tier_defs.append((tier_no, weight, tp_val))
 
     entry_idx: int | None = None
     entry_price: float | None = None
@@ -225,6 +385,104 @@ def evaluate_forward_path(
         entry_idx = 0
         entry_price = round(open_t1 * FRICTION_MULTIPLIER, 2)
         result["entry_fill_status"] = FILL_T1
+    elif signal_type == SIGNAL_STYLE_B_PULLBACK and tier_defs:
+        # SASD v6.2.0：5 交易日三批低接各自判定與加權成本計算
+        filled_map: dict[int, tuple[int, float, float]] = {}  # tier_no -> (tier_no, weight, fill_price)
+        outcome = OUTCOME_TIME_EXIT
+        exit_price: float | None = None
+        exit_day: int | None = None
+        whipsawed = 0
+        mfe_high: float | None = None
+        mae_low: float | None = None
+
+        for idx, bar in enumerate(bars):
+            open_p = float(bar["open"])
+            high_p = float(bar["high"])
+            low_p = float(bar["low"])
+            day_no = idx + 1
+
+            # T+1 ~ T+5 檢查未成交批次是否觸價成交
+            if idx < PULLBACK_FILL_WINDOW:
+                for tier_no, weight, limit_p in tier_defs:
+                    if tier_no not in filled_map and low_p <= limit_p:
+                        fill_p = min(open_p, limit_p)
+                        filled_map[tier_no] = (tier_no, weight, fill_p)
+                        if entry_idx is None:
+                            entry_idx = idx
+
+            if entry_idx is None:
+                continue
+
+            # 已有倉位：以當下所有已成交批次計算加權均價（含 0.5% 摩擦成本）
+            ordered_fills = [filled_map[k] for k in sorted(filled_map)]
+            w_sum = sum(w for _, w, _ in ordered_fills)
+            raw_avg = sum(w * p for _, w, p in ordered_fills) / w_sum
+            entry_price = round(raw_avg * FRICTION_MULTIPLIER, 2)
+
+            if mfe_high is None:
+                mfe_high = max(entry_price, high_p)
+                mae_low = min(entry_price, low_p)
+            else:
+                mfe_high = max(mfe_high, high_p)
+                mae_low = min(mae_low, low_p)
+
+            # 鐵律 2：停損優先悲觀認定
+            if low_p <= hard_stop:
+                outcome = OUTCOME_STOP
+                exit_price = hard_stop
+                exit_day = day_no
+                if max((float(b["high"]) for b in bars[idx + 1:]), default=0.0) >= tp1:
+                    whipsawed = 1
+                break
+            if high_p >= tp1:
+                outcome = OUTCOME_TP1
+                exit_price = tp1  # 保守口徑鎖定 TP1
+                exit_day = day_no
+                if tp2 is not None:
+                    tp2_max = max((float(b["high"]) for b in bars[idx:]), default=0.0)
+                    if tp2_max >= tp2:
+                        outcome = OUTCOME_TP2
+                        mfe_high = max(mfe_high, tp2_max)
+                break
+
+        if entry_idx is None:
+            if len(bars) < PULLBACK_FILL_WINDOW:
+                return result  # 尚未滿 5 日，仍待回填（但保留期間高低價）
+            result["entry_fill_status"] = FILL_UNFILLED
+            result["outcome_status_10d"] = OUTCOME_UNFILLED
+            hypo_entry = round(open_t1 * FRICTION_MULTIPLIER, 2)
+            hypo = _walk_path(bars, hypo_entry, hard_stop, tp1, bars_before_entry=0, tp2=tp2)
+            if hypo["exit_price"] is not None and (
+                hypo["outcome"] != OUTCOME_TIME_EXIT or len(bars) >= HORIZON_BARS
+            ):
+                result["net_return_10d_pct"] = _ret_pct(hypo["exit_price"], hypo_entry)
+                result["mfe_10d_pct"] = hypo["mfe_pct"]
+                result["mae_10d_pct"] = hypo["mae_pct"]
+            return result
+
+        assert entry_price is not None and mfe_high is not None and mae_low is not None
+        ordered_fills = [filled_map[k] for k in sorted(filled_map)]
+        result["entry_fill_status"] = FILL_PULLBACK
+        result["was_buy_zone_filled"] = 1
+        result["filled_tiers_text"] = _format_filled_tiers_text(ordered_fills)
+        result["effective_entry_price"] = entry_price
+
+        if exit_price is None:
+            exit_price = float(bars[-1]["close"])
+            exit_day = len(bars)
+
+        finished = outcome != OUTCOME_TIME_EXIT or len(bars) >= HORIZON_BARS
+        result["outcome_status_10d"] = outcome if finished else OUTCOME_PENDING
+        result["mfe_10d_pct"] = _ret_pct(mfe_high, entry_price)
+        result["mae_10d_pct"] = _ret_pct(mae_low, entry_price)
+        result["is_whipsawed"] = whipsawed
+        if finished:
+            result["net_return_10d_pct"] = _ret_pct(exit_price, entry_price)
+        if outcome != OUTCOME_TIME_EXIT and exit_day is not None and exit_day <= 5:
+            result["net_return_5d_pct"] = _ret_pct(exit_price, entry_price)
+        elif len(bars) >= 5 and entry_idx <= 4:
+            result["net_return_5d_pct"] = _ret_pct(float(bars[4]["close"]), entry_price)
+        return result
     elif signal_type == SIGNAL_STYLE_B_PULLBACK:
         zone_high = _f(signal.get("ideal_buy_zone_high"))
         if zone_high is None:
@@ -239,12 +497,12 @@ def evaluate_forward_path(
                 break
         if entry_idx is None:
             if len(window) < PULLBACK_FILL_WINDOW:
-                return result  # 尚未滿 3 日，仍待回填
+                return result  # 尚未滿 5 日，仍待回填
             result["entry_fill_status"] = FILL_UNFILLED
             result["outcome_status_10d"] = OUTCOME_UNFILLED
             # 逆向選擇檢驗：未成交者以 Open_{T+1} 假設進場之報酬（僅供統計，不計入實盤損益）
             hypo_entry = round(open_t1 * FRICTION_MULTIPLIER, 2)
-            hypo = _walk_path(bars, hypo_entry, hard_stop, tp1, bars_before_entry=0)
+            hypo = _walk_path(bars, hypo_entry, hard_stop, tp1, bars_before_entry=0, tp2=tp2)
             if hypo["exit_price"] is not None and (
                 hypo["outcome"] != OUTCOME_TIME_EXIT or len(bars) >= HORIZON_BARS
             ):
@@ -269,7 +527,7 @@ def evaluate_forward_path(
     assert entry_idx is not None and entry_price is not None
     result["effective_entry_price"] = entry_price
     path_bars = bars[entry_idx:]
-    walk = _walk_path(path_bars, entry_price, hard_stop, tp1, bars_before_entry=entry_idx)
+    walk = _walk_path(path_bars, entry_price, hard_stop, tp1, bars_before_entry=entry_idx, tp2=tp2)
 
     result["outcome_status_10d"] = walk["outcome"]
     result["mfe_10d_pct"] = walk["mfe_pct"]
@@ -292,7 +550,7 @@ def evaluate_forward_path(
 
     if is_reject and finished:
         never_stopped = walk["outcome"] != OUTCOME_STOP
-        hit_big = walk["outcome"] == OUTCOME_TP1 or walk["mfe_pct"] >= FALSE_NEGATIVE_MFE_PCT
+        hit_big = walk["outcome"] in (OUTCOME_TP1, OUTCOME_TP2) or walk["mfe_pct"] >= FALSE_NEGATIVE_MFE_PCT
         result["is_false_negative_miss"] = 1 if (never_stopped and hit_big) else 0
 
     return result
@@ -301,9 +559,22 @@ def evaluate_forward_path(
 BarsFetcher = Callable[[str, str], Sequence[Mapping[str, Any]]]
 
 _UPDATE_COLUMNS = (
-    "open_t1", "effective_entry_price", "entry_fill_status", "was_buy_zone_filled",
-    "outcome_status_10d", "net_return_5d_pct", "net_return_10d_pct", "mfe_10d_pct",
-    "mae_10d_pct", "is_whipsawed", "is_false_negative_miss",
+    "open_t1",
+    "effective_entry_price",
+    "entry_fill_status",
+    "filled_tiers_text",
+    "was_buy_zone_filled",
+    "outcome_status_10d",
+    "period_high_price",
+    "period_low_price",
+    "latest_close_price",
+    "bars_elapsed",
+    "net_return_5d_pct",
+    "net_return_10d_pct",
+    "mfe_10d_pct",
+    "mae_10d_pct",
+    "is_whipsawed",
+    "is_false_negative_miss",
 )
 
 
@@ -327,10 +598,123 @@ class SignalAuditStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _backup_before_migration(self) -> Path | None:
+        if str(self.db_path) == ":memory:" or not self.db_path.is_file():
+            return None
+        stamp = datetime.now().strftime("%Y%m%d")
+        backup_path = self.db_path.with_name(f"{self.db_path.name}.bak_{stamp}")
+        if backup_path.exists():
+            stamp_full = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = self.db_path.with_name(f"{self.db_path.name}.bak_{stamp_full}")
+        shutil.copy2(self.db_path, backup_path)
+        logger.info("Backed up legacy signal_audit DB before v6.2 migration: %s", backup_path)
+        return backup_path
+
     def _ensure_schema(self) -> None:
         conn = self._connect()
         with closing(conn) if str(self.db_path) != ":memory:" else _noclose(conn):
-            conn.executescript(SIGNAL_AUDIT_SCHEMA_SQL)
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'signal_audit_log'"
+            ).fetchone()
+            if not exists:
+                conn.executescript(SIGNAL_AUDIT_SCHEMA_SQL)
+                conn.commit()
+                return
+
+            existing_cols = {
+                str(r["name"])
+                for r in conn.execute("PRAGMA table_info(signal_audit_log)").fetchall()
+            }
+            if "strategy_id" not in existing_cols:
+                # 舊版 v5.4 表（UNIQUE(signal_date, stock_id)）需備份後單一交易重建遷移至 v6.2
+                self._backup_before_migration()
+                legacy_cols = [
+                    "audit_id",
+                    "signal_date",
+                    "stock_id",
+                    "stock_name",
+                    "sector_name",
+                    "regime_state",
+                    "scanner_signal_type",
+                    "ai_verdict_grade",
+                    "execution_strategy_type",
+                    "close_t",
+                    "ideal_buy_zone_low",
+                    "ideal_buy_zone_high",
+                    "chase_limit_price",
+                    "hard_stop_loss",
+                    "tp1_price",
+                    "deterministic_rr_ratio",
+                    "open_t1",
+                    "effective_entry_price",
+                    "entry_fill_status",
+                    "was_buy_zone_filled",
+                    "outcome_status_10d",
+                    "net_return_5d_pct",
+                    "net_return_10d_pct",
+                    "mfe_10d_pct",
+                    "mae_10d_pct",
+                    "is_whipsawed",
+                    "is_false_negative_miss",
+                    "created_at",
+                    "updated_at",
+                ]
+                copy_cols = [c for c in legacy_cols if c in existing_cols]
+                col_list = ", ".join(copy_cols)
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute("DROP TABLE IF EXISTS signal_audit_log_v62")
+                    conn.execute(f"CREATE TABLE signal_audit_log_v62 ({_SIGNAL_AUDIT_TABLE_DEF})")
+                    conn.execute(
+                        f"""
+                        INSERT INTO signal_audit_log_v62 (
+                            {col_list}
+                            , strategy_id
+                            , pick_category
+                            , bars_elapsed
+                        )
+                        SELECT
+                            {col_list}
+                            , '{STRATEGY_ALIGNMENT_2130}'
+                            , CASE
+                                WHEN ai_verdict_grade = '{GRADE_REJECT_TRAP}' THEN '{CATEGORY_AVOID}'
+                                ELSE '{CATEGORY_TOP_PICK}'
+                              END
+                            , CASE
+                                WHEN outcome_status_10d IS NOT NULL AND outcome_status_10d != '{OUTCOME_PENDING}' THEN {HORIZON_BARS}
+                                ELSE 0
+                              END
+                        FROM signal_audit_log
+                        """
+                    )
+                    conn.execute("DROP TABLE signal_audit_log")
+                    conn.execute("ALTER TABLE signal_audit_log_v62 RENAME TO signal_audit_log")
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_signal_audit_lookup "
+                        "ON signal_audit_log (signal_date, strategy_id, pick_category)"
+                    )
+                    conn.execute(
+                        "CREATE INDEX IF NOT EXISTS idx_signal_audit_date_grade "
+                        "ON signal_audit_log (signal_date, ai_verdict_grade)"
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                return
+
+            # 已是 v6.2+ 結構：防禦性補齊可能缺少的新欄位與索引
+            for col_name, col_def in _EXPECTED_NEW_COLUMNS:
+                if col_name not in existing_cols:
+                    conn.execute(f"ALTER TABLE signal_audit_log ADD COLUMN {col_name} {col_def}")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_signal_audit_lookup "
+                "ON signal_audit_log (signal_date, strategy_id, pick_category)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_signal_audit_date_grade "
+                "ON signal_audit_log (signal_date, ai_verdict_grade)"
+            )
             conn.commit()
 
     @staticmethod
@@ -338,52 +722,112 @@ class SignalAuditStore:
         return datetime.now().isoformat(timespec="seconds")
 
     def record_signal(self, signal: Mapping[str, Any]) -> None:
-        """寫入（或更新未回填的）訊號；同 (signal_date, stock_id) 不重複。"""
+        """寫入（或更新未回填的）訊號；同 (signal_date, strategy_id, stock_id) 不重複。"""
         now = self._now()
+        strategy_id = str(signal.get("strategy_id") or STRATEGY_ALIGNMENT_2130).strip() or STRATEGY_ALIGNMENT_2130
+        grade = str(signal["ai_verdict_grade"])
+        default_category = CATEGORY_AVOID if grade == GRADE_REJECT_TRAP else CATEGORY_TOP_PICK
+        pick_category = str(signal.get("pick_category") or default_category).strip().upper() or default_category
         conn = self._connect()
         with closing(conn) if str(self.db_path) != ":memory:" else _noclose(conn):
             conn.execute(
                 """
                 INSERT INTO signal_audit_log (
-                    signal_date, stock_id, stock_name, sector_name, regime_state
-                    , scanner_signal_type, ai_verdict_grade, execution_strategy_type
-                    , close_t, ideal_buy_zone_low, ideal_buy_zone_high, chase_limit_price
-                    , hard_stop_loss, tp1_price, deterministic_rr_ratio, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (signal_date, stock_id) DO UPDATE SET
-                    ai_verdict_grade = excluded.ai_verdict_grade
+                    signal_date
+                    , strategy_id
+                    , pick_category
+                    , stock_id
+                    , stock_name
+                    , sector_name
+                    , regime_state
+                    , scanner_signal_type
+                    , ai_verdict_grade
+                    , execution_strategy_type
+                    , close_t
+                    , tier1_entry_price
+                    , tier2_entry_price
+                    , tier3_entry_price
+                    , ideal_buy_zone_low
+                    , ideal_buy_zone_high
+                    , chase_limit_price
+                    , hard_stop_loss
+                    , tp1_price
+                    , tp2_price
+                    , deterministic_rr_ratio
+                    , created_at
+                    , updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (signal_date, strategy_id, stock_id) DO UPDATE SET
+                    pick_category = excluded.pick_category
+                    , stock_name = excluded.stock_name
+                    , sector_name = COALESCE(excluded.sector_name, signal_audit_log.sector_name)
+                    , regime_state = excluded.regime_state
+                    , scanner_signal_type = excluded.scanner_signal_type
+                    , ai_verdict_grade = excluded.ai_verdict_grade
                     , execution_strategy_type = excluded.execution_strategy_type
+                    , close_t = excluded.close_t
+                    , tier1_entry_price = COALESCE(excluded.tier1_entry_price, signal_audit_log.tier1_entry_price)
+                    , tier2_entry_price = COALESCE(excluded.tier2_entry_price, signal_audit_log.tier2_entry_price)
+                    , tier3_entry_price = COALESCE(excluded.tier3_entry_price, signal_audit_log.tier3_entry_price)
+                    , ideal_buy_zone_low = COALESCE(excluded.ideal_buy_zone_low, signal_audit_log.ideal_buy_zone_low)
+                    , ideal_buy_zone_high = COALESCE(excluded.ideal_buy_zone_high, signal_audit_log.ideal_buy_zone_high)
+                    , chase_limit_price = excluded.chase_limit_price
+                    , hard_stop_loss = excluded.hard_stop_loss
+                    , tp1_price = excluded.tp1_price
+                    , tp2_price = COALESCE(excluded.tp2_price, signal_audit_log.tp2_price)
+                    , deterministic_rr_ratio = excluded.deterministic_rr_ratio
                     , updated_at = excluded.updated_at
                 """,
                 (
-                    str(signal["signal_date"]), str(signal["stock_id"]),
+                    str(signal["signal_date"]),
+                    strategy_id,
+                    pick_category,
+                    str(signal["stock_id"]),
                     str(signal.get("stock_name") or signal["stock_id"]),
-                    signal.get("sector_name"), str(signal.get("regime_state") or "YELLOW_ROTATION"),
-                    str(signal["scanner_signal_type"]), str(signal["ai_verdict_grade"]),
+                    signal.get("sector_name"),
+                    str(signal.get("regime_state") or "YELLOW_ROTATION"),
+                    str(signal["scanner_signal_type"]),
+                    grade,
                     str(signal.get("execution_strategy_type") or "NO_TRADE"),
-                    float(signal["close_t"]), _f(signal.get("ideal_buy_zone_low")),
-                    _f(signal.get("ideal_buy_zone_high")), float(signal["chase_limit_price"]),
-                    float(signal["hard_stop_loss"]), float(signal["tp1_price"]),
-                    float(_f(signal.get("deterministic_rr_ratio")) or 0.0), now, now,
+                    float(signal["close_t"]),
+                    _f(signal.get("tier1_entry_price")),
+                    _f(signal.get("tier2_entry_price")),
+                    _f(signal.get("tier3_entry_price")),
+                    _f(signal.get("ideal_buy_zone_low")),
+                    _f(signal.get("ideal_buy_zone_high")),
+                    float(signal["chase_limit_price"]),
+                    float(signal["hard_stop_loss"]),
+                    float(signal["tp1_price"]),
+                    _f(signal.get("tp2_price")),
+                    float(_f(signal.get("deterministic_rr_ratio")) or 0.0),
+                    now,
+                    now,
                 ),
             )
             conn.commit()
 
     def backfill_pending(self, bars_fetcher: BarsFetcher) -> int:
-        """回填尚未結算的訊號。`bars_fetcher(stock_id, signal_date)` 回傳 T+1 起之日 K。"""
+        """回填尚未結算或仍在 T+1~T+10 觀察視窗內的訊號。"""
         conn = self._connect()
         updated = 0
+        recent_cutoff = (datetime.now() - timedelta(days=35)).strftime("%Y-%m-%d")
         with closing(conn) if str(self.db_path) != ":memory:" else _noclose(conn):
             rows = conn.execute(
-                "SELECT * FROM signal_audit_log WHERE outcome_status_10d = ? "
-                "OR entry_fill_status = ?",
-                (OUTCOME_PENDING, FILL_PENDING),
+                """
+                SELECT * FROM signal_audit_log
+                WHERE outcome_status_10d = ?
+                   OR entry_fill_status = ?
+                   OR (COALESCE(bars_elapsed, 0) < ? AND signal_date >= ?)
+                """,
+                (OUTCOME_PENDING, FILL_PENDING, HORIZON_BARS, recent_cutoff),
             ).fetchall()
             for row in rows:
                 try:
                     bars = bars_fetcher(row["stock_id"], row["signal_date"])
                 except Exception:
                     logger.exception("audit backfill fetch failed: %s", row["stock_id"])
+                    continue
+                if not bars:
                     continue
                 result = evaluate_forward_path(dict(row), bars)
                 sets = ", ".join(f"{c} = ?" for c in _UPDATE_COLUMNS)
@@ -401,11 +845,18 @@ class SignalAuditStore:
         with closing(conn) if str(self.db_path) != ":memory:" else _noclose(conn):
             rows = [dict(r) for r in conn.execute("SELECT * FROM signal_audit_log").fetchall()]
 
+        def _is_avoid(r: Mapping[str, Any]) -> bool:
+            return r.get("ai_verdict_grade") == GRADE_REJECT_TRAP or str(r.get("pick_category") or "").upper() == CATEGORY_AVOID
+
+        def _is_watchlist(r: Mapping[str, Any]) -> bool:
+            return str(r.get("pick_category") or "").upper() == CATEGORY_WATCHLIST
+
         settled = [
             r for r in rows
-            if r["ai_verdict_grade"] != GRADE_REJECT_TRAP
+            if not _is_avoid(r)
+            and not _is_watchlist(r)
             and r["entry_fill_status"] in (FILL_T1, FILL_PULLBACK)
-            and r["outcome_status_10d"] in (OUTCOME_TP1, OUTCOME_STOP, OUTCOME_TIME_EXIT)
+            and r["outcome_status_10d"] in (OUTCOME_TP1, OUTCOME_TP2, OUTCOME_STOP, OUTCOME_TIME_EXIT)
             and r["net_return_10d_pct"] is not None
         ]
         returns = [r["net_return_10d_pct"] for r in settled]
@@ -418,7 +869,10 @@ class SignalAuditStore:
             return (sum(1 for v in vals if v > 0) / len(vals)) if vals else None
 
         filled_pullback = [r for r in settled if r["entry_fill_status"] == FILL_PULLBACK]
-        unfilled = [r for r in rows if r["entry_fill_status"] == FILL_UNFILLED]
+        unfilled = [
+            r for r in rows
+            if not _is_avoid(r) and not _is_watchlist(r) and r["entry_fill_status"] == FILL_UNFILLED
+        ]
         filled_wr = _win_rate(filled_pullback)
         unfilled_wr = _win_rate(unfilled)
         adverse_delta = (
@@ -427,7 +881,7 @@ class SignalAuditStore:
 
         rejects = [
             r for r in rows
-            if r["ai_verdict_grade"] == GRADE_REJECT_TRAP and r["outcome_status_10d"] != OUTCOME_PENDING
+            if _is_avoid(r) and r["outcome_status_10d"] != OUTCOME_PENDING
         ]
         fn_rate = (
             sum(r["is_false_negative_miss"] for r in rejects) / len(rejects) if rejects else None
@@ -461,11 +915,11 @@ class SignalAuditStore:
         }
 
     def fetch_all_rows(self) -> list[dict[str, Any]]:
-        """依 `signal_date DESC, stock_id ASC` 回傳完整審計表列。"""
+        """依 `signal_date DESC, strategy_id ASC, stock_id ASC` 回傳完整審計表列。"""
         conn = self._connect()
         with closing(conn) if str(self.db_path) != ":memory:" else _noclose(conn):
             rows = conn.execute(
-                "SELECT * FROM signal_audit_log ORDER BY signal_date DESC, stock_id ASC"
+                "SELECT * FROM signal_audit_log ORDER BY signal_date DESC, strategy_id ASC, stock_id ASC"
             ).fetchall()
             return [dict(r) for r in rows]
 

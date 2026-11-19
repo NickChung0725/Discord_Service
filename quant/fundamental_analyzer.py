@@ -2496,7 +2496,44 @@ class FundamentalAnalyzer:
         meta = await ask_gemini_with_meta(prompt, tag=f"stock_qa:{stock_id}", task_type="SINGLE_QUERY", stock_id=stock_id, custom_id=f"CMD_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{stock_id}")
         return f"分析模型：{meta.model_version}\n" + meta.text
 
-    async def render_and_publish_war_room_html(self, stock_id: str, ai_text: str) -> str:
+    @staticmethod
+    def _extract_trade_levels_from_summary(summary_json: Mapping[str, Any] | None) -> dict[str, float] | None:
+        if not isinstance(summary_json, Mapping):
+            return None
+        plan = summary_json.get("trade_plan")
+        if not isinstance(plan, Mapping):
+            return None
+        try:
+            from signal_audit_service import parse_plan_price
+        except ImportError:
+            from quant.signal_audit_service import parse_plan_price  # type: ignore[no-redef]
+
+        levels: dict[str, float] = {}
+        tp1 = parse_plan_price(plan.get("target_price_1"))
+        tp2 = parse_plan_price(plan.get("target_price_2"))
+        sl = parse_plan_price(plan.get("stop_loss_price"), pick="low")
+        entry_txt = plan.get("entry_zone_and_trigger")
+        buy_low = parse_plan_price(entry_txt, pick="low")
+        buy_high = parse_plan_price(entry_txt, pick="high")
+        if tp1 and tp1 > 0:
+            levels["tp1"] = tp1
+        if tp2 and tp2 > 0 and (not tp1 or tp2 > tp1):
+            levels["tp2"] = tp2
+        if sl and sl > 0:
+            levels["stop_loss"] = sl
+        if buy_low and buy_low > 0:
+            levels["buy_zone_low"] = buy_low
+        if buy_high and buy_high > 0:
+            levels["buy_zone_high"] = buy_high
+        return levels or None
+
+    async def render_and_publish_war_room_html(
+        self,
+        stock_id: str,
+        ai_text: str,
+        *,
+        trade_levels: Mapping[str, Any] | None = None,
+    ) -> str:
         df_wide = self.cache._read_stock_rows(self.cache._get_worksheet("05_AI_Metrics_Wide"), stock_id)  # noqa: SLF001
         df_rev = self.cache._read_stock_rows(self.cache._get_worksheet("01_Monthly_Revenue"), stock_id)  # noqa: SLF001
         df_cf = self.cache._read_stock_rows(self.cache._get_worksheet("04_Cash_Flow"), stock_id)  # noqa: SLF001
@@ -2718,14 +2755,34 @@ class FundamentalAnalyzer:
             )
         )
 
+        clean_ai_text, parsed_summary = self._split_ai_output(ai_text)
+        resolved_levels = (
+            dict(trade_levels)
+            if isinstance(trade_levels, Mapping) and trade_levels
+            else self._extract_trade_levels_from_summary(parsed_summary)
+        )
+
         # 技術面 K 線圖嵌入（若外部日線查詢失敗不阻斷財報戰情室發布）
         tech_html_section = ""
         try:
             from chart_generator import build_stock_technical_chart_html
 
-            tech_fragment = await asyncio.to_thread(
-                build_stock_technical_chart_html, stock_id, include_plotlyjs=False
-            )
+            if resolved_levels:
+                try:
+                    tech_fragment = await asyncio.to_thread(
+                        build_stock_technical_chart_html,
+                        stock_id,
+                        include_plotlyjs=False,
+                        trade_levels=resolved_levels,
+                    )
+                except TypeError:
+                    tech_fragment = await asyncio.to_thread(
+                        build_stock_technical_chart_html, stock_id, include_plotlyjs=False
+                    )
+            else:
+                tech_fragment = await asyncio.to_thread(
+                    build_stock_technical_chart_html, stock_id, include_plotlyjs=False
+                )
             tech_html_section = (
                 "<section id='sec-tech' class='section-card'>"
                 "<div class='section-header'>"
@@ -2744,7 +2801,6 @@ class FundamentalAnalyzer:
             logger.warning("Skipping embedded technical chart for %s: %s", stock_id, exc)
 
         generated_at = datetime.now(TAIPEI_TIMEZONE).strftime("%Y-%m-%d %H:%M")
-        clean_ai_text, _ = self._split_ai_output(ai_text)
         tax_badge = self._taxonomy_badge_sync(stock_id, cached_only=True)
         tax_banner_html = (
             "<div style='width:100%;margin-top:4px'><span style='display:inline-block;"
@@ -2782,6 +2838,8 @@ class FundamentalAnalyzer:
             ".nav-links{display:flex;gap:8px;flex-wrap:wrap}",
             ".nav-btn{color:#e2e8f0;background:#1e293b;border:1px solid #334155;padding:6px 12px;border-radius:6px;text-decoration:none;font-size:13px;transition:all .15s}",
             ".nav-btn:hover{background:#3b82f6;border-color:#60a5fa;color:#fff}",
+            ".nav-btn-wantgoo{background:#065f46;border-color:#10b981;color:#ecfdf5;font-weight:600}",
+            ".nav-btn-wantgoo:hover{background:#10b981;border-color:#34d399;color:#052e16}",
             ".container{max-width:1400px;margin:0 auto;padding:16px}",
             ".section-card{background:#111827;border:1px solid #243042;border-radius:10px;padding:16px;margin-bottom:20px;box-shadow:0 4px 12px rgba(0,0,0,0.25)}",
             ".section-card h3{margin:0 0 12px 0;color:#60a5fa;font-size:18px;border-left:4px solid #3b82f6;padding-left:10px}",
@@ -2795,6 +2853,7 @@ class FundamentalAnalyzer:
             f"<h2>📊 {stock_id} 全方位投資戰情室（基本面財報 ＋ 技術面 K 線）<small>更新：{generated_at}</small></h2>",
             tax_banner_html,
             "<div class='nav-links'>",
+            f"<a class='nav-btn nav-btn-wantgoo' href='https://www.wantgoo.com/stock/{html.escape(stock_id)}/technical-chart' target='_blank' rel='noopener noreferrer'>📈 玩股網技術線圖 ↗</a>",
             "<a class='nav-btn' href='#sec-ai'>🤖 AI 深度診斷</a>",
             "<a class='nav-btn' href='#sec-tech'>📈 技術面 K 線與均線</a>",
             "<a class='nav-btn' href='#sec-fund'>📊 基本面六大指標圖表</a>",

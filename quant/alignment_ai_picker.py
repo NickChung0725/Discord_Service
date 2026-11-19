@@ -16,7 +16,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -2580,6 +2580,21 @@ async def execute_v61_quality_and_strategic_pipeline(
             "watchlist": watchlist_items,
             "avoid": avoid_items,
         }
+        if bool(_cfg(config, "enable_signal_audit", False)) and not dry_run:
+            _record_v62_decision_signals(
+                config=config,
+                output_root=daily_dir.parent,
+                target_date=target_date,
+                strategy_id="rebound_2200" if is_rebound else "alignment_2130",
+                market_regime=market_regime,
+                top_picks=[],
+                watchlist=watchlist_items,
+                avoid=avoid_items,
+                row_map=_row_lookup(analyzed),
+                close_map=close_map,
+                tech_packages={},
+                audit_records={},
+            )
         return empty_decision, {}, q_raw, q_model_ver
 
     # Step 2: 為入選之 Top 3~5 績優股組裝「20日逐日價量均線指標籌碼大表 ＋ 三大大量支撐定位器 ＋ 台美股總經」
@@ -2741,6 +2756,36 @@ async def execute_v61_quality_and_strategic_pipeline(
         ideal_summary = f"預估均價 {avg_entry}（權重 {w_pct}%）" if avg_entry else f"權重 {w_pct}% 三階低接"
         tactic_code = "PORTFOLIO_SWAP_ONLY" if swap else "STRATEGIC_3TIER_PULLBACK"
 
+        from signal_audit_service import parse_plan_price
+
+        close_ref = _parse_optional_num(pkg.get("close_t")) or _parse_optional_num(row_map.get(sid, {}).get("close"))
+        t1_fallback = _parse_optional_num(pkg.get("tier1_price")) or parse_plan_price(
+            pkg.get("tier1_default"), close_ref=close_ref
+        )
+        t2_fallback = _parse_optional_num(pkg.get("tier2_price")) or parse_plan_price(
+            pkg.get("tier2_default"), close_ref=close_ref
+        )
+        t3_fallback = _parse_optional_num(pkg.get("tier3_price")) or parse_plan_price(
+            pkg.get("tier3_default"), close_ref=close_ref
+        )
+        t1_num = parse_plan_price(t1_plan, close_ref=close_ref, fallback=t1_fallback)
+        t2_num = parse_plan_price(t2_plan, close_ref=close_ref, fallback=t2_fallback)
+        t3_num = parse_plan_price(t3_plan, close_ref=close_ref, fallback=t3_fallback)
+        tp1_num = parse_plan_price(tp1_str, close_ref=close_ref, fallback=_parse_optional_num(pkg.get("tp1_price")))
+        tp2_num = parse_plan_price(tp2_str, close_ref=close_ref, fallback=None)
+        if tp1_num is not None and tp2_num is not None and tp2_num <= tp1_num:
+            tp2_num = None
+        sl_num = parse_plan_price(
+            sl_str, close_ref=close_ref, fallback=_parse_optional_num(pkg.get("hard_stop_loss")), pick="low"
+        )
+        chase_num = parse_plan_price(
+            chase_lim, close_ref=close_ref, fallback=_parse_optional_num(pkg.get("chase_limit_price"))
+        )
+        entry_for_rr = t1_num or close_ref or 0.0
+        rr_val: float | str = ""
+        if tp1_num and sl_num and entry_for_rr > sl_num:
+            rr_val = round((tp1_num - entry_for_rr) / (entry_for_rr - sl_num), 2)
+
         audit_rec = {
             "Audit_Grade": str(q_item.get("quality_grade") or "S_TIER_CORE"),
             "Execution_Tactic": tactic_code,
@@ -2748,11 +2793,15 @@ async def execute_v61_quality_and_strategic_pipeline(
             "Tier1_Entry_Plan": t1_plan,
             "Tier2_Entry_Plan": t2_plan,
             "Tier3_Entry_Plan": t3_plan,
+            "Tier1_Entry_Price": t1_num,
+            "Tier2_Entry_Price": t2_num,
+            "Tier3_Entry_Price": t3_num,
             "Ideal_Buy_Or_Ref": ideal_summary,
-            "Chase_Limit_Price": chase_lim,
-            "Hard_Stop_Loss": pkg.get("hard_stop_loss") or sl_str,
-            "TP1_Target_Or_POC": pkg.get("tp1_price") or tp1_str,
-            "Deterministic_RR": "",
+            "Chase_Limit_Price": chase_num if chase_num is not None else chase_lim,
+            "Hard_Stop_Loss": sl_num if sl_num is not None else (pkg.get("hard_stop_loss") or sl_str),
+            "TP1_Target_Or_POC": tp1_num if tp1_num is not None else (pkg.get("tp1_price") or tp1_str),
+            "TP2_Target_Price": tp2_num,
+            "Deterministic_RR": rr_val,
             "Bear_Case_Warning": tech_diag,
             "Invalidation_Triggers": [inv_rule] if inv_rule else [],
             "Exposure_Status": _exposure_field(exposure, "exposure_status", "OPEN"),
@@ -2807,46 +2856,312 @@ async def execute_v61_quality_and_strategic_pipeline(
         "avoid": avoid_items,
     }
 
-    # 訊號留痕寫入 signal_audit.db
-    if bool(_cfg(config, "enable_signal_audit", False)) and not dry_run and top_picks_final:
-        try:
-            from signal_audit_service import SignalAuditStore
-
-            store = SignalAuditStore(_resolve_audit_db_path(config, daily_dir.parent))
-            light_txt = str((market_regime or {}).get("light") or "")
-            regime_str = (
-                "GREEN_BULL"
-                if "🟢" in light_txt
-                else ("RED_DEFENSIVE" if "🔴" in light_txt else "YELLOW_ROTATION")
-            )
-            for pick_it in top_picks_final:
-                sid = str(pick_it["stock_id"])
-                pkg = tech_packages.get(sid) or {}
-                close_v = _parse_optional_num(pkg.get("close_t")) or 0.0
-                if close_v <= 0:
-                    continue
-                store.record_signal(
-                    {
-                        "signal_id": f"{target_date.isoformat()}_{sid}",
-                        "signal_date": target_date.isoformat(),
-                        "stock_id": sid,
-                        "stock_name": str(pick_it.get("stock_name") or ""),
-                        "sub_industry": str(pick_it.get("sector") or ""),
-                        "market_regime": regime_str,
-                        "signal_type": "STYLE_B_PULLBACK",
-                        "audit_grade": str(audit_records[sid].get("Audit_Grade") or "S_TIER_CORE"),
-                        "execution_tactic": str(audit_records[sid].get("Execution_Tactic") or "STRATEGIC_3TIER_PULLBACK"),
-                        "close_t": close_v,
-                        "chase_limit_price": _parse_optional_num(pkg.get("chase_limit_price")) or close_v,
-                        "hard_stop_loss": _parse_optional_num(pkg.get("hard_stop_loss")) or round(close_v * 0.92, 2),
-                        "tp1_price": _parse_optional_num(pkg.get("tp1_price")) or round(close_v * 1.10, 2),
-                        "deterministic_rr": 2.0,
-                    }
-                )
-        except Exception as exc:  # noqa: BLE001
-            print(f"[warn] 訊號留痕寫入失敗（略過）：{exc}")
+    # 訊號留痕寫入 signal_audit.db（SASD v6.2.0：修復鍵名並同步寫入 Top Picks / Watchlist / Avoid）
+    if bool(_cfg(config, "enable_signal_audit", False)) and not dry_run:
+        _record_v62_decision_signals(
+            config=config,
+            output_root=daily_dir.parent,
+            target_date=target_date,
+            strategy_id="rebound_2200" if is_rebound else "alignment_2130",
+            market_regime=market_regime,
+            top_picks=top_picks_final,
+            watchlist=watchlist_items,
+            avoid=avoid_items,
+            row_map=row_map,
+            close_map=close_map,
+            tech_packages=tech_packages,
+            audit_records=audit_records,
+        )
 
     return final_decision, audit_records, s_raw or q_raw, s_model_ver
+
+
+def _resolve_regime_state_code(market_regime: Mapping[str, object] | None) -> str:
+    if isinstance(market_regime, Mapping):
+        rq = market_regime.get("regime_quota")
+        if isinstance(rq, Mapping):
+            code = str(rq.get("regime_state") or rq.get("regime") or "").strip()
+            if code:
+                return code
+        light_txt = str(market_regime.get("light") or "")
+        if "🟢" in light_txt:
+            return "GREEN_BULL"
+        if "🔴" in light_txt:
+            return "RED_DEFENSIVE"
+    return "YELLOW_ROTATION"
+
+
+def _record_v62_decision_signals(
+    *,
+    config: Mapping[str, object],
+    output_root: Path,
+    target_date: date,
+    strategy_id: str,
+    market_regime: Mapping[str, object] | None,
+    top_picks: Sequence[Mapping[str, object]],
+    watchlist: Sequence[Mapping[str, object]],
+    avoid: Sequence[Mapping[str, object]],
+    row_map: Mapping[str, Mapping[str, object]],
+    close_map: Mapping[str, float] | None = None,
+    tech_packages: Mapping[str, Mapping[str, object]] | None = None,
+    audit_records: Mapping[str, Mapping[str, object]] | None = None,
+) -> int:
+    """將 Top Picks / Watchlist / Avoid 留痕寫入 `signal_audit.db`（SASD v6.2.0）。"""
+    try:
+        from signal_audit_service import (
+            CATEGORY_AVOID,
+            CATEGORY_TOP_PICK,
+            CATEGORY_WATCHLIST,
+            GRADE_REJECT_TRAP,
+            SIGNAL_RIGHT_BREAKOUT,
+            SIGNAL_STYLE_B_PULLBACK,
+            SignalAuditStore,
+            parse_plan_price,
+        )
+
+        store = SignalAuditStore(_resolve_audit_db_path(config, output_root))
+        regime_str = _resolve_regime_state_code(market_regime)
+        sig_date_str = target_date.isoformat()
+        pkgs = tech_packages or {}
+        audits = audit_records or {}
+        closes = close_map or {}
+        recorded = 0
+        seen_sids: set[str] = set()
+
+        def _lookup_close(sid: str) -> float:
+            pkg_c = _parse_optional_num((pkgs.get(sid) or {}).get("close_t"))
+            if pkg_c and pkg_c > 0:
+                return float(pkg_c)
+            row_c = _parse_optional_num((row_map.get(sid) or {}).get("close"))
+            if row_c and row_c > 0:
+                return float(row_c)
+            map_c = _parse_optional_num(closes.get(sid))
+            return float(map_c) if (map_c and map_c > 0) else 0.0
+
+        def _lookup_name_sector(sid: str, item: Mapping[str, object]) -> tuple[str, str]:
+            row = row_map.get(sid) or {}
+            sname = str(item.get("stock_name") or row.get("stock_name") or sid).strip()
+            sector = str(
+                item.get("sector")
+                or row.get("sub_industry")
+                or row.get("industry_category")
+                or ""
+            ).strip()
+            return sname, sector
+
+        for pick_it in top_picks:
+            sid = str(pick_it.get("stock_id") or "").strip()
+            if not sid:
+                continue
+            close_v = _lookup_close(sid)
+            if close_v <= 0:
+                continue
+            pkg = pkgs.get(sid) or {}
+            aud = audits.get(sid) or (pick_it.get("audit") if isinstance(pick_it.get("audit"), Mapping) else {}) or {}
+            sname, sector = _lookup_name_sector(sid, pick_it)
+
+            t1_p = _parse_optional_num(aud.get("Tier1_Entry_Price")) or parse_plan_price(
+                aud.get("Tier1_Entry_Plan"),
+                close_ref=close_v,
+                fallback=_parse_optional_num(pkg.get("tier1_price"))
+                or parse_plan_price(pkg.get("tier1_default"), close_ref=close_v)
+                or round(close_v * 0.985, 2),
+            )
+            t2_p = _parse_optional_num(aud.get("Tier2_Entry_Price")) or parse_plan_price(
+                aud.get("Tier2_Entry_Plan"),
+                close_ref=close_v,
+                fallback=_parse_optional_num(pkg.get("tier2_price"))
+                or parse_plan_price(pkg.get("tier2_default"), close_ref=close_v),
+            )
+            t3_p = _parse_optional_num(aud.get("Tier3_Entry_Price")) or parse_plan_price(
+                aud.get("Tier3_Entry_Plan"),
+                close_ref=close_v,
+                fallback=_parse_optional_num(pkg.get("tier3_price"))
+                or parse_plan_price(pkg.get("tier3_default"), close_ref=close_v),
+            )
+            valid_tiers = [p for p in (t1_p, t2_p, t3_p) if p is not None and p > 0]
+            zone_low = min(valid_tiers) if valid_tiers else None
+            zone_high = max(valid_tiers) if valid_tiers else None
+
+            chase_p = parse_plan_price(
+                aud.get("Chase_Limit_Price"),
+                close_ref=close_v,
+                fallback=_parse_optional_num(pkg.get("chase_limit_price")) or close_v,
+            ) or close_v
+            sl_p = parse_plan_price(
+                aud.get("Hard_Stop_Loss") or pick_it.get("stop_loss_price"),
+                close_ref=close_v,
+                fallback=_parse_optional_num(pkg.get("hard_stop_loss")) or round(close_v * 0.92, 2),
+                pick="low",
+            ) or round(close_v * 0.92, 2)
+            tp1_p = parse_plan_price(
+                aud.get("TP1_Target_Or_POC") or pick_it.get("target_price_1"),
+                close_ref=close_v,
+                fallback=_parse_optional_num(pkg.get("tp1_price")) or round(close_v * 1.10, 2),
+            ) or round(close_v * 1.10, 2)
+            tp2_p = _parse_optional_num(aud.get("TP2_Target_Price")) or parse_plan_price(
+                pick_it.get("target_price_2"), close_ref=close_v, fallback=None
+            )
+            if tp2_p is not None and tp2_p <= tp1_p:
+                tp2_p = None
+
+            entry_ref = t1_p or close_v
+            rr_num = _parse_optional_num(aud.get("Deterministic_RR"))
+            if rr_num is None and entry_ref > sl_p:
+                rr_num = round((tp1_p - entry_ref) / (entry_ref - sl_p), 2)
+
+            store.record_signal(
+                {
+                    "signal_date": sig_date_str,
+                    "strategy_id": strategy_id,
+                    "pick_category": CATEGORY_TOP_PICK,
+                    "stock_id": sid,
+                    "stock_name": sname,
+                    "sector_name": sector,
+                    "regime_state": regime_str,
+                    "scanner_signal_type": SIGNAL_STYLE_B_PULLBACK,
+                    "ai_verdict_grade": str(aud.get("Audit_Grade") or "S_TIER_CORE"),
+                    "execution_strategy_type": str(aud.get("Execution_Tactic") or "STRATEGIC_3TIER_PULLBACK"),
+                    "close_t": close_v,
+                    "tier1_entry_price": t1_p,
+                    "tier2_entry_price": t2_p,
+                    "tier3_entry_price": t3_p,
+                    "ideal_buy_zone_low": zone_low,
+                    "ideal_buy_zone_high": zone_high,
+                    "chase_limit_price": chase_p,
+                    "hard_stop_loss": sl_p,
+                    "tp1_price": tp1_p,
+                    "tp2_price": tp2_p,
+                    "deterministic_rr_ratio": rr_num or 0.0,
+                }
+            )
+            seen_sids.add(sid)
+            recorded += 1
+
+        for w_it in watchlist:
+            sid = str(w_it.get("stock_id") or "").strip()
+            if not sid or sid in seen_sids:
+                continue
+            close_v = _lookup_close(sid)
+            if close_v <= 0:
+                continue
+            sname, sector = _lookup_name_sector(sid, w_it)
+            row = row_map.get(sid) or {}
+            ma17_v = _parse_optional_num(row.get("MA17"))
+            buy_hi = round(ma17_v, 2) if (ma17_v and 0 < ma17_v < close_v) else round(close_v * 0.97, 2)
+            store.record_signal(
+                {
+                    "signal_date": sig_date_str,
+                    "strategy_id": strategy_id,
+                    "pick_category": CATEGORY_WATCHLIST,
+                    "stock_id": sid,
+                    "stock_name": sname,
+                    "sector_name": sector,
+                    "regime_state": regime_str,
+                    "scanner_signal_type": SIGNAL_STYLE_B_PULLBACK,
+                    "ai_verdict_grade": "WATCHLIST",
+                    "execution_strategy_type": "WATCHLIST_WAIT",
+                    "close_t": close_v,
+                    "ideal_buy_zone_low": round(buy_hi * 0.98, 2),
+                    "ideal_buy_zone_high": buy_hi,
+                    "chase_limit_price": round(close_v, 2),
+                    "hard_stop_loss": round(close_v * 0.92, 2),
+                    "tp1_price": round(close_v * 1.10, 2),
+                    "deterministic_rr_ratio": 0.0,
+                }
+            )
+            seen_sids.add(sid)
+            recorded += 1
+
+        for a_it in avoid:
+            sid = str(a_it.get("stock_id") or "").strip()
+            if not sid or sid in seen_sids:
+                continue
+            close_v = _lookup_close(sid)
+            if close_v <= 0:
+                continue
+            sname, sector = _lookup_name_sector(sid, a_it)
+            store.record_signal(
+                {
+                    "signal_date": sig_date_str,
+                    "strategy_id": strategy_id,
+                    "pick_category": CATEGORY_AVOID,
+                    "stock_id": sid,
+                    "stock_name": sname,
+                    "sector_name": sector,
+                    "regime_state": regime_str,
+                    "scanner_signal_type": SIGNAL_RIGHT_BREAKOUT,
+                    "ai_verdict_grade": GRADE_REJECT_TRAP,
+                    "execution_strategy_type": "NO_TRADE",
+                    "close_t": close_v,
+                    "chase_limit_price": round(close_v * 1.03, 2),
+                    "hard_stop_loss": round(close_v * 0.92, 2),
+                    "tp1_price": round(close_v * 1.08, 2),
+                    "deterministic_rr_ratio": 0.0,
+                }
+            )
+            seen_sids.add(sid)
+            recorded += 1
+
+        return recorded
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] 訊號留痕寫入失敗（略過）：{exc}")
+        return 0
+
+
+def wantgoo_chart_url(stock_id: str) -> str:
+    """回傳玩股網個股技術線圖直達連結（上市與上櫃網址一致）。"""
+    return f"https://www.wantgoo.com/stock/{str(stock_id).strip()}/technical-chart"
+
+
+def _extract_trade_levels_for_chart(
+    decision: Mapping[str, object] | None,
+    audit_records: Mapping[str, Mapping[str, object]] | None,
+    stock_id: str,
+) -> dict[str, float] | None:
+    """提取個股之 TP1 / TP2 / 低接支撐區 / 硬停損數值，供 K 線圖疊加水平標線。"""
+    if not decision:
+        return None
+    top_picks = decision.get("top_picks")
+    if not isinstance(top_picks, Sequence):
+        return None
+    target_pick = next(
+        (p for p in top_picks if isinstance(p, Mapping) and str(p.get("stock_id")) == str(stock_id)),
+        None,
+    )
+    if target_pick is None:
+        return None
+
+    from signal_audit_service import parse_plan_price
+
+    aud = (audit_records or {}).get(str(stock_id)) or (
+        target_pick.get("audit") if isinstance(target_pick.get("audit"), Mapping) else {}
+    ) or {}
+    levels: dict[str, float] = {}
+    tp1 = _parse_optional_num(aud.get("TP1_Target_Or_POC")) or parse_plan_price(target_pick.get("target_price_1"))
+    tp2 = _parse_optional_num(aud.get("TP2_Target_Price")) or parse_plan_price(target_pick.get("target_price_2"))
+    sl = _parse_optional_num(aud.get("Hard_Stop_Loss")) or parse_plan_price(
+        target_pick.get("stop_loss_price"), pick="low"
+    )
+    tiers = [
+        p
+        for p in (
+            _parse_optional_num(aud.get("Tier1_Entry_Price")) or parse_plan_price(aud.get("Tier1_Entry_Plan")),
+            _parse_optional_num(aud.get("Tier2_Entry_Price")) or parse_plan_price(aud.get("Tier2_Entry_Plan")),
+            _parse_optional_num(aud.get("Tier3_Entry_Price")) or parse_plan_price(aud.get("Tier3_Entry_Plan")),
+        )
+        if p is not None and p > 0
+    ]
+    if tp1 and tp1 > 0:
+        levels["tp1"] = float(tp1)
+    if tp2 and tp2 > 0 and (not tp1 or tp2 > tp1):
+        levels["tp2"] = float(tp2)
+    if sl and sl > 0:
+        levels["stop_loss"] = float(sl)
+    if tiers:
+        levels["buy_zone_low"] = float(min(tiers))
+        levels["buy_zone_high"] = float(max(tiers))
+    return levels or None
 
 
 # --------------------------------------------------------------------------- #
@@ -2863,12 +3178,14 @@ def chart_url(stock_id: str) -> str | None:
 
 
 def _links(stock_id: str, war_room_url: str | None) -> str:
+    parts = [f"[📈 玩股網技術線圖]({wantgoo_chart_url(stock_id)})"]
     if war_room_url:
-        return f"[📊 全方位戰情室（含財報+K線）]({war_room_url})"
-    chart = chart_url(stock_id)
-    if chart:
-        return f"[📈 K 線圖]({chart})"
-    return ""
+        parts.append(f"[📊 全方位戰情室（含財報+K線）]({war_room_url})")
+    else:
+        chart = chart_url(stock_id)
+        if chart:
+            parts.append(f"[📈 K 線圖]({chart})")
+    return " ｜ ".join(parts)
 
 
 def _row_lookup(frame: pd.DataFrame) -> dict[str, dict[str, object]]:
@@ -3456,6 +3773,18 @@ async def run_pipeline(
         }
     if decision is not None:
         decision = merge_pre_filtered_avoid(decision, pre_filtered_avoid)
+    if bool(_cfg(config, "enable_signal_audit", False)) and not dry_run and pre_filtered_avoid:
+        _record_v62_decision_signals(
+            config=config,
+            output_root=output_root,
+            target_date=target_date,
+            strategy_id="alignment_2130",
+            market_regime=market_regime,
+            top_picks=[],
+            watchlist=[],
+            avoid=pre_filtered_avoid,
+            row_map=_row_lookup(selected_all),
+        )
 
     # 只要有經過 AI 分析，即確保所有完成深度分析的標的皆已生成戰情室 HTML 並發布至 GitHub，
     # 且 war_room_url 確實寫入 00_Watchlist_Master（供後續寫入 AI_Daily_Picks 與 Discord 連結使用）。
@@ -3465,12 +3794,25 @@ async def run_pipeline(
             report = res_data.get("report")
             if report is None:
                 continue
-            need_publish = not bool(getattr(report, "war_room_url", None))
+            trade_levels = _extract_trade_levels_for_chart(decision, audit_records, sid)
+            need_publish = (not bool(getattr(report, "war_room_url", None))) or (
+                bool(trade_levels) and not dry_run
+            )
             if need_publish:
                 try:
-                    report.war_room_url = await analyzer.render_and_publish_war_room_html(
-                        sid, getattr(report, "ai_text", "")
-                    )
+                    if trade_levels:
+                        try:
+                            report.war_room_url = await analyzer.render_and_publish_war_room_html(
+                                sid, getattr(report, "ai_text", ""), trade_levels=trade_levels
+                            )
+                        except TypeError:
+                            report.war_room_url = await analyzer.render_and_publish_war_room_html(
+                                sid, getattr(report, "ai_text", "")
+                            )
+                    else:
+                        report.war_room_url = await analyzer.render_and_publish_war_room_html(
+                            sid, getattr(report, "ai_text", "")
+                        )
                 except Exception as error:  # noqa: BLE001
                     print(f"[warn] {sid} 戰情室發布失敗：{error}")
 
@@ -3809,6 +4151,18 @@ async def run_rebound_pipeline(
                 }
             if decision is not None:
                 decision = merge_pre_filtered_avoid(decision, pre_filtered_avoid)
+            if bool(_cfg(config, "enable_signal_audit", False)) and not dry_run and pre_filtered_avoid:
+                _record_v62_decision_signals(
+                    config=config,
+                    output_root=output_root,
+                    target_date=target_date,
+                    strategy_id="rebound_2200",
+                    market_regime=market_regime,
+                    top_picks=[],
+                    watchlist=[],
+                    avoid=pre_filtered_avoid,
+                    row_map=_row_lookup(selected),
+                )
 
             # 只要有經過 AI 分析，即確保所有反彈標的皆生成戰情室 HTML 並發布至 GitHub，且 war_room_url 寫入 00_Watchlist_Master
             if ai_results:
@@ -3817,12 +4171,25 @@ async def run_rebound_pipeline(
                     report = res_data.get("report")
                     if report is None:
                         continue
-                    need_publish = not bool(getattr(report, "war_room_url", None))
+                    trade_levels = _extract_trade_levels_for_chart(decision, audit_records, sid)
+                    need_publish = (not bool(getattr(report, "war_room_url", None))) or (
+                        bool(trade_levels) and not dry_run
+                    )
                     if need_publish:
                         try:
-                            report.war_room_url = await analyzer.render_and_publish_war_room_html(
-                                sid, getattr(report, "ai_text", "")
-                            )
+                            if trade_levels:
+                                try:
+                                    report.war_room_url = await analyzer.render_and_publish_war_room_html(
+                                        sid, getattr(report, "ai_text", ""), trade_levels=trade_levels
+                                    )
+                                except TypeError:
+                                    report.war_room_url = await analyzer.render_and_publish_war_room_html(
+                                        sid, getattr(report, "ai_text", "")
+                                    )
+                            else:
+                                report.war_room_url = await analyzer.render_and_publish_war_room_html(
+                                    sid, getattr(report, "ai_text", "")
+                                )
                         except Exception as error:  # noqa: BLE001
                             print(f"[warn] {sid} 戰情室發布失敗：{error}")
                     if getattr(report, "war_room_url", None):
