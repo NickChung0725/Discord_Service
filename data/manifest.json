@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-19 22:00:19",
+  "updated_at": "2026-11-19 22:05:17",
   "available_dates": [
     "2026-11-19",
     "2026-11-18",
@@ -53,9 +53,9 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 87
         },
         {
           "date": "2026-11-18",
@@ -368,9 +368,9 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 89
         },
         {
           "date": "2026-11-18",
@@ -506,7 +506,7 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
+          "category": "AVOID",
           "rank": null,
           "score": null
         },
@@ -769,9 +769,9 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
+          "category": "TOP_PICK",
+          "rank": 5,
+          "score": 83
         },
         {
           "date": "2026-11-18",
@@ -1717,9 +1717,9 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 95
         },
         {
           "date": "2026-11-18",
@@ -1929,7 +1929,7 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
+          "category": "AVOID",
           "rank": null,
           "score": null
         },
@@ -2059,7 +2059,7 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
+          "category": "AVOID",
           "rank": null,
           "score": null
         },
@@ -2088,9 +2088,9 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 93
         },
         {
           "date": "2026-11-10",
@@ -2414,7 +2414,7 @@
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
+          "category": "WATCHLIST",
           "rank": null,
           "score": null
         }
