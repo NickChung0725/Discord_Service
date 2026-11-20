@@ -1,6 +1,7 @@
 {
-  "updated_at": "2026-11-19 22:05:17",
+  "updated_at": "2026-11-20 22:00:17",
   "available_dates": [
+    "2026-11-20",
     "2026-11-19",
     "2026-11-18",
     "2026-11-17",
@@ -22,8 +23,7 @@
     "2026-10-26",
     "2026-10-23",
     "2026-10-22",
-    "2026-10-21",
-    "2026-10-20"
+    "2026-10-21"
   ],
   "strategies_catalog": [
     {
@@ -38,10 +38,10 @@
     }
   ],
   "rolling_30d_summary": {
-    "settled_trades": 6,
-    "win_rate_pct": 33.3,
-    "profit_factor": 0.14,
-    "false_negative_rate_pct": 15.8
+    "settled_trades": 13,
+    "win_rate_pct": 15.4,
+    "profit_factor": 0.05,
+    "false_negative_rate_pct": 12.2
   },
   "stock_search_index": {
     "1216": {
@@ -366,6 +366,13 @@
       "war_room_url": "charts/2207_fund.html",
       "appearances": [
         {
+          "date": "2026-11-20",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
           "category": "TOP_PICK",
@@ -504,6 +511,13 @@
       "war_room_url": "charts/2323_fund.html",
       "appearances": [
         {
+          "date": "2026-11-20",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
           "category": "AVOID",
@@ -582,13 +596,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-20",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -650,13 +657,6 @@
         },
         {
           "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 2,
-          "score": 85
-        },
-        {
-          "date": "2026-10-20",
           "strategy_id": "alignment_2130",
           "category": "TOP_PICK",
           "rank": 2,
@@ -1181,13 +1181,6 @@
           "category": "WATCHLIST",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-20",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -1353,21 +1346,6 @@
         }
       ]
     },
-    "3010": {
-      "stock_name": "華立",
-      "sector": "電子通路業",
-      "wantgoo_url": "https://www.wantgoo.com/stock/3010/technical-chart",
-      "war_room_url": "charts/3010_fund.html",
-      "appearances": [
-        {
-          "date": "2026-10-20",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 3,
-          "score": 86
-        }
-      ]
-    },
     "3017": {
       "stock_name": "奇鋐",
       "sector": "散熱模組與水冷散熱",
@@ -1491,13 +1469,6 @@
         },
         {
           "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 1,
-          "score": 90
-        },
-        {
-          "date": "2026-10-20",
           "strategy_id": "alignment_2130",
           "category": "TOP_PICK",
           "rank": 1,
@@ -1714,6 +1685,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/3293/technical-chart",
       "war_room_url": "charts/3293_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-20",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
@@ -2057,6 +2035,13 @@
       "war_room_url": "charts/3714_fund.html",
       "appearances": [
         {
+          "date": "2026-11-20",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
           "category": "AVOID",
@@ -2395,13 +2380,6 @@
           "category": "AVOID",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-20",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -2519,21 +2497,6 @@
           "date": "2026-11-04",
           "strategy_id": "rebound_2200",
           "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
-        }
-      ]
-    },
-    "6277": {
-      "stock_name": "宏正",
-      "sector": "電腦及週邊設備業",
-      "wantgoo_url": "https://www.wantgoo.com/stock/6277/technical-chart",
-      "war_room_url": "charts/6277_fund.html",
-      "appearances": [
-        {
-          "date": "2026-10-20",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
           "rank": null,
           "score": null
         }
@@ -2947,13 +2910,6 @@
           "category": "TOP_PICK",
           "rank": 3,
           "score": 78
-        },
-        {
-          "date": "2026-10-20",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -2969,21 +2925,6 @@
           "category": "TOP_PICK",
           "rank": 3,
           "score": 84
-        }
-      ]
-    },
-    "8476": {
-      "stock_name": "台境*",
-      "sector": "綠能環保",
-      "wantgoo_url": "https://www.wantgoo.com/stock/8476/technical-chart",
-      "war_room_url": "charts/8476_fund.html",
-      "appearances": [
-        {
-          "date": "2026-10-20",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
-          "rank": null,
-          "score": null
         }
       ]
     },

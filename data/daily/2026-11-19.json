@@ -1,6 +1,6 @@
 {
   "date": "2026-11-19",
-  "last_verified_date": "2026-11-19",
+  "last_verified_date": "2026-11-20",
   "market_overview": {
     "light": "🔴紅燈 (空頭防禦警戒)",
     "regime_state": "RED_DEFENSIVE",
@@ -55,8 +55,24 @@
             "stop_loss": 720.0
           },
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 1,
+            "latest_close": 754.0,
+            "period_low": 749.0,
+            "period_high": 783.0,
+            "effective_entry_price": 768.52,
+            "entry_fill_status": "FILLED_PULLBACK",
+            "filled_tiers_text": "第1+2+3批(100%)",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ 命中第1+2+3批(100%) (均價 768.5)",
+            "outcome_badge": "⏳ 持有觀察中 (第 1 日，現價 754.0)",
+            "mfe_pct": 1.88,
+            "mae_pct": -2.54,
+            "pain_badge": "📉 最大套牢 -2.5% / 最高浮盈 +1.9%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "details": {
             "bull_thesis": "具備頂級軟體授權護城河，2026Q3毛利率高達97.60%、營益率擴張至61.65%（QoQ+1.86%、YoY+4.12%），ROE達76.50%且零有息負債。合約負債連3季增至3.29億元，近3月營收平均年增22.94%，本業年化前瞻PE僅17.1倍低於同業中位數，兼具4.55%殖利率與海外授權高成長動能。｜籌碼底氣：外資與投信近20日同步大買4,414張與424張，融資使用率僅2.13%且近20日續減611張，呈現標準外資與投信長線鎖碼、散戶退場之極佳籌碼結構。｜技術與支撐定位：五線均線完全多頭排列，MA17(780.82)與MA45(771.38)斜率向上；KD於77高檔、MACD翻紅。外資與投信近20日大買4,414張與424張，融資連減至1,500張(使用率2.13%)，籌碼極度安定，下檔771~781元具法人成本與均線雙重鐵板。",
@@ -97,8 +113,24 @@
             "stop_loss": 76.2
           },
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 1,
+            "latest_close": 77.5,
+            "period_low": 77.5,
+            "period_high": 80.0,
+            "effective_entry_price": 79.59,
+            "entry_fill_status": "FILLED_PULLBACK",
+            "filled_tiers_text": "第1+2+3批(100%)",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ 命中第1+2+3批(100%) (均價 79.6)",
+            "outcome_badge": "⏳ 持有觀察中 (第 1 日，現價 77.5)",
+            "mfe_pct": 0.52,
+            "mae_pct": -2.63,
+            "pain_badge": "📉 最大套牢 -2.6% / 最高浮盈 +0.5%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "details": {
             "bull_thesis": "特殊製劑與疫苗旺季發酵，2026Q3營益率攀升至30.87%（QoQ+1.38%、YoY+1.86%）展現三率擴張硬實力，ROE達23.01%且為淨現金結構。10月營收年增36.48%，Q4首月達成Q3營收36.9%確定強勢季增；本業前瞻PE僅8.4倍（同業比值0.42x），配息殖利率高達5.58%，攻守兼備。｜籌碼底氣：外資與投信近20日聯手買超3,608張與468張，外資持股比升至25.28%，融資使用率僅0.77%且持續退場，籌碼由機構法人高度鎖定。｜技術與支撐定位：隨大盤震盪回測MA45(80.30)，中長期均線MA45/117/189維持多頭上揚，KD修正至57.5、RSI為47.4。11/19拉回時外資逆勢大買615張，近20日外資買超3,608張、投信買超468張，融資使用率僅0.77%，下檔78.3~80.3元支撐強勁。",
@@ -139,8 +171,24 @@
             "stop_loss": 504.0
           },
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 1,
+            "latest_close": 516.0,
+            "period_low": 516.0,
+            "period_high": 550.0,
+            "effective_entry_price": 535.06,
+            "entry_fill_status": "FILLED_PULLBACK",
+            "filled_tiers_text": "第1+2+3批(100%)",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ 命中第1+2+3批(100%) (均價 535.1)",
+            "outcome_badge": "⏳ 持有觀察中 (第 1 日，現價 516.0)",
+            "mfe_pct": 2.79,
+            "mae_pct": -3.56,
+            "pain_badge": "📉 最大套牢 -3.6% / 最高浮盈 +2.8%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "details": {
             "bull_thesis": "台灣車市絕對龍頭，2026Q3單季EPS 10.29元推升TTM EPS達40.93元登頂，ROE高達25.54%。單季自由現金流達39.63億元（OCF/NI達170.68%），合約負債18.94億元支撐在手訂單，連續7個月營收正年增，歷史PE僅13.34倍且具3.66%殖利率，長線價值穩固。｜籌碼底氣：千張大戶持股高達83.27%，外資近20日穩健買超751張，融資餘額僅26張（使用率0.02%），籌碼極度乾淨且由長線機構控盤。｜技術與支撐定位：大盤重挫日逆勢收漲1.49%報546元，五線均線呈多頭排列(MA3>MA17>MA45>MA117>MA189)，KD黃金交叉升至68.5、MACD翻紅。外資單日大買302張，融資僅26張(0.02%)，千張大戶持股83.27%，籌碼極度乾淨。",
@@ -181,8 +229,24 @@
             "stop_loss": 73.8
           },
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 1,
+            "latest_close": 75.0,
+            "period_low": 74.2,
+            "period_high": 78.8,
+            "effective_entry_price": 77.72,
+            "entry_fill_status": "FILLED_PULLBACK",
+            "filled_tiers_text": "第1+2+3批(100%)",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ 命中第1+2+3批(100%) (均價 77.7)",
+            "outcome_badge": "⏳ 持有觀察中 (第 1 日，現價 75.0)",
+            "mfe_pct": 1.39,
+            "mae_pct": -4.53,
+            "pain_badge": "📉 最大套牢 -4.5% / 最高浮盈 +1.4%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "details": {
             "bull_thesis": "食品與零售通路霸主，2026Q3單季自由現金流高達216.97億元（OCF/NI 416.72%），現金轉換週期僅9.11天展現極致通路議價權。ROE升至17.06%，TTM EPS 4.22元創近8季新高，合約負債高達209.39億元，本業前瞻PE僅13.6倍顯著低於同業，並積極拓展AI住家服務與超速配。｜籌碼底氣：投信近5日大買12,429張、外資近20日大買26,642張，土洋法人長線重倉鎖碼，千張大戶持股達86.85%，融資使用率僅0.05%。｜技術與支撐定位：大盤暴跌下僅小跌0.13%收78.7元，力守MA17(78.74)與MA45(77.02)多頭架構，KD金叉向上(58.1/48.9)。投信近5日狂買12,429張，11/19外資回補4,495張，融資使用率僅0.05%，77.0~78.3元為土洋法人密集鎖碼成本區。",
@@ -223,8 +287,24 @@
             "stop_loss": 49.5
           },
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 1,
+            "latest_close": 53.0,
+            "period_low": 50.5,
+            "period_high": 57.7,
+            "effective_entry_price": 53.5,
+            "entry_fill_status": "FILLED_PULLBACK",
+            "filled_tiers_text": "第1+2+3批(100%)",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "✅ 命中第1+2+3批(100%) (均價 53.5)",
+            "outcome_badge": "⏳ 持有觀察中 (第 1 日，現價 53.0)",
+            "mfe_pct": 7.85,
+            "mae_pct": -5.61,
+            "pain_badge": "📉 最大套牢 -5.6% / 最高浮盈 +7.9%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "details": {
             "bull_thesis": "金融與政府大型系統整合商，2026Q3營益率擴張至4.39%（QoQ+0.63%、YoY+1.02%），ROE達15.24%。合約負債4.18億元充沛，10月營收爆發年增30.78%（MoM+10.75%），Q4首月達成率高達42.3%確立專案入帳旺季強勢季增，前瞻PE 17.7倍合理且殖利率達5.18%。｜籌碼底氣：外資近20日波段大買3,440張（5日買超1,746張），持股比例顯著拉升至8.60%，融資使用率僅9.16%，外資買盤底氣強勁。｜技術與支撐定位：短線自高點62.8元量縮拉回至MA45季線(54.25)，中長期均線MA45>MA117(53.56)>MA189(52.80)維持多頭，KD修正至52.1。11/19回檔時外資逆勢續買330張(近5日買超1,746張)，融資連3日減肥共260張，正好回測53.2~54.4元大量支撐區。",
@@ -240,8 +320,24 @@
           "reason": "前三季單季EPS皆破1元且投信外資大舉鎖碼，惟10月營收YoY轉負(-7.69%)且ROE 8.22%相較前五強爆發力稍遜，列入觀察名單追蹤營收動能。",
           "close_at_pick": 53.4,
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 1,
+            "latest_close": 49.6,
+            "period_low": 49.0,
+            "period_high": 53.0,
+            "effective_entry_price": 53.03,
+            "entry_fill_status": "FILLED_PULLBACK",
+            "filled_tiers_text": "",
+            "outcome_status": "STOP_LOSS_HIT",
+            "net_return_10d_pct": -7.35,
+            "entry_result_badge": "✅ 命中低接區間 (均價 53.0)",
+            "outcome_badge": "🛑 觸及硬停損 (報酬 -7.35%)",
+            "mfe_pct": 0.0,
+            "mae_pct": -7.6,
+            "pain_badge": "📉 最大套牢 -7.6% / 最高浮盈 +0.0%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "links": {
             "wantgoo": "https://www.wantgoo.com/stock/5876/technical-chart",
@@ -257,8 +353,24 @@
           "reason": "【Stage 0 硬性攔截】最近一季本業虧損（營益率 -4.55%）且合約負債 0.00 億 < 1 億，無訂單保護",
           "close_at_pick": 75.4,
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 1,
+            "latest_close": 68.6,
+            "period_low": 68.6,
+            "period_high": 73.4,
+            "effective_entry_price": 72.76,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "STOP_LOSS_HIT",
+            "net_return_10d_pct": -4.66,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 72.8)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-9.0%)",
+            "mfe_pct": 0.88,
+            "mae_pct": -5.72,
+            "pain_badge": "📉 最大套牢 -5.7% / 最高浮盈 +0.9%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "links": {
             "wantgoo": "https://www.wantgoo.com/stock/3714/technical-chart",
@@ -272,8 +384,24 @@
           "reason": "觸發系統FAKE_REVENUE_DILUTION警訊，2026Q3毛利率季減3.77%、營益率季減2.18%，營收成長但雙率季減顯著，依選拔鐵律予以剔除。",
           "close_at_pick": 247.0,
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 1,
+            "latest_close": 224.5,
+            "period_low": 223.5,
+            "period_high": 238.0,
+            "effective_entry_price": 238.69,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "STOP_LOSS_HIT",
+            "net_return_10d_pct": -4.8,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 238.7)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-9.1%)",
+            "mfe_pct": 0.0,
+            "mae_pct": -6.36,
+            "pain_badge": "📉 最大套牢 -6.4% / 最高浮盈 +0.0%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "links": {
             "wantgoo": "https://www.wantgoo.com/stock/3617/technical-chart",
@@ -287,8 +415,24 @@
           "reason": "2026Q3業外獲利佔稅前達90.79%，本質形同股票投資基金，且本業前瞻PE高達32倍（同業比值1.6x）估值溢價過高，近8季FCF多為結構性流出。",
           "close_at_pick": 11.05,
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 1,
+            "latest_close": 10.15,
+            "period_low": 10.1,
+            "period_high": 10.85,
+            "effective_entry_price": 10.6,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "STOP_LOSS_HIT",
+            "net_return_10d_pct": -4.06,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 10.6)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-8.1%)",
+            "mfe_pct": 2.36,
+            "mae_pct": -4.72,
+            "pain_badge": "📉 最大套牢 -4.7% / 最高浮盈 +2.4%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "links": {
             "wantgoo": "https://www.wantgoo.com/stock/2323/technical-chart",

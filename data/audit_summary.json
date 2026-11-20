@@ -1,24 +1,24 @@
 {
-  "updated_at": "2026-11-19 22:05:17",
+  "updated_at": "2026-11-20 22:00:17",
   "overall": {
-    "settled_trades": 6,
-    "win_rate_pct": 33.3,
-    "profit_factor": 0.14,
-    "false_negative_rate_pct": 15.8,
+    "settled_trades": 13,
+    "win_rate_pct": 15.4,
+    "profit_factor": 0.05,
+    "false_negative_rate_pct": 12.2,
     "whipsaw_count": 0
   },
   "by_strategy": {
     "alignment_2130": {
-      "settled_trades": 4,
+      "settled_trades": 8,
       "win_rate_pct": 0.0,
       "profit_factor": 0.0,
-      "false_negative_rate_pct": 16.7,
+      "false_negative_rate_pct": 13.0,
       "whipsaw_count": 0
     },
     "rebound_2200": {
-      "settled_trades": 2,
-      "win_rate_pct": 100.0,
-      "profit_factor": 99.0,
+      "settled_trades": 5,
+      "win_rate_pct": 40.0,
+      "profit_factor": 0.24,
       "false_negative_rate_pct": 0.0,
       "whipsaw_count": 0
     }
@@ -26,10 +26,10 @@
   "weekly": [
     {
       "period": "2026-W47",
-      "settled_trades": 2,
-      "win_rate_pct": 100.0,
-      "profit_factor": 99.0,
-      "false_negative_rate_pct": 17.4,
+      "settled_trades": 9,
+      "win_rate_pct": 22.2,
+      "profit_factor": 0.09,
+      "false_negative_rate_pct": 12.9,
       "whipsaw_count": 0
     },
     {
@@ -37,17 +37,17 @@
       "settled_trades": 4,
       "win_rate_pct": 0.0,
       "profit_factor": 0.0,
-      "false_negative_rate_pct": 13.3,
+      "false_negative_rate_pct": 11.1,
       "whipsaw_count": 0
     }
   ],
   "monthly": [
     {
       "period": "2026-11",
-      "settled_trades": 6,
-      "win_rate_pct": 33.3,
-      "profit_factor": 0.14,
-      "false_negative_rate_pct": 15.8,
+      "settled_trades": 13,
+      "win_rate_pct": 15.4,
+      "profit_factor": 0.05,
+      "false_negative_rate_pct": 12.2,
       "whipsaw_count": 0
     }
   ]
