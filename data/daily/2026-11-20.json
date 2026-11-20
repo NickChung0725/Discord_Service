@@ -4,7 +4,7 @@
   "market_overview": {
     "light": "🔴紅燈 (空頭防禦警戒)",
     "regime_state": "RED_DEFENSIVE",
-    "recommended_exposure_pct": 50,
+    "recommended_exposure_pct": 40,
     "summary": "🔴紅燈｜TAIEX 收盤 36,033.29（17MA 42,071.66／45MA 45,515.39／117MA 45,299.50／189MA 42,077.35）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 6,317.8 億（單日 -334.7 億 / 5日 -768.4 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
     "us_market": ""
   },
@@ -12,67 +12,135 @@
     {
       "id": "alignment_2130",
       "tab_name": "🔥 21:30 右側順勢強勢股",
-      "status": "PENDING_AI",
-      "status_badge": "⏳ 等待 21:30 AI 審計",
+      "status": "READY",
+      "status_badge": "",
       "total_candidates": 4,
-      "analyzed_count": 0,
-      "ai_model": "",
-      "strategy_comment": "⏳ 等待 21:30 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
-      "recommended_exposure_pct": null,
+      "analyzed_count": 4,
+      "ai_model": "gemini-4-argon",
+      "strategy_comment": "隔夜費半與台積電ADR跌逾2.4%，VIX飆破30，台股破季線且大盤單日重挫6.23%，屬空頭防禦期。惟大盤融資單日斷頭大減334.7億（5日減768億），清洗浮額近尾聲。總倉位嚴控於40%，嚴禁市價追價，鎖定高ROE、法人逆勢買超之績優股分三階於下檔大量支撐區低接。",
+      "recommended_exposure_pct": 40,
       "has_false_negative_alert": false,
-      "top_picks": [],
-      "watchlist": [],
-      "avoid": [],
-      "pending_candidates": [
+      "top_picks": [
+        {
+          "rank": 1,
+          "stock_id": "3293",
+          "stock_name": "鈊象",
+          "sector": "數位遊戲研發與博弈授權",
+          "score": 94,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": 55.0,
+          "tactical_type": "🎯 強勢股拉回三階低接（依附117MA/189MA與下檔大量POC）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3293/technical-chart",
+            "war_room": "charts/3293_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 754.0,
+            "chase_limit": 760.0,
+            "weighted_avg_entry": 733.4,
+            "tier1": {
+              "price": 750.0,
+              "text": "【第1批 30% 試單】745.00~750.00元｜回測上升117MA(750.35)與0.5黃金分割(753)，量縮止穩且KD不破45時低接。"
+            },
+            "tier2": {
+              "price": 737.0,
+              "text": "【第2批 40% 核心】725.00~737.00元｜回測60日最大量POC(739)、189MA(731.5)與大量支撐區#1(720~731)，見長下影線承接。"
+            },
+            "tier3": {
+              "price": 712.0,
+              "text": "【第3批 30% 黃金坑】700.00~712.00元｜大盤急殺回測大量支撐區#2(698~709)與8/31爆量鐵板低點(701)，法人逆勢護盤觸發。"
+            },
+            "tp1": 789.0,
+            "tp2": 832.0,
+            "stop_loss": 685.0
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "具備97.6%頂級毛利率與61.65%營益率(YoY+4.12%)之極致護城河，ROE高達76.5%且零有息負債。近3月營收加權YoY+21.9%，Q4首月達成率33%進度穩健。本業前瞻PE僅16.3倍顯著低於同業中位數20倍，搭配4.77%高殖利率與充沛FCF，長線創高底氣極強。｜籌碼底氣：標準「法人鎖碼、散戶退場」結構：外資近20日大買4,258張、投信買超553張，同期融資大減658張(使用率僅2.07%)，籌碼安定度極高。｜技術與支撐定位：隨大盤重挫收754元跌破17MA/45MA，但精準守住上升117MA(750.35)，KD修正至53.9、RSI 44.2。外資與投信大跌日逆勢買超159張與59張（近20日外資大買4,258張），融資連減至1,458張，下檔739元POC與720~731元大量區鐵板支撐強勁。",
+            "invalidation_rule": "有效跌破685元且3日無法站回700元，或外資與投信出現單日合計賣超逾1,500張之棄守訊號。"
+          }
+        },
+        {
+          "rank": 2,
+          "stock_id": "2207",
+          "stock_name": "和泰車",
+          "sector": "汽車銷售與租賃通路",
+          "score": 88,
+          "outlook_verdict": "高度可信",
+          "allocation_weight_pct": 45.0,
+          "tactical_type": "🎯 強勢股拉回三階低接（依附大量POC與117MA/189MA價值底）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2207/technical-chart",
+            "war_room": "charts/2207_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 516.0,
+            "chase_limit": 520.0,
+            "weighted_avg_entry": 508.1,
+            "tier1": {
+              "price": 515.0,
+              "text": "【第1批 30% 試單】512.00~515.00元｜回測60日大量支撐區#1(514~518)與布林下軌(511)，量縮止跌時首波試單。"
+            },
+            "tier2": {
+              "price": 509.0,
+              "text": "【第2批 40% 核心】505.00~509.00元｜回測上升117MA(508.98)與前波多重長紅低點(505~508)，KD落底金叉時核心承接。"
+            },
+            "tier3": {
+              "price": 500.0,
+              "text": "【第3批 30% 黃金坑】496.00~500.00元｜極端洗盤回測上升189MA年線(497.21)與4%殖利率保護鐵底(500元)，外資續買觸發。"
+            },
+            "tp1": 537.0,
+            "tp2": 564.0,
+            "stop_loss": 474.0
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "受惠日本商用車併表與三大品牌穩健銷售，TTM EPS攀升至40.93元歷史高檔，ROE達25.54%，單季FCF高達39.63億元(OCF/NI 170.7%)。合約負債18.94億元印證終端需求，目前PE僅12.6倍且具3.88%殖利率保護，屬典型低估值高獲利龍頭。｜籌碼底氣：千張大戶持股高達83.27%，外資近20日買超938張，融資餘額僅27張(使用率0.02%)，籌碼由長線機構與大戶高度控盤。｜技術與支撐定位：收516元長黑跌破17MA/45MA，但剛好回測60日大量支撐區#1(514~518元)與0.786回檔位，下檔117MA(508.98)與189MA(497.21)維持翻揚。大跌日外資逆勢大買196張，融資僅27張極度乾淨，千張大戶鎖碼83.27%，下檔具備極強籌碼與估值保護。",
+            "invalidation_rule": "收盤跌破474元且外資由買轉為連續大賣超，或月營收與商用車併表動能顯著衰退時無條件退場。"
+          }
+        }
+      ],
+      "watchlist": [
         {
           "stock_id": "2323",
           "stock_name": "中環",
           "sector": "光碟片與記憶媒體製造",
-          "close": 10.15,
-          "signal": "即將金叉",
-          "vol_status": "📈 溫和放量 (1.34x｜5MA>20MA)",
+          "reason": "10月營收YoY+32.39%且本業三率轉佳、PB僅0.49倍；惟2026Q3業外佔比高達90.79%(受股市波動大)，且扣除業外後之本業前瞻PE達29.4倍高於同業，故列為觀察名單。",
+          "close_at_pick": 10.15,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
           "links": {
             "wantgoo": "https://www.wantgoo.com/stock/2323/technical-chart",
             "war_room": "charts/2323_fund.html"
           }
-        },
+        }
+      ],
+      "avoid": [
         {
           "stock_id": "3714",
           "stock_name": "富采",
           "sector": "LED與Micro LED光電元件",
-          "close": 68.6,
-          "signal": "剛金叉起漲",
-          "vol_status": "💧 量縮整理 (0.73x)",
+          "reason": "【Stage 0 硬性攔截】最近一季本業虧損（營益率 -4.55%）且合約負債 0.00 億 < 1 億，無訂單保護",
+          "close_at_pick": 68.6,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
           "links": {
             "wantgoo": "https://www.wantgoo.com/stock/3714/technical-chart",
             "war_room": "charts/3714_fund.html"
           }
-        },
-        {
-          "stock_id": "2207",
-          "stock_name": "和泰車",
-          "sector": "汽車銷售與租賃通路",
-          "close": 516.0,
-          "signal": "剛金叉起漲",
-          "vol_status": "📈 溫和放量 (1.60x｜5MA>20MA)",
-          "links": {
-            "wantgoo": "https://www.wantgoo.com/stock/2207/technical-chart",
-            "war_room": "charts/2207_fund.html"
-          }
-        },
-        {
-          "stock_id": "3293",
-          "stock_name": "鈊象",
-          "sector": "數位遊戲研發與博弈授權",
-          "close": 754.0,
-          "signal": "剛金叉起漲",
-          "vol_status": "📈 溫和放量 (1.35x｜5MA>20MA)",
-          "links": {
-            "wantgoo": "https://www.wantgoo.com/stock/3293/technical-chart",
-            "war_room": "charts/3293_fund.html"
-          }
         }
-      ]
+      ],
+      "pending_candidates": []
     }
   ]
 }
