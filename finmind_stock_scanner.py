@@ -969,6 +969,7 @@ def build_strategic_tech_and_chip_package(
     peer_median_pe: float | None = None,
     annual_cash_dividend: float | None = None,
     selection_mode: str = "trend",
+    table_days: int = 20,
 ) -> dict[str, object]:
     """SASD v6.1：為 AI #3 組裝單一績優股之「20日逐日價量均線指標籌碼合一表」與「三大大量支撐定位器 + 60/120日結構錨點」。"""
     norm = _normalize_ohlcv(prices)
@@ -1176,12 +1177,13 @@ def build_strategic_tech_and_chip_package(
         div_4pct_floor = round_tw_tick(annual_cash_dividend / 0.04)
         val_floors.append(f"4%殖利率保護價={div_4pct_floor:.2f}元")
 
-    # 3) 組裝近 20 個交易日「價、量、五線均線、KD/RSI/MACD、外資與投信、融資」合一逐日大表
+    # 3) 組裝近 table_days 個交易日「價、量、五線均線、KD/RSI/MACD、外資與投信、融資」合一逐日大表
+    w_table = enriched.tail(max(1, int(table_days))).copy()
     table_lines = [
         "| 日期 | 開盤 | 最高 | 最低 | 收盤 | 漲跌% | K棒特徵 | 量(張)/20MA量 | MA3 | MA17 | MA45 | MA117 | MA189 | K9/D9 | RSI14 | MACD柱 | 外資(張) | 投信(張) | 融資增減(餘額) |",
         "|:---|---:|---:|---:|---:|---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for _, r in w20.iterrows():
+    for _, r in w_table.iterrows():
         c_tag = _classify_candle_shadow(float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
         f_str = f"{r['foreign_net_lots']:+.0f}" if pd.notna(r.get("foreign_net_lots")) else "-"
         t_str = f"{r['trust_net_lots']:+.0f}" if pd.notna(r.get("trust_net_lots")) else "-"
@@ -1312,7 +1314,7 @@ def build_strategic_tech_and_chip_package(
         ),
         "- **🛡️ 基本面價值鐵底參考**：" + (" ｜ ".join(val_floors) if val_floors else "依長均線與前波低點防守"),
         f"- **🧭 Python 預設三階回檔低接參考區（禁止現價 {close_t:.2f} 追高）**：第1批(30%) {t1_ref}｜第2批(40%) {t2_ref}｜第3批(30%) {t3_ref}｜硬停損參考 {hard_sl:.2f}｜TP1參考 {tp1_def:.2f}",
-        "- **📊 近 20 個交易日「價、量、五線歷史均線、KD/RSI/MACD、外資與投信、融資」逐日對齊明細表**：",
+        f"- **📊 近 {len(w_table)} 個交易日「價、量、五線歷史均線、KD/RSI/MACD、外資與投信、融資」逐日對齊明細表**：",
         "",
         *table_lines,
     ]
@@ -1327,7 +1329,11 @@ def build_strategic_tech_and_chip_package(
         "lower_support_nodes": lower_support_nodes,
         "key_bullish_bars": key_bullish_bars,
         "trust_vwap_20d": trust_vwap_20,
+        "trust_vwap_60d": trust_vwap_60,
         "foreign_vwap_20d": foreign_vwap_20,
+        "foreign_vwap_60d": foreign_vwap_60,
+        "top_inst_days": top_inst_days,
+        "ma_deduction_line": " ｜ ".join(ma_deduction_parts),
         "tier1_default": t1_ref,
         "tier2_default": t2_ref,
         "tier3_default": t3_ref,
@@ -1339,6 +1345,7 @@ def build_strategic_tech_and_chip_package(
         "tp1_price": tp1_def,
         "rs_beta": rs_beta_info,
         "tdcc_summary": tdcc_summary_info,
+        "daily_table_markdown": "\n".join(table_lines),
         "prompt_block": "\n".join(prompt_lines),
     }
 

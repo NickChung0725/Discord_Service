@@ -4,6 +4,24 @@
 
 ---
 
+## [v6.2.3] - 2026-11-23
+### ✨ 新增功能 & 🔧 優化與修正 — 台新持股連續劇記憶閉環（22:45 ➔ 08:15 ➔ `portfolio-advisor` Skill）
+* **擴充 `05_Position_Thesis_Memory` 三階建倉藍圖、波段分批買進帳本與滾動戰略日記（[`taishin/taishin_config.py`](/taishin/taishin_config.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * `TAISHIN_SHEET_SCHEMAS["05_Position_Thesis_Memory"]` 尾端擴充 6 個欄位：`Allocation_Weight_Pct`、`Tier1_Entry_Plan`、`Tier2_Entry_Plan`、`Tier3_Entry_Plan`、`wave_buy_log`（波段分批買進紀錄）與 `recent_battle_log`（滾動戰略日記）。
+  * **同日零股自動合併批次（`wave_buy_log`）**：`compute_holding_waves_from_statements()` 與 `_resolve_wave_buy_log()` 將同一交易日的多筆買單自動合併為同一批（如 `已買 1 批：第1批(2026-11-18) 買 50 股 @ 788.0 元`），並支援跨 7 日對帳單同步視窗增量合併；客觀記錄已買批次與原定 `Tier1~3` 計畫，由 AI 根據剩餘資金與支撐位導引**加碼價位區間與進場觸發條件**（不強行預設固定買進股數）。
+  * **雙軌滾動戰略日記（`recent_battle_log`）**：置頂保留 `[YYYY-MM-DD 建倉]` 初始錨點，每日由 `08:15 morning-brief`（`AI_MODEL_HIGH`）寫入 `[YYYY-MM-DD 盤前晨報]`（操作標籤、防守價、掛單指令與劇本檢核），並由 `22:45 sync-memory` 以 **0-Token 純 Python** 寫入 `[YYYY-MM-DD 盤後事實]`（當日買賣或「無買賣操作（續抱 N 股）」＋收盤價、漲跌幅、均線位階＋外資/投信/融資單日變化），即使當日未交易亦完整保留連續 5 個交易日之「晨報預判 vs. 盤後事實」閉環。
+  * **既有 `OPEN` 記憶卡無縫自動回補**：`reconcile_position_memory()` 針對已建倉之 `OPEN` / `TP1_PARTIAL_TAKEN` 記憶卡，若缺漏 `Tier1~3_Entry_Plan`、`wave_buy_log` 或 `recent_battle_log`，自動從歷史嚴選榜單、本地 `prices.csv` 近 10 日 K 線與 `.state/daily_chips/{stock_id}.csv` 回補完整日記與三階藍圖，且嚴格鎖死原 `initial_tp1` / `initial_tp2` / `initial_sl` 不漂移。
+* **升級 `08:15 morning-brief` 注入「近 3~5 日美股＋近 5 日大盤融資＋個股近 5 日價量籌碼與下檔大量支撐定位包」（[`taishin/macro_context.py`](/taishin/macro_context.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)、[`taishin/taishin_config.py`](/taishin/taishin_config.py)）**：
+  * **國際美股近 3~5 日連續軌跡**：`fetch_yahoo_quote_snapshot()` 提取近 3~4 個美東交易日之收盤與單日漲跌幅序列（`recent_3d`、`trend_3d_str`），於 `fetch_global_macro_context()` 輸出 `近 3~5 日國際關鍵指標連續軌跡`（如 `SOX`、`TSM ADR`、`NVDA`、`VIX`、`TWD=X` 連續變化），讓晨報一眼判讀恐慌是在升溫還是鈍化。
+  * **台股大盤與融資近 5 日軌跡**：`load_local_technical_context()` 呼叫 `build_market_daily_trend_block(..., days=5)` 注入 `market_regime["daily_trend_block_5d"]` 至晨報 Prompt Section 1。
+  * **個股近 5 日價量籌碼表與下檔大量支撐定位器**：`build_strategic_tech_and_chip_package()` 新增 `table_days: int = 20` 參數（AI #3 維持 20 日，08:15 晨報傳入 `table_days=5`），為每檔嚴選庫存股注入近 5 日 OHLC/均線/KD/RSI/MACD/外資/投信/融資逐日小表，以及現價下方分價量最大支撐區（`Lower Support POC #1/#2`）、近 60 日爆量紅 K 防守低點、投信/外資 60d 買超成本均價（`VWAP`）、均線扣抵與相對大盤強弱（`RS / 60d Beta`）。
+  * **昨晚嚴選再度入榜聯動（`find_latest_pick_reselection`）**：21:30 / 22:00 選股維持 100% 獨立客觀；當已持有之波段庫存股再度入選昨晚最新 `AI_Daily_Picks` 或 `Rebound_Watchlist` 時，於晨報 Section 2 新星榜加註 `📌【已在您的波段庫存中】`，並於該股持倉作戰卡自動附上 `🔥【昨晚最新 AI 嚴選再度入榜】` 與最新低接支撐參考（原建倉 `initial_tp1/tp2` 維持鎖死）。
+  * **晨報 Prompt 新增「規則 0：連續劇記憶校準與三階分批子彈導引鐵則」**，並同步升級 `dump-context` 與 [`.agent/skills/portfolio-advisor/SKILL.md`](/.agent/skills/portfolio-advisor/SKILL.md)。
+* **修復 `--dump-prompt-only` 庫存曝險載入參數錯誤（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：修正 `dump_strategic_layout_prompt_only()` 呼叫 `load_portfolio_exposure_inputs()` 時誤傳 `prices` DataFrame 之問題，改為正確傳入 `(daily_dir, _taxonomy_sector_resolver(config))`。
+* **補充單元測試（[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)）**：涵蓋三階藍圖繼承、同日零股合併批次、盤前晨報＋盤後事實雙軌戰略日記、既有 `OPEN` 卡無縫回補、嚴選再度入榜標註與美股 3 日連續軌跡。
+
+---
+
 ## [v6.2.2] - 2026-11-23
 ### 🔧 優化與修正 — 修復大盤融資餘額時間軸錯位 1 日 Bug 與 21:30 過期快取自動補刷
 * **修復 `fetch_market_margin_snapshot()` 未核對官方交易日導致融資錯位 1 日之問題（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)）**：

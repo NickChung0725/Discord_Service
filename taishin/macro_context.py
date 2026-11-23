@@ -202,6 +202,61 @@ def fetch_yahoo_quote_snapshot(
             except (OSError, TypeError, ValueError):
                 as_of_date = ""
 
+        # Build recent 3~5 trading-day close & daily change % trajectory
+        series_points: list[tuple[str, float]] = []
+        for idx_pt, (ts_val, c_val) in enumerate(valid_points):
+            d_label = ""
+            if ts_val:
+                try:
+                    d_label = datetime.fromtimestamp(int(ts_val), tz=timezone.utc).strftime("%Y-%m-%d")
+                except (OSError, TypeError, ValueError):
+                    d_label = ""
+            key_label = d_label or f"T-{len(valid_points) - idx_pt}"
+            if series_points and series_points[-1][0] == key_label:
+                series_points[-1] = (key_label, c_val)
+            else:
+                series_points.append((key_label, c_val))
+
+        if series_points:
+            last_d, last_c = series_points[-1]
+            if abs(last_c - latest_price) / latest_price < 0.03:
+                series_points[-1] = (as_of_date or last_d, latest_price)
+            elif as_of_date and as_of_date != last_d:
+                series_points.append((as_of_date, latest_price))
+
+        recent_3d: list[dict[str, Any]] = []
+        if len(series_points) >= 2:
+            start_idx = max(1, len(series_points) - 4)
+            for i in range(start_idx, len(series_points)):
+                d_str, cur_c = series_points[i]
+                prev_c = series_points[i - 1][1]
+                pct = ((cur_c - prev_c) / prev_c * 100.0) if prev_c > 0 else 0.0
+                recent_3d.append(
+                    {
+                        "date": d_str if not d_str.startswith("T-") else "",
+                        "close": round(cur_c, 2),
+                        "change_pct": round(pct, 2),
+                    }
+                )
+        elif latest_price > 0:
+            recent_3d.append(
+                {
+                    "date": as_of_date,
+                    "close": round(latest_price, 2),
+                    "change_pct": round(change_pct, 2),
+                }
+            )
+
+        is_level_gauge = yahoo_symbol in ("^VIX", "TWD=X")
+        step_strs: list[str] = []
+        for step in recent_3d[-4:]:
+            mm_dd = f"{step['date'][5:]} " if len(str(step.get("date", ""))) >= 10 else ""
+            if is_level_gauge:
+                step_strs.append(f"{mm_dd}{step['close']:.2f} ({step['change_pct']:+.2f}%)")
+            else:
+                step_strs.append(f"{mm_dd}{step['change_pct']:+.2f}% (收{step['close']:.2f})")
+        trend_3d_str = " ➔ ".join(step_strs)
+
         return {
             "symbol": yahoo_symbol,
             "price": round(latest_price, 2),
@@ -209,6 +264,8 @@ def fetch_yahoo_quote_snapshot(
             "change": round(change, 2),
             "change_pct": round(change_pct, 2),
             "as_of_date": as_of_date,
+            "recent_3d": recent_3d,
+            "trend_3d_str": trend_3d_str,
         }
     except Exception as err:  # noqa: BLE001
         logger.warning("Failed to parse Yahoo macro response for %s: %s", yahoo_symbol, err)
@@ -385,6 +442,7 @@ def fetch_global_macro_context(
             break
 
     chip_parts: list[str] = []
+    trajectory_lines: list[str] = []
     for _, key, label in MACRO_SYMBOLS:
         q = quotes.get(key)
         if not q:
@@ -393,6 +451,9 @@ def fetch_global_macro_context(
             chip_parts.append(f"{label} {q['price']} ({q['change_pct']:+.2f}%)")
         else:
             chip_parts.append(f"{label} {q['change_pct']:+.2f}%")
+        t_str = str(q.get("trend_3d_str") or "").strip()
+        if t_str:
+            trajectory_lines.append(f"  * {label} ({key})：{t_str}")
 
     compact_line = " ｜ ".join(chip_parts) if chip_parts else "國際指數暫無連線報價"
     date_tag = f"（美東交易日 {us_as_of_date} 收盤）" if us_as_of_date else ""
@@ -401,6 +462,9 @@ def fetch_global_macro_context(
         f"- 國際盤氣候：{risk_tone}（{risk_note}）",
         f"- 隔夜關鍵指標{date_tag}：{compact_line}",
     ]
+    if trajectory_lines:
+        prompt_lines.append("- 近 3~5 日國際關鍵指標連續軌跡（判讀恐慌升溫/鈍化與外資匯率趨勢）：")
+        prompt_lines.extend(trajectory_lines)
     is_post_market = str(context_mode or "").strip().lower() == "post_market"
     tw_d = str(tw_latest_date or "").strip()
     if is_post_market and us_as_of_date and tw_d and us_as_of_date < tw_d:
@@ -424,6 +488,7 @@ def fetch_global_macro_context(
         "quotes": quotes,
         "headlines": headlines,
         "compact_line": compact_line,
+        "trajectory_lines": trajectory_lines,
         "prompt_block": "\n".join(prompt_lines),
     }
 

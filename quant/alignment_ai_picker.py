@@ -4615,7 +4615,7 @@ def dump_strategic_layout_prompt_only(
         print(f"[dump-prompt] 初始化財報快取失敗（改以純價格預覽）：{exc}")
 
     try:
-        holdings, holding_prices = load_portfolio_exposure_inputs(prices)
+        holdings, holding_prices = load_portfolio_exposure_inputs(daily_dir, _taxonomy_sector_resolver(config))
     except Exception as exc:  # noqa: BLE001
         print(f"[dump-prompt] 讀取台新庫存曝險失敗（略過）：{exc}")
         holdings, holding_prices = [], {}

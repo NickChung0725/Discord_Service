@@ -1399,6 +1399,350 @@ class TestTaishinNova(unittest.TestCase):
         self.assertNotIn("3311 閎暉", block)
         self.assertIn("無通過 AI 戰略布局之嚴選標的", block)
 
+    # ----------------------------------------------------------------------- #
+    # 10. SASD v6.2.3: Continuous Memory Closed Loop (3-Tier, Wave Buy Log, Rolling Battle Log, 5d Trajectory)
+    # ----------------------------------------------------------------------- #
+    def test_v623_continuous_memory_3tier_inheritance_wave_buy_log_and_rolling_battle_log(self) -> None:
+        import asyncio
+        from types import SimpleNamespace
+        import taishin_portfolio_service as svc
+
+        # Ensure schema has the 6 new v6.2.3 columns at the tail
+        mem_cols = TAISHIN_SHEET_SCHEMAS[MEMORY_SHEET_NAME]
+        for col in (
+            "Allocation_Weight_Pct",
+            "Tier1_Entry_Plan",
+            "Tier2_Entry_Plan",
+            "Tier3_Entry_Plan",
+            "wave_buy_log",
+            "recent_battle_log",
+        ):
+            self.assertIn(col, mem_cols)
+
+        picks_bundle = {
+            "ai_daily_picks": [
+                {
+                    "scan_date": "2026-11-17",
+                    "rank": 1,
+                    "category": "TOP_PICK",
+                    "stock_id": "2330",
+                    "stock_name": "台積電",
+                    "close_at_pick": 790.0,
+                    "tactical_type": "🎯 短中期波段 (5~20日)",
+                    "target_price_1": "850 元",
+                    "target_price_2": "900 元",
+                    "stop_loss_price": "733 元",
+                    "entry_thesis": "CoWoS 產能翻倍＋法人連買",
+                    "risk_note": "跌破 117MA 退場",
+                    "Allocation_Weight_Pct": "30%",
+                    "Tier1_Entry_Plan": "785~790 元（試單 30%）",
+                    "Tier2_Entry_Plan": "755~765 元（回測 45MA 加碼 40%）",
+                    "Tier3_Entry_Plan": "740~750 元（117MA 價值重錘 30%）",
+                }
+            ],
+            "rebound_watchlist": [],
+            "watchlist_master": {},
+        }
+
+        # User buys 20 shares and 30 shares on the SAME day (2026-11-18) -> must merge into 1 batch (50 shares @ 788.0)
+        statements_1118 = [
+            {"trade_date": "2026-11-18", "order_no": "A1", "stock_no": "2330", "action": "BUY", "filled_qty": 20, "filled_price": 785.0},
+            {"trade_date": "2026-11-18", "order_no": "A2", "stock_no": "2330", "action": "BUY", "filled_qty": 30, "filled_price": 790.0},
+        ]
+        tech_map = {
+            "2330": {
+                "close": 754.0,
+                "ma5": 775.0,
+                "ma17": 780.0,
+                "ma45": 768.0,
+                "ma117": 748.0,
+                "ma189": 720.0,
+                "recent_bars_by_date": {
+                    "2026-11-18": {
+                        "close": 788.0,
+                        "pct_chg": 0.51,
+                        "ma5": 786.0,
+                        "ma17": 782.0,
+                        "ma45": 770.0,
+                        "ma117": 747.0,
+                        "ma189": 719.0,
+                    },
+                    "2026-11-19": {
+                        "close": 754.0,
+                        "pct_chg": -4.31,
+                        "ma5": 775.0,
+                        "ma17": 780.0,
+                        "ma45": 768.0,
+                        "ma117": 748.0,
+                        "ma189": 720.0,
+                    },
+                },
+            }
+        }
+        raw_inv_1118 = [
+            {"stock_no": "2330", "stock_name": "台積電", "qty": 50, "avg_cost_price": 788.0, "current_price": 788.0}
+        ]
+        holdings_1118 = build_portfolio_holdings_rows(
+            raw_inv_1118,
+            statement_records=statements_1118,
+            tech_map=tech_map,
+            public_cache={},
+            snapshot_date=date(2026, 11, 18),
+        )
+
+        # Step 1: 2026-11-18 22:45 sync-memory creates card with 3-tier plans, 1 merged batch, and [11-18 建倉] + [11-18 盤後事實]
+        with patch.object(
+            svc,
+            "_load_daily_chip_map_for_stock",
+            return_value={
+                "2026-11-18": {"foreign_net_lots": 320.0, "trust_net_lots": 85.0, "margin_chg_lots": -45.0},
+                "2026-11-19": {"foreign_net_lots": 159.0, "trust_net_lots": 59.0, "margin_chg_lots": -42.0},
+            },
+        ):
+            mem_1118, _, _ = reconcile_position_memory(
+                existing_memory_rows=[],
+                holdings_rows=holdings_1118,
+                statement_records=statements_1118,
+                settlement_records=[],
+                picks_bundle=picks_bundle,
+                tech_map=tech_map,
+                as_of=date(2026, 11, 18),
+                is_pre_market=False,
+            )
+
+        card = mem_1118[0]
+        self.assertEqual(card["Allocation_Weight_Pct"], "30%")
+        self.assertEqual(card["Tier1_Entry_Plan"], "785~790 元（試單 30%）")
+        self.assertEqual(card["Tier2_Entry_Plan"], "755~765 元（回測 45MA 加碼 40%）")
+        self.assertEqual(card["Tier3_Entry_Plan"], "740~750 元（117MA 價值重錘 30%）")
+        self.assertEqual(card["wave_buy_log"], "已買 1 批：第1批(2026-11-18) 買 50 股 @ 788.0 元")
+        self.assertIn("[2026-11-18 建倉]", card["recent_battle_log"])
+        self.assertIn("[2026-11-18 盤後事實] 建倉買進 50股@788.00", card["recent_battle_log"])
+        self.assertIn("外資+320張、投信+85張、融資-45張", card["recent_battle_log"])
+
+        # Step 2: 2026-11-19 08:15 morning-brief runs pre-market (does NOT write 11-19 盤後事實 yet) and AI writes [2026-11-19 盤前晨報]
+        mem_1119_am, _, _ = reconcile_position_memory(
+            existing_memory_rows=mem_1118,
+            holdings_rows=holdings_1118,
+            statement_records=statements_1118,
+            settlement_records=[],
+            picks_bundle=picks_bundle,
+            tech_map=tech_map,
+            as_of=date(2026, 11, 19),
+            is_pre_market=True,
+        )
+        self.assertNotIn("[2026-11-19 盤後事實]", mem_1119_am[0]["recent_battle_log"])
+
+        captured_prompts: list[str] = []
+        fake_ai_1119 = """```json
+        {
+          "morning_battle_headline": "美股回檔測試支撐，2330 僅持有第1批試單，靜待第2批 755~765 區間承接。",
+          "positions": [
+            {
+              "position_id": "2026-11-18_2330",
+              "stock_no": "2330",
+              "ai_action_tag": "🟢 順勢續抱",
+              "recommended_trailing_stop": 733.0,
+              "thesis_intact": true,
+              "order_instruction": "第1批 50 股續抱，若盤中回測 755~765 元且量縮守穩可評估第2批低接。",
+              "pm_rationale": "昨日建倉第1批試單，法人續買融資減，保留第2/3批子彈於 Tier2 區間待命。"
+            }
+          ]
+        }
+        ```"""
+
+        async def _fake_vertex_1119(prompt: str, **kwargs: Any) -> Any:
+            captured_prompts.append(prompt)
+            return SimpleNamespace(text=fake_ai_1119, model_version="gemini-2.5-pro")
+
+        deep_fund_map = {
+            "2330": {
+                "strategic_tech_pkg": {
+                    "daily_table_markdown": "| 2026-11-18 | 788.0 (+0.5%) | 35,000 | +320 | +85 | -45 |",
+                    "lower_poc_1": "760.0 元",
+                    "lower_poc_2": "745.0 元",
+                    "vol_support_str": "2026-11-05 爆量紅K低點 748.0 元",
+                    "trust_vwap_60d": "772.5",
+                    "foreign_vwap_60d": "765.0",
+                    "rs_vs_twii_20d_pct": "+3.2%",
+                    "beta_60d": 1.15,
+                    "ma_deduction_line": "17MA扣抵 760 / 45MA扣抵 740",
+                }
+            }
+        }
+
+        with patch.object(svc, "ask_vertex_ai_with_meta", side_effect=_fake_vertex_1119):
+            enriched_1119, _, _, _ = asyncio.run(
+                svc.run_morning_battle_ai_review(
+                    mem_1119_am,
+                    agg_holdings={"2330": {"stock_no": "2330", "stock_name": "台積電", "qty": 50, "avg_cost_price": 788.0, "current_price": 788.0, "return_pct": 0.0, "unrealized_pnl": 0, "weight_pct": 15.0}},
+                    public_cache={},
+                    market_regime={"light": "🟡黃燈", "summary": "震盪整理", "daily_trend_block_5d": "### 📊 台股大盤與市場融資近 5 日逐日軌跡\n| 2026-11-18 | 22,500 |"},
+                    macro_context={"prompt_block": "- 近 3~5 日國際關鍵指標連續軌跡：\n  * 費半指數(SOX): 11-16 5000 (+1.0%) ➔ 11-17 4920 (-1.6%)"},
+                    eval_date=date(2026, 11, 19),
+                    tech_map=tech_map,
+                    deep_fund_map=deep_fund_map,
+                    picks_bundle=picks_bundle,
+                )
+            )
+
+        prompt_1119 = captured_prompts[0]
+        self.assertIn("台股大盤與市場融資近 5 日逐日軌跡", prompt_1119)
+        self.assertIn("近 3~5 日國際關鍵指標連續軌跡", prompt_1119)
+        self.assertIn("755~765 元（回測 45MA 加碼 40%）", prompt_1119)
+        self.assertIn("近 5 日滾動戰略日記 (`recent_battle_log`", prompt_1119)
+        self.assertIn("最新下檔大量支撐定位器", prompt_1119)
+        self.assertIn("近 5 個交易日「價、量、五線歷史均線", prompt_1119)
+        self.assertIn("[2026-11-19 盤前晨報] 🟢 順勢續抱", enriched_1119[0]["recent_battle_log"])
+
+        # Step 3: 2026-11-19 22:45 sync-memory (no trade on 11-19) appends [2026-11-19 盤後事實] while keeping [2026-11-19 盤前晨報]!
+        raw_inv_1119 = [
+            {"stock_no": "2330", "stock_name": "台積電", "qty": 50, "avg_cost_price": 788.0, "current_price": 754.0}
+        ]
+        holdings_1119 = build_portfolio_holdings_rows(
+            raw_inv_1119,
+            statement_records=statements_1118,
+            tech_map=tech_map,
+            public_cache={},
+            snapshot_date=date(2026, 11, 19),
+        )
+        with patch.object(
+            svc,
+            "_load_daily_chip_map_for_stock",
+            return_value={
+                "2026-11-18": {"foreign_net_lots": 320.0, "trust_net_lots": 85.0, "margin_chg_lots": -45.0},
+                "2026-11-19": {"foreign_net_lots": 159.0, "trust_net_lots": 59.0, "margin_chg_lots": -42.0},
+            },
+        ):
+            mem_1119_pm, _, _ = reconcile_position_memory(
+                existing_memory_rows=enriched_1119,
+                holdings_rows=holdings_1119,
+                statement_records=statements_1118,
+                settlement_records=[],
+                picks_bundle=picks_bundle,
+                tech_map=tech_map,
+                as_of=date(2026, 11, 19),
+                is_pre_market=False,
+            )
+
+        log_1119_pm = mem_1119_pm[0]["recent_battle_log"]
+        self.assertIn("[2026-11-18 建倉]", log_1119_pm)
+        self.assertIn("[2026-11-18 盤後事實]", log_1119_pm)
+        self.assertIn("[2026-11-19 盤前晨報]", log_1119_pm)
+        self.assertIn("[2026-11-19 盤後事實] 無買賣操作（續抱50股/均價788.00）｜收754.00(-4.31%)", log_1119_pm)
+        self.assertIn("外資+159張、投信+59張、融資-42張", log_1119_pm)
+        # Verify chronological ordering: 盤前晨報 comes before 盤後事實 on the same date
+        self.assertLess(log_1119_pm.index("[2026-11-19 盤前晨報]"), log_1119_pm.index("[2026-11-19 盤後事實]"))
+
+        # Step 4: Verify seamless backfill on an already-OPEN pre-v6.2.3 memory card without mutating locked TP1/TP2/SL
+        legacy_open_card = [
+            {
+                "position_id": "2026-11-18_2330",
+                "stock_no": "2330",
+                "stock_name": "台積電",
+                "status": "OPEN",
+                "entry_source": "AI_DAILY_TOP_PICK",
+                "source_scan_date": "2026-11-17",
+                "source_rank": "1",
+                "tactical_type": "波段",
+                "opened_date": "2026-11-18",
+                "initial_qty": 50,
+                "peak_qty": 50,
+                "current_qty": 50,
+                "avg_cost_price": 788.0,
+                "initial_tp1": 850.0,
+                "initial_tp2": 900.0,
+                "initial_sl": 733.0,
+                "trailing_stop": 733.0,
+                "entry_thesis": "CoWoS 產能翻倍",
+                "invalidation_rule": "跌破 117MA",
+                "last_eval_date": "2026-11-19",
+                "last_ai_action": "🟢 順勢續抱",
+                "last_ai_summary": "第1批續抱觀察 117MA",
+            }
+        ]
+        with patch.object(
+            svc,
+            "_load_daily_chip_map_for_stock",
+            return_value={
+                "2026-11-18": {"foreign_net_lots": 320.0, "trust_net_lots": 85.0, "margin_chg_lots": -45.0},
+                "2026-11-19": {"foreign_net_lots": 159.0, "trust_net_lots": 59.0, "margin_chg_lots": -42.0},
+            },
+        ):
+            backfilled_mem, _, _ = reconcile_position_memory(
+                existing_memory_rows=legacy_open_card,
+                holdings_rows=holdings_1119,
+                statement_records=statements_1118,
+                settlement_records=[],
+                picks_bundle=picks_bundle,
+                tech_map=tech_map,
+                as_of=date(2026, 11, 19),
+                is_pre_market=False,
+            )
+        bf_card = backfilled_mem[0]
+        self.assertEqual(bf_card["initial_tp1"], 850.0)
+        self.assertEqual(bf_card["initial_tp2"], 900.0)
+        self.assertEqual(bf_card["initial_sl"], 733.0)
+        self.assertEqual(bf_card["Tier2_Entry_Plan"], "755~765 元（回測 45MA 加碼 40%）")
+        self.assertEqual(bf_card["wave_buy_log"], "已買 1 批：第1批(2026-11-18) 買 50 股 @ 788.0 元")
+        self.assertIn("[2026-11-19 盤前晨報] 🟢 順勢續抱", bf_card["recent_battle_log"])
+        self.assertIn("[2026-11-19 盤後事實]", bf_card["recent_battle_log"])
+
+    def test_v623_reselection_annotation_and_macro_3d_trajectory(self) -> None:
+        from macro_context import fetch_yahoo_quote_snapshot
+        from taishin_portfolio_service import find_latest_pick_reselection
+
+        picks_bundle = {
+            "ai_daily_picks": [
+                {
+                    "scan_date": "2026-11-22",
+                    "rank": 1,
+                    "category": "TOP_PICK",
+                    "stock_id": "2330",
+                    "stock_name": "台積電",
+                    "close_at_pick": 755.0,
+                    "target_price_1": "860 元",
+                    "stop_loss_price": "730 元",
+                    "entry_thesis": "回測 117MA 下影線收腳",
+                    "Tier1_Entry_Plan": "750~755 元",
+                    "Tier2_Entry_Plan": "735~740 元",
+                }
+            ],
+            "rebound_watchlist": [],
+            "watchlist_master": {},
+        }
+        resel = find_latest_pick_reselection("2330", "2026-11-18", picks_bundle, source_scan_date="2026-11-17")
+        self.assertIsNotNone(resel)
+        assert resel is not None
+        self.assertEqual(resel["scan_date"], "2026-11-22")
+        self.assertIn("750~755 元", resel["tier1_plan"])
+
+        block = build_fresh_top_picks_block(picks_bundle, max_picks=3, tracked_stock_ids={"2330"})
+        self.assertIn("📌【已在您的波段庫存中", block)
+
+        # Verify macro_context 3~5 day trajectory extraction
+        fake_yahoo_json = {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {"regularMarketPrice": 4800.0, "chartPreviousClose": 5000.0},
+                        "timestamp": [1731888000, 1731974400, 1732060800, 1732147200],
+                        "indicators": {"quote": [{"close": [5200.0, 5100.0, 5000.0, 4800.0]}]},
+                    }
+                ]
+            }
+        }
+        fake_resp = MagicMock()
+        fake_resp.json.return_value = fake_yahoo_json
+        fake_session = MagicMock()
+        fake_session.get.return_value = fake_resp
+
+        snap = fetch_yahoo_quote_snapshot("^SOX", session=fake_session)
+        self.assertIsNotNone(snap)
+        assert snap is not None
+        self.assertEqual(len(snap["recent_3d"]), 3)
+        self.assertIn("➔", snap["trend_3d_str"])
+
 
 if __name__ == "__main__":
     unittest.main()

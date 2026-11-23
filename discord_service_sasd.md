@@ -1,8 +1,8 @@
 # Discord_Service 系統分析與設計規格書 (SASD)
 
 * **專案名稱**：Discord_Service — 台股量化分析、AI 雙層診斷與台新證券智慧作戰系統
-* **版本**：v6.0.0 (Single Source of Truth)
-* **最後更新日期**：2026-11-16
+* **版本**：v6.2.3 (Single Source of Truth)
+* **最後更新日期**：2026-11-23
 * **運行環境**：Google Cloud Platform (GCP Compute Engine) + Linux `systemd` + Python 3.11 (`uv`)
 
 ---
@@ -178,7 +178,7 @@ graph TB
 2. `02_Portfolio_Holdings`：即時庫存明細，包含成本均價、市價、損益率，以及技術面五均線 **`ma3`、`ma17`、`ma45`、`ma117`、`ma189`** 與開盤 AI 建議。
 3. `03_Settlement_And_PnL`：歷史交割與已實現損益紀錄。
 4. `04_DCA_0050_Tracker`：0050 每週不定期定額智慧尋底追蹤表。
-5. `05_Position_Thesis_Memory`：**AI 建倉記憶核心表**，鎖定 `initial_tp1`、`initial_tp2`、`initial_sl`、`trailing_stop`、`entry_thesis`、`invalidation_rule` 及 9 個確定性紅藍軍審計欄位。
+5. `05_Position_Thesis_Memory`：**AI 建倉記憶核心表（v6.2.3 擴充）**，鎖定 `initial_tp1`、`initial_tp2`、`initial_sl`、`trailing_stop`、`entry_thesis`、`invalidation_rule`、9 個確定性紅藍軍審計欄位，以及 **6 個連續劇記憶欄位**（`Allocation_Weight_Pct`、`Tier1_Entry_Plan`、`Tier2_Entry_Plan`、`Tier3_Entry_Plan`、`wave_buy_log` 波段分批買進帳本、`recent_battle_log` 盤前晨報＋盤後事實雙軌滾動戰略日記）。
 
 ---
 
@@ -383,38 +383,40 @@ flowchart TD
 
 * **觸發時機**：每週一至週五 08:15 (`taishin-morning-brief`)。
 * **餵給 AI 的完整資料清單 (Context Payload)**：
-  1. **隔夜國際總經數據 (`macro_context.py`)**：
-     * 費城半導體指數 (`^SOX`)、那斯達克 (`^IXIC`)、標普 500 (`^GSPC`) 漲跌幅。
-     * 台積電 ADR (`TSM`)、輝達 (`NVDA`) 漲跌幅。
-     * 恐慌指數 (`^VIX`) 水位與變化、美元兌台幣匯率 (`TWD=X`)。
+  1. **隔夜國際總經數據與近 3~5 日連續軌跡 (`macro_context.py`)**：
+     * 費城半導體指數 (`^SOX`)、那斯達克 (`^IXIC`)、標普 500 (`^GSPC`) 最新漲跌幅與 **近 3~4 個美東交易日連續收盤/漲跌幅軌跡 (`recent_3d` / `trend_3d_str`)**。
+     * 台積電 ADR (`TSM`)、輝達 (`NVDA`) 最新漲跌幅與近 3~4 日連續軌跡。
+     * 恐慌指數 (`^VIX`) 水位與近 3~4 日連續變化、美元兌台幣匯率 (`TWD=X`) 軌跡。
      * 系統量化判定之總經環境標籤：`RISK_ON`（積極偏多）、`NEUTRAL`（震盪分歧）、`RISK_OFF`（避險防守）。
-  2. **台股大盤紅綠燈快取**：
-     * 加權指數收盤價與 $\text{MA}_{17}, \text{MA}_{45}, \text{MA}_{117}, \text{MA}_{189}$ 相對位階。
+  2. **台股大盤紅綠燈與近 5 日大盤融資軌跡**：
+     * 加權指數收盤價與 $\text{MA}_{17}, \text{MA}_{45}, \text{MA}_{117}, \text{MA}_{189}$ 相對位階、櫃買（OTC）雙核心摘要。
+     * **台股大盤與市場融資近 5 日逐日軌跡表 (`daily_trend_block_5d`)**：呼叫 `build_market_daily_trend_block(..., days=5)` 注入近 5 個交易日大盤收盤、五線均線、KD/RSI/MACD 與大盤融資餘額單日增減序列。
   3. **帳戶資金與交割狀態**：
      * 今日與明日 ($T+1, T+2$) 應收付交割款淨額、帳戶可用現金水位。
-  4. **個別持股部位與建倉記憶對照**：
+  4. **個別持股部位、三階建倉進度、滾動戰略日記與近 5 日戰略定位包**：
      * 每檔庫存股之：代號、名稱、持有股數、成本均價、最新市價、未實現損益金額與百分比、佔總持倉權重 (`weight_pct`)。
+     * **三階建倉藍圖與波段分批進度 (`wave_buy_log`)**：原嚴選規劃之 `Allocation_Weight_Pct`、`Tier1_Entry_Plan`、`Tier2_Entry_Plan`、`Tier3_Entry_Plan`，以及由對帳單合併同日零股還原之客觀分批買進紀錄（如 `已買 1 批：第1批(2026-11-18) 買 50 股 @ 788.0 元`）。
+     * **滾動戰略日記 (`recent_battle_log`)**：置頂保留 `[YYYY-MM-DD 建倉]` 錨點，並按時間序排列近 5 個交易日成對之 `[YYYY-MM-DD 盤前晨報]`（前幾日 AI 給出的操作標籤、防守價與指令）與 `[YYYY-MM-DD 盤後事實]`（當日實際買賣或無買賣續抱、收盤價、均線得失與外資/投信/融資單日變化）。
+     * **個股近 5 日逐日價量籌碼表與下檔大量支撐定位包 (`strategic_tech_pkg`)**：呼叫 `build_strategic_tech_and_chip_package(..., table_days=5)` 注入近 5 日 OHLC+影線+量+五線均線+KD/RSI14/MACD+外資+投信+融資逐日對齊小表，以及現價下方最大量支撐區（`Lower Support POC #1/#2`）、近 60 日爆量紅 K 防守低點、投信/外資 60d 買超成本均價（`VWAP`）、均線未來 5 日扣抵與相對大盤強弱（`RS / 60d Beta`）。
      * 技術微結構與支撐位：該股最新 $\text{MA}_{17}, \text{MA}_{45}, \text{MA}_{117}, \text{MA}_{189}$、17MA/189MA 乖離率、`RSI(14)`、昨高/昨低、`ATR(14)`、60 日大量 POC、當日漲跌幅同業百分位 `daily_return_pr`、同細分產業 17MA 資金廣度 (`sector_breadth_pct`)、處置過熱預警 (`disposition_tag`)，以及右側棘輪防守參考 (`ratchet_stop_floor`)、左側結構支撐參考 (`left_side_structural_floor`) 與反彈第一反壓參考 (`rebound_resistance_target`)。
      * 深度基本面與籌碼微結構（由 `FundamentalCacheManager` + `FundamentalAnalyzer` 整合）：最新季報 EPS / 三率、`存貨 / 合約負債 / DIO / DSO`、單季 OCF / FCF、月營收 YoY/MoM、Phase 2 本業前瞻估值（`Implied Core Forward EPS` / `Sector PE Ratio` / `QTD Run-Rate` / 三率趨勢語意）、近 5 日外資/投信/融資與估算融資維持率、週集保 400/1000 張大戶底氣 (`tdcc_summary`)、日融資 K 棒效率 (`daily_margin_eff_tag`)、強制回補日曆與近 3 則個股新聞量價反應 (`recent_news`)。
      * 記憶庫錨定值：`initial_tp1`、`initial_tp2`、`initial_sl`、目前移動停利價 `trailing_stop`、`status`、當初買進理由 `entry_thesis`、失效紅線 `invalidation_rule`，以及建倉時紅藍軍審計備忘（`Audit_Grade`、`Execution_Tactic`、`Deterministic_RR`、`Bear_Case_Warning`、`Invalidation_Triggers`）。
-  5. **昨晚最新《AI 嚴選強勢潛力新星》（`fresh_top_picks_block` 雙池整合）**：
-     * 同時彙整最新掃描日順勢 `AI_Daily_Picks` (`TOP_PICK`) 與型態 A 回踩長均線反彈 `Rebound_Watchlist`，作為破線股執行 `🔄 趁彈減碼換股` 汰弱留強之機會成本對照；大盤紅燈雙核心路由 (`RegimeRouter.fetch_live_dual_regime`) 亦自動補齊加權與櫃買 OTC 雙指數視野。
-* **要求 AI 產出的內容（智慧雙軌決策引擎）**：
+  5. **昨晚最新《AI 嚴選強勢潛力新星》（`fresh_top_picks_block` 雙池整合與已持有庫存聯動）**：
+     * 同時彙整最新掃描日順勢 `AI_Daily_Picks` (`TOP_PICK`) 與型態 A 回踩長均線反彈 `Rebound_Watchlist`，作為破線股執行 `🔄 趁彈減碼換股` 汰弱留強之機會成本對照；若已持有之波段追蹤股再度入選昨晚最新嚴選榜單（`find_latest_pick_reselection`），自動於新星榜加註 `📌【已在您的波段庫存中】` 並於該股持倉作戰卡附上 `🔥【昨晚最新 AI 嚴選再度入榜】` 最新低接支撐參考（原建倉 `initial_tp1/tp2` 維持鎖死）。
+* **要求 AI 產出的內容（連續劇記憶校準 ＋ 智慧雙軌決策引擎）**：
   * 今日台股開盤跳空方向預判與資金控管總綱。
+  * **規則 0（連續劇記憶校準與三階分批子彈導引）**：先對照 `recent_battle_log` 檢驗前幾日晨報預期的支撐與籌碼劇本在盤後事實中是否兌現，再決定延續或修正策略；若 `wave_buy_log` 顯示僅買進第 1 批或第 2 批，須優先結合 `Tier2/Tier3_Entry_Plan` 與下檔大量支撐定位器給出下一批子彈的**加碼觀察價位區間與進場觸發條件**（不強行預設固定買進股數），並將今日決策寫回 `[YYYY-MM-DD 盤前晨報]`。
   * 逐檔持股之今日盤中具體操作指令與雙軌停損定錨：右側順勢嚴守 `ratchet_stop_floor`（達 TP1 執行風格 B 賣半鎖利）；跌破防線時透過四維度穿透審判區分「`🎯 逢低加碼` / `🛡️ 破線轉價值防守`（`thesis_intact=true` 可重定錨至左側結構防線）」與「`🔄 趁彈減碼換股` / `🚨 觸及停損` / `⚠️ 邏輯失效減碼`」。
 
 ---
 
-### 4.4 任務四：22:45 建倉記憶歸因與盤後持股健診
+### 4.4 任務四：22:45 建倉記憶歸因、三階進度對帳與 0-Token 盤後事實日記 (`sync-memory`)
 
 * **觸發時機**：每週一至週五 22:45 (`taishin-memory-sync`)。
-* **餵給 AI 的完整資料清單 (Context Payload)**：
-  * 持股當初建倉鎖定的 `entry_thesis`（例如：「看好 Q3 毛利率跳升與投信連買突破 45MA」）。
-  * 今日最新收盤價與 $\text{MA}_{17}, \text{MA}_{45}, \text{MA}_{117}, \text{MA}_{189}$ 跌破/站穩狀態。
-  * 最新三大法人買賣超變化、最新月營收與財報快取摘要。
-* **要求 AI 產出的內容**：
-  * **Thesis 存續性判定**：「進場理由強化」、「理由維持不變」或「進場理由已遭破壞（Thesis Broken）」。
-  * 若進場理由已遭破壞（即使尚未觸及價格停損 $SL$），提前發出主觀歸因預警，防止基本面或籌碼面轉空卻死守技術停損位。
+* **核心處理邏輯（0-Token 純 Python 確定性歸因與記帳）**：
+  * **波段切分與同日零股批次合併 (`wave_buy_log`)**：由 `01_Account_Statement` 還原未平倉波段，將同一交易日的多筆買單合併為同一批（如 `第1批(2026-11-18) 買 50 股 @ 788.0 元`），並支援跨 7 日對帳單視窗無損合併既有批次。
+  * **三階建倉藍圖繼承與既有 `OPEN` 卡無縫回補**：新倉匹配近 5 交易日 `AI_Daily_Picks` / `Rebound_Watchlist` 時，除鎖定 `initial_tp1`、`initial_tp2`、`initial_sl`、`entry_thesis` 與 9 個審計欄外，同步繼承 `Allocation_Weight_Pct`、`Tier1_Entry_Plan`、`Tier2_Entry_Plan`、`Tier3_Entry_Plan`；對於已建倉之既有 `OPEN` 記憶卡，若缺漏三階欄位或戰略日記，亦自動從歷史榜單與本地日線/籌碼快取無縫回補（絕不改動已鎖死之 `initial_tp1/tp2/sl`）。
+  * **0-Token 盤後事實驗證寫入 (`recent_battle_log`)**：自動結合當日對帳單買賣紀錄（無交易則記為 `無買賣操作（續抱 N 股/均價 X）`）、本地 `prices.csv` 實際收盤價/漲跌幅/均線位階，以及 `.state/daily_chips/{stock_id}.csv` 外資/投信/融資單日變化，寫入 `[YYYY-MM-DD 盤後事實]`，與當日早上 `08:15` 寫入之 `[YYYY-MM-DD 盤前晨報]` 成對保存近 5 個交易日（最多 10 行滾動紀錄 ＋ 置頂 `[建倉]` 行）。
 * **追蹤股公用快取自動保鮮**：
   * 於 `reconcile_position_memory(...)` 寫入 `05_Position_Thesis_Memory` 後，針對所有 `OPEN` / `TP1_PARTIAL_TAKEN` 追蹤股（非 `--dry-run` 時）呼叫 `FundamentalCacheManager.check_and_sync_stock(sno)` 自動同步最新季報、月營收與籌碼快取，確保隔日 08:15 `morning-brief` 取得最新實測數據；單檔失敗僅記錄警告，不影響排程完成。
 
@@ -465,6 +467,7 @@ flowchart TD
 
 | 版本號 | 發布日期 | 核心架構決策與改版重點 (Key Changes & ADRs) | 影響模組 |
 | :--- | :--- | :--- | :--- |
+| **v6.2.3** | 2026-11-23 | **台新持股連續劇記憶閉環（22:45 ➔ 08:15 ➔ `portfolio-advisor` Skill）**：<br/>1. **`05_Position_Thesis_Memory` 擴充 6 欄與既有 `OPEN` 卡無縫回補**：尾端新增 `Allocation_Weight_Pct`、`Tier1_Entry_Plan`、`Tier2_Entry_Plan`、`Tier3_Entry_Plan`、`wave_buy_log` 與 `recent_battle_log`；同日多筆零股買單自動合併為同一批（如 `已買 1 批：第1批(2026-11-18) 買 50 股 @ 788.0 元`），並對已建倉之 `OPEN` 記憶卡自動從歷史榜單與本地日線/籌碼快取回補三階計畫与日記（原 `initial_tp1/tp2/sl` 維持鎖死）。<br/>2. **雙軌滾動戰略日記 (`recent_battle_log`)**：置頂 `[YYYY-MM-DD 建倉]`，每日由 `08:15 morning-brief` (`AI_MODEL_HIGH`) 寫入 `[YYYY-MM-DD 盤前晨報]`，並由 `22:45 sync-memory` 以 0-Token 純 Python 寫入 `[YYYY-MM-DD 盤後事實]`（當日有無買賣＋收盤價/均線＋外資/投信/融資單日變化），保留近 5 個交易日（10 行）連續記憶。<br/>3. **`08:15 morning-brief` 注入近 3~5 日美股＋近 5 日大盤融資＋個股近 5 日價量籌碼與下檔大量支撐定位包**：`macro_context.py` 新增近 3~4 日美股指標連續軌跡（`recent_3d` / `trend_3d_str`）；`load_local_technical_context()` 注入 `build_market_daily_trend_block(..., days=5)`；`load_public_deep_fundamental_context()` 呼叫 `build_strategic_tech_and_chip_package(..., table_days=5)` 注入個股近 5 日價量籌碼表與下檔 `Lower Support POC #1/#2`、爆量紅 K 低點、法人 `VWAP`、RS/Beta；新增 `find_latest_pick_reselection()` 標註昨晚嚴選再度入榜之庫存股，並於 `TAISHIN_MORNING_BATTLE_PROMPT` 加入「規則 0：連續劇記憶校準與三階分批子彈導引鐵則」。 | `taishin/taishin_config.py`<br>`taishin/macro_context.py`<br>`taishin_portfolio_service.py`<br>`finmind_stock_scanner.py`<br>`quant/alignment_ai_picker.py`<br>`.agent/skills/portfolio-advisor/SKILL.md`<br>`tests/test_taishin_nova.py` |
 | **v6.2.2** | 2026-11-23 | **修復大盤融資時間軸錯位 1 日 Bug、21:30 過期快取補刷與 AI #3 戰略布局防呆升級**：<br/>1. `fetch_market_margin_snapshot()` 優先改打含全市場合計與明確交易日之 TWSE/TPEx RWD 端點，新增 `_parse_tw_api_date()` 嚴格以 API 實際交易日寫入 `market_margin_history.json`，加入上市櫃公告不同步對齊防呆與官方 `margin_chg_1d_yi`；`fetch_or_load_market_regime()` 於快取融資過期時自動補刷。<br/>2. 修正 `build_strategic_tech_and_chip_package()` 破線急殺股三階低接價倒掛（強制 `現價 >= t1 > t2 > t3 > 硬停損`）、明數印出本業前瞻 EPS、`build_market_daily_trend_block()` 補齊 OTC 摘要／防腦補聲明；`fetch_global_macro_context()` 支援 `post_market` 模式標註美東收盤日並防昨日美股重複計價；AI #3 Prompt 補齊破線防禦分流、庫存共伴曝險降權、`MA3~MA17` 與「外資與投信」（防腦補自營商）。<br/>3. 新增純本地 `compute_relative_strength_and_beta()`（5/20 日超額報酬 RS ＋ 60 日 Beta）、`summarize_tdcc_multiweek_trend()`（動態 400/1000 張門檻之近 8～12 週集保大戶／10 張以下散戶／總股東人數含基準日濃縮摘要）、放寬 AI #3 權重總和為 `<= 100%` 搭配 `R/R < 1.5` / `WAIT_OBSERVE` 留現金逃生閥與極端股災熔斷（VIX > 30 或費半 < -5% 壓低至 0%～20%），修正下檔大量支撐區嚴格低於現價，並於 `analyze-alignment` / `analyze-rebound` 新增 `--dump-prompt-only` 0-Token 全真 Prompt 預覽模式。 | `finmind_stock_scanner.py`<br>`taishin/macro_context.py`<br>`quant/fundamental_config.py`<br>`quant/alignment_ai_picker.py`<br>`taishin_portfolio_service.py`<br>`tests/test_margin_features.py`<br>`tests/test_rebound_v6.py` |
 | **v6.2.1** | 2026-11-19 | **Discord 選股推播單則精簡化與「先網頁、後通知」流程調整**：<br/>1. 透過 `finmind_scanner.json` 之 `discord_compact_mode: true`，將 19:00、21:30、22:00 Discord 公開選股推播瘦身為單則精簡卡片（保留總部連結、大盤水位、三批低接價／TP1／停損與玩股網直達），完整藍紅軍與淘汰明細改由戰情總部網頁呈現（私密帳務 08:15 / 13:15 / 22:45 與 `/stock_ai` 維持完整推播）。<br/>2. 調整 19:00 / 21:30 / 22:00 執行順序為先 `publish_portal_data()` 再推播 Discord，確保點擊連結即見最新資料。 | `quant/alignment_ai_picker.py`<br>`finmind_stock_scanner.py`<br>`finmind_scanner.json`<br>`tests/test_v62_step3_portal_publisher.py` |
 | **v6.2.0** | 2026-11-19 | **量化戰情總部網頁、打包器與 GitHub Git Trees 單次發布 (Step 3 & Step 4)**：<br/>1. **GitHub Git Trees API 單次提交與 30 交易日清理**：`github_uploader.py` 新增 `sync_portal_batch()`，以 Blob SHA 差量上傳、自動刪除超過 30 個交易日之遠端 `data/daily/*.json`（嚴格保護 `charts/` 永久不刪）並內建 HTTP 422 衝突重試。<br/>2. **本地單一事實來源與併發鎖**：新增 `services/portal_publisher.py` 以跨平台檔案鎖從本地 `signal_audit.db` 與 `daily/*` 全量重建 `manifest.json`、`audit_summary.json` 與每日 JSON（含 19:00 `PENDING_AI` 初選狀態與 `/stock_ai` 手動查詢索引），串接 19:00/21:30/22:00 排程、`/stock_ai` 與 `publish-portal` CLI。<br/>3. **純唯讀單頁戰情總部 (`web/index.html`) 與 Discord 首行連結**：暗黑看盤介面、T+0 明日掛單／T+1+ 歷史對答案雙模式自動切換、紅燈空手橫幅、玩股網單一外部看盤連結、`cache: "no-store"` 防快取，並實作 `768px` RWD 差異化（電腦右側抽屜＋7 點尺規；手機直接開新分頁＋單欄＋3 錨點進度條）；19:00/21:30/22:00 Discord 報告首行自動附戰情總部網址。 | `web/index.html`<br>`services/portal_publisher.py`<br>`services/github_uploader.py`<br>`finmind_stock_scanner.py`<br>`quant/alignment_ai_picker.py`<br>`services/stock_ai_command.py`<br>`finmind_scanner.json`<br>`tests/test_v62_step3_portal_publisher.py` |
