@@ -5180,7 +5180,7 @@ def dump_portfolio_context(
     agg = _aggregate_holdings_by_stock(holdings_rows)
     waves = compute_holding_waves_from_statements(statement_rows)
     today_iso = today.isoformat()
-    is_pre_market_dump = (as_of is None) and (datetime.now(TAIPEI_TZ).hour < 14)
+    is_pre_market_dump = (as_of is None) and (datetime.now(TAIPEI_TIMEZONE).hour < 14)
 
     active_cards: list[dict[str, Any]] = []
     for raw_mem in memory_rows:

@@ -982,7 +982,9 @@ class TestTaishinNova(unittest.TestCase):
         )
         with patch("taishin_portfolio_service.load_public_watchlist_cache", return_value={}):
             ctx = dump_portfolio_context(sheet_mgr=mock_mgr, refresh_live=False, include_macro=False, as_of=date(2026, 11, 2))
+            ctx_default_date = dump_portfolio_context(sheet_mgr=mock_mgr, refresh_live=False, include_macro=False)
         self.assertEqual(ctx["account_summary"]["tracked_positions_count"], 1)
+        self.assertEqual(ctx_default_date["account_summary"]["tracked_positions_count"], 1)
         self.assertNotIn("bank_balance", ctx["account_summary"])
         self.assertEqual(ctx["tracked_positions"][0]["initial_tp1"], 1120.0)
         self.assertEqual(ctx["tracked_positions"][0]["live_metrics"]["trim_plan"]["trim_qty"], 500)
