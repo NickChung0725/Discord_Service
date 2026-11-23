@@ -4,7 +4,7 @@
   "market_overview": {
     "light": "🔴紅燈 (空頭防禦警戒)",
     "regime_state": "RED_DEFENSIVE",
-    "recommended_exposure_pct": 50,
+    "recommended_exposure_pct": 20,
     "summary": "🔴紅燈｜TAIEX 收盤 36,811.89（17MA 41,509.51／45MA 45,314.27／117MA 45,224.75／189MA 資料不足）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 5,616.2 億（單日 -64.6 億 / 5日 -1470.0 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
     "us_market": ""
   },
@@ -39,6 +39,107 @@
           }
         }
       ],
+      "pending_candidates": []
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 2,
+      "analyzed_count": 2,
+      "ai_model": "gemini-4-neon",
+      "strategy_comment": "美東11/20費半暴跌10.73%、台積ADR跌9.48%觸發熔斷，惟已於11/23台股反映且VIX回落至28.99、黃仁勳復職緩解恐慌。大盤收36,811仍壓全均線下且MACD綠柱未縮，然5日融資斷頭大減1,470億，總倉嚴控20%，僅於長均線分批低接抗跌股。",
+      "recommended_exposure_pct": 20,
+      "has_false_negative_alert": false,
+      "top_picks": [
+        {
+          "rank": 1,
+          "stock_id": "2006",
+          "stock_name": "東和鋼鐵",
+          "sector": "電爐煉鋼與型鋼鋼筋",
+          "score": 85,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": 15.0,
+          "tactical_type": "🎯 型態A長均線三階低接（右腳止穩＋破線洗盤承接）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2006/technical-chart",
+            "war_room": "charts/2006_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 79.3,
+            "chase_limit": 80.0,
+            "weighted_avg_entry": 77.94,
+            "tier1": {
+              "price": 79.3,
+              "text": "【第1批 30% 試單】78.50~79.30元；117MA(79.6)右腳支撐區，待日KD低檔金叉(K9>D9)且MACD綠柱連縮觸發。"
+            },
+            "tier2": {
+              "price": 78.0,
+              "text": "【第2批 40% 核心】77.00~78.00元；破線洗盤測布林下軌(77.64)與11/23低點77.4，待長下影承接與外資賣壓竭盡。"
+            },
+            "tier3": {
+              "price": 76.5,
+              "text": "【第3批 30% 黃金坑】75.50~76.50元；上彎189MA(75.73)與前瞻PE不到8倍價值鐵底，極端殺盤縮量止穩承接。"
+            },
+            "tp1": 85.1,
+            "tp2": 95.9,
+            "stop_loss": 73.5
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "三率與ROE(17.44%)齊步擴張，Q3毛利率18.26%(YoY+4.24%)、營益率12.93%；合約負債49.33億創高鎖定訂單能見度，10月營收YoY+20.39%且Q4首月達標率35.0%。單季FCF達11.91億(OCF/NI 83.54%)，前瞻PE僅8.3倍配5.42%殖利率，長線價值極厚。｜籌碼底氣：本波回跌17.4%主因外資20日提款賣超3,712張，但投信逆勢買超374張，且融資同步減469張(使用率僅0.39%、維持率148.5%)，浮額清洗乾淨屬良性錯殺。｜技術與支撐定位：回測117MA(79.6)收79.3，K9(15.3)未金叉、RSI升至33.1、MACD綠柱初縮；5日RS+5.27%、Beta0.40抗跌。外資20日賣3,712張惟單日縮至-65張，投信買374張、融資減469張；11/20單週大戶81.4%。",
+            "invalidation_rule": "若帶量長黑收破73.5元硬停損、投信連3日轉大賣逾300張，或大盤破前低引爆系統性殺盤，無條件全數停損退場。"
+          }
+        },
+        {
+          "rank": 2,
+          "stock_id": "6834",
+          "stock_name": "天二科技",
+          "sector": "被動元件-晶片電阻",
+          "score": 74,
+          "outlook_verdict": "高度可信",
+          "allocation_weight_pct": 5.0,
+          "tactical_type": "🎯 型態A長均線三階低接（右腳止穩＋破線洗盤承接）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6834/technical-chart",
+            "war_room": "charts/6834_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 79.3,
+            "chase_limit": 78.0,
+            "weighted_avg_entry": 74.35,
+            "tier1": {
+              "price": 77.5,
+              "text": "【第1批 30% 試單】75.50~77.50元；嚴禁追漲停，待拉回POC#1上緣(77.8)與右腳止穩、KD金叉且MACD綠柱連縮。"
+            },
+            "tier2": {
+              "price": 74.5,
+              "text": "【第2批 40% 核心】72.00~74.50元；下檔大量支撐POC#1(69.6~77.8)中軸，待融資130.6%斷頭洗盤留長下影。"
+            },
+            "tier3": {
+              "price": 71.0,
+              "text": "【第3批 30% 黃金坑】69.60~71.00元；回測11/23左腳低點69.6與布林下軌68.77，須見外資續買且量縮止跌承接。"
+            },
+            "tp1": 94.6,
+            "tp2": 110.0,
+            "stop_loss": 68.0
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "受惠AI伺服器與電源應用強勁拉貨，10月營收YoY爆發+179.6%，Q4首月達成率達37.2%確立強勢季增；Q3毛利率27.08%(YoY+10.96%)、營益率跳升至16.42%且ROE達16.70%。前瞻PE已收斂至18.0倍(低於同業20倍)，單季FCF轉正，管理層產能滿載展望獲財報強勢印證。｜籌碼底氣：高點急殺52.8%回踩年線，但外資近20日逆勢大買3,373張(近5日+1,288張)、融資大減3,768張呈法人鎖碼；惟維持率130.6%須防短線斷頭洗盤，宜交由AI #3分批低接。｜技術與支撐定位：急殺測189MA(79.81)爆量漲停收79.3，MACD綠柱縮惟K9(17.3)未金叉；20日RS-18.95%、Beta1.69波動高。外資20日逆買3,373張、融資大減3,768張但維持率130.6%；11/20單週大戶59.2%。",
+            "invalidation_rule": "若帶量實體黑K收破68.0元左腳下緣、外資連2日轉大賣逾500張，或融資斷頭無買盤承接，立即停損撤出。"
+          }
+        }
+      ],
+      "watchlist": [],
+      "avoid": [],
       "pending_candidates": []
     }
   ]
