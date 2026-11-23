@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-23 21:18:07",
+  "updated_at": "2026-11-23 21:36:54",
   "available_dates": [
     "2026-11-23",
     "2026-11-20",
@@ -1886,7 +1886,7 @@
         {
           "date": "2026-11-23",
           "strategy_id": "alignment_2130",
-          "category": "PENDING_SCAN",
+          "category": "AVOID",
           "rank": null,
           "score": null
         },

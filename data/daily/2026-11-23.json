@@ -5,38 +5,41 @@
     "light": "🔴紅燈 (空頭防禦警戒)",
     "regime_state": "RED_DEFENSIVE",
     "recommended_exposure_pct": 50,
-    "summary": "🔴紅燈｜TAIEX 收盤 36,811.89（17MA 41,509.51／45MA 45,314.27／117MA 45,224.75／189MA 42,103.86）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 5,680.8 億（截至 11/20，單日 -637.0 億 / 5日 -1405.4 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
+    "summary": "🔴紅燈｜TAIEX 收盤 36,811.89（17MA 41,509.51／45MA 45,314.27／117MA 45,224.75／189MA 資料不足）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 5,616.2 億（單日 -64.6 億 / 5日 -1470.0 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
     "us_market": ""
   },
   "strategies": [
     {
       "id": "alignment_2130",
       "tab_name": "🔥 21:30 右側順勢強勢股",
-      "status": "PENDING_AI",
-      "status_badge": "⏳ 等待 21:30 AI 審計",
+      "status": "READY",
+      "status_badge": "",
       "total_candidates": 1,
-      "analyzed_count": 0,
-      "ai_model": "",
-      "strategy_comment": "⏳ 等待 21:30 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "analyzed_count": 1,
+      "ai_model": "gemini-4-neon",
+      "strategy_comment": "今日候選股皆被 Stage 0 硬性排雷攔截，無符合條件之進場標的。",
       "recommended_exposure_pct": null,
       "has_false_negative_alert": false,
       "top_picks": [],
       "watchlist": [],
-      "avoid": [],
-      "pending_candidates": [
+      "avoid": [
         {
           "stock_id": "3714",
           "stock_name": "富采",
           "sector": "LED與Micro LED光電元件",
-          "close": 68.6,
-          "signal": "剛金叉起漲",
-          "vol_status": "💧 量縮整理 (0.59x)",
+          "reason": "【Stage 0 硬性攔截】最近一季本業虧損（營益率 -4.55%）且合約負債 0.00 億 < 1 億，無訂單保護",
+          "close_at_pick": 68.6,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
           "links": {
             "wantgoo": "https://www.wantgoo.com/stock/3714/technical-chart",
             "war_room": "charts/3714_fund.html"
           }
         }
-      ]
+      ],
+      "pending_candidates": []
     }
   ]
 }

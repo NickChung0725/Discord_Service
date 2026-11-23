@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-23 21:18:07",
+  "updated_at": "2026-11-23 21:36:54",
   "overall": {
     "settled_trades": 16,
     "win_rate_pct": 12.5,
@@ -24,6 +24,14 @@
     }
   },
   "weekly": [
+    {
+      "period": "2026-W48",
+      "settled_trades": 0,
+      "win_rate_pct": null,
+      "profit_factor": null,
+      "false_negative_rate_pct": null,
+      "whipsaw_count": 0
+    },
     {
       "period": "2026-W47",
       "settled_trades": 11,
