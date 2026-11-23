@@ -5180,7 +5180,6 @@ def dump_portfolio_context(
     agg = _aggregate_holdings_by_stock(holdings_rows)
     waves = compute_holding_waves_from_statements(statement_rows)
     today_iso = today.isoformat()
-    is_pre_market_dump = (as_of is None) and (datetime.now(TAIPEI_TIMEZONE).hour < 14)
 
     active_cards: list[dict[str, Any]] = []
     for raw_mem in memory_rows:
@@ -5200,13 +5199,15 @@ def dump_portfolio_context(
             current_qty=cur_qty,
             avg_cost_price=avg_cost,
         )
+        t_info_sno = tech_map.get(sno) or {}
+        has_today_bar = today_iso in (t_info_sno.get("recent_bars_by_date") or {})
         mem["recent_battle_log"] = _refresh_position_battle_log(
             mem,
             wave_state=wave_for_sno,
             hold_info=hold,
-            tech_info=tech_map.get(sno),
+            tech_info=t_info_sno,
             today_iso=today_iso,
-            is_pre_market=is_pre_market_dump,
+            is_pre_market=not has_today_bar,
             reports_dir=reports_dir,
         )
         gk = build_tracked_position_gatekeeper_signals(mem, hold, tech_info=tech_map.get(sno))
@@ -5233,6 +5234,16 @@ def dump_portfolio_context(
     total_cost = sum(_to_int(r.get("total_cost", 0)) for r in holdings_rows)
     total_mv = sum(_to_int(r.get("market_value", 0)) for r in holdings_rows)
 
+    sorted_recent_trades = sorted(
+        statement_rows,
+        key=lambda r: (str(r.get("trade_date", "")), str(r.get("order_no", ""))),
+        reverse=True,
+    )[:15]
+    clean_recent_trades = [
+        {k: v for k, v in rec.items() if k != "raw_json"}
+        for rec in sorted_recent_trades
+    ]
+
     return {
         "as_of": today.isoformat(),
         "refresh_live": refresh_live,
@@ -5249,7 +5260,7 @@ def dump_portfolio_context(
         "tracked_positions": active_cards,
         "untracked_holdings": untracked_holdings,
         "recent_closed_positions": closed_cards,
-        "recent_trades": statement_rows[-15:],
+        "recent_trades": clean_recent_trades,
     }
 
 
