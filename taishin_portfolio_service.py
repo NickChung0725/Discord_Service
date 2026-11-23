@@ -2335,8 +2335,11 @@ def eval_dca_0050(
                 sorted_d = sorted(m_hist_data.keys())
                 today_k = today.isoformat()
                 cur_i = sorted_d.index(today_k) if today_k in sorted_d else len(sorted_d) - 1
-                cur_tot = float(m_hist_data[sorted_d[cur_i]].get("total_margin_yi") or 0.0)
-                if cur_i >= 1:
+                cur_rec = m_hist_data[sorted_d[cur_i]]
+                cur_tot = float(cur_rec.get("total_margin_yi") or 0.0)
+                if cur_rec.get("margin_chg_1d_yi") is not None:
+                    m_1d = round(float(cur_rec["margin_chg_1d_yi"]), 2)
+                elif cur_i >= 1:
                     m_1d = round(cur_tot - float(m_hist_data[sorted_d[cur_i - 1]].get("total_margin_yi") or 0.0), 2)
                 if cur_i >= 5:
                     m_5d = round(cur_tot - float(m_hist_data[sorted_d[cur_i - 5]].get("total_margin_yi") or 0.0), 2)

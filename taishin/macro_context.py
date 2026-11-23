@@ -310,7 +310,11 @@ def fetch_macro_news_headlines(
     return result
 
 
-def classify_macro_risk_tone(quotes: Mapping[str, Mapping[str, Any]]) -> tuple[str, str]:
+def classify_macro_risk_tone(
+    quotes: Mapping[str, Mapping[str, Any]],
+    *,
+    context_mode: str = "morning",
+) -> tuple[str, str]:
     """Classify overnight international sentiment into 🔴 / 🟢 / 🟡 with tactical guidance."""
     if not quotes:
         return "🟡 國際資料待更新", "外部國際指數暫無即時報價，請以台股大盤紅綠燈與個股防守均線為主。"
@@ -320,19 +324,35 @@ def classify_macro_risk_tone(quotes: Mapping[str, Mapping[str, Any]]) -> tuple[s
     ixic_chg = _safe_float((quotes.get("IXIC") or {}).get("change_pct")) or 0.0
     vix_price = _safe_float((quotes.get("VIX") or {}).get("price")) or 0.0
     vix_chg = _safe_float((quotes.get("VIX") or {}).get("change_pct")) or 0.0
+    is_post_market = str(context_mode or "").strip().lower() == "post_market"
 
     if sox_chg <= -2.5 or tsm_chg <= -3.0 or ixic_chg <= -2.2 or vix_price >= 26.0 or vix_chg >= 15.0:
+        if is_post_market:
+            return (
+                "🔴 國際逆風警戒",
+                "最近一次美股費半／台積電ADR顯著回檔或VIX恐慌升溫，總體倉位宜採保守分批低接策略，嚴守下檔支撐與停損紀律。",
+            )
         return (
             "🔴 國際逆風警戒",
             "隔夜費半／台積電ADR顯著回檔或VIX恐慌升溫，早盤嚴防權值與AI族群跳空賣壓，達標股優先鎖利、跌破防守線嚴禁凹單。",
         )
 
     if (sox_chg >= 1.2 or tsm_chg >= 1.5) and ixic_chg >= 0.5 and (vix_price == 0.0 or vix_price < 23.0):
+        if is_post_market:
+            return (
+                "🟢 國際順風偏多",
+                "最近一次美股科技與半導體走強，有利台股多頭情緒；惟布局仍須嚴守拉回支撐分批低接，切忌追高。",
+            )
         return (
             "🟢 國際順風偏多",
             "隔夜美股科技與半導體走強，有利台股多頭續航；惟早盤若大幅開高逼近目標價，切忌追高，可順勢執行達標分批鎖利。",
         )
 
+    if is_post_market:
+        return (
+            "🟡 國際中性震盪",
+            "最近一次美股表現溫和或漲跌互見，回歸台股大盤結構、個股基本面與關鍵支撐紀律布局。",
+        )
     return (
         "🟡 國際中性震盪",
         "隔夜國際盤表現溫和或漲跌互見，早盤回歸個股基本面劇本與關鍵均線支撐紀律操作。",
@@ -343,6 +363,8 @@ def fetch_global_macro_context(
     *,
     session: Any | None = None,
     include_news: bool = True,
+    context_mode: str = "morning",
+    tw_latest_date: str | None = None,
 ) -> dict[str, Any]:
     """Assemble overnight US indices, TSM/NVDA, VIX, USD/TWD, and macro news into a unified context."""
     quotes: dict[str, dict[str, Any]] = {}
@@ -352,7 +374,15 @@ def fetch_global_macro_context(
             quotes[key] = {**snap, "key": key, "label": label}
 
     headlines = fetch_macro_news_headlines(session=session) if include_news else []
-    risk_tone, risk_note = classify_macro_risk_tone(quotes)
+    risk_tone, risk_note = classify_macro_risk_tone(quotes, context_mode=context_mode)
+
+    # 萃取美股實際收盤交易日（優先以費半/那指/標普為準）
+    us_as_of_date = ""
+    for k in ("SOX", "IXIC", "GSPC", "TSM", "NVDA"):
+        d_str = str((quotes.get(k) or {}).get("as_of_date") or "").strip()
+        if d_str:
+            us_as_of_date = d_str
+            break
 
     chip_parts: list[str] = []
     for _, key, label in MACRO_SYMBOLS:
@@ -365,11 +395,19 @@ def fetch_global_macro_context(
             chip_parts.append(f"{label} {q['change_pct']:+.2f}%")
 
     compact_line = " ｜ ".join(chip_parts) if chip_parts else "國際指數暫無連線報價"
+    date_tag = f"（美東交易日 {us_as_of_date} 收盤）" if us_as_of_date else ""
 
     prompt_lines: list[str] = [
         f"- 國際盤氣候：{risk_tone}（{risk_note}）",
-        f"- 隔夜關鍵指標：{compact_line}",
+        f"- 隔夜關鍵指標{date_tag}：{compact_line}",
     ]
+    is_post_market = str(context_mode or "").strip().lower() == "post_market"
+    tw_d = str(tw_latest_date or "").strip()
+    if is_post_market and us_as_of_date and tw_d and us_as_of_date < tw_d:
+        prompt_lines.append(
+            f"- ⚠️ 時間軸防重複計價提醒：上述美股報價為美東 {us_as_of_date} 收盤（美東 {tw_d} 尚未收盤），"
+            f"該日漲跌已於今日（{tw_d}）台股盤勢中消化反映，判讀總體倉位與進場節奏時請勿對前一日美股利空／利多重複計價。"
+        )
     if headlines:
         prompt_lines.append("- 近 48 小時國際財經與產業要聞：")
         for idx, h in enumerate(headlines, start=1):
@@ -382,6 +420,7 @@ def fetch_global_macro_context(
     return {
         "risk_tone": risk_tone,
         "risk_note": risk_note,
+        "us_as_of_date": us_as_of_date,
         "quotes": quotes,
         "headlines": headlines,
         "compact_line": compact_line,

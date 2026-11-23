@@ -324,7 +324,7 @@ class ReboundV6Tests(unittest.TestCase):
         self.assertIn("Python 大量支撐定位器", block)
         self.assertIn("下檔大量支撐區 #1", block)
         self.assertIn("法人買超持倉成本錨點 (VWAP)", block)
-        self.assertIn("近 20 個交易日「價、量、五線歷史均線、KD/RSI/MACD、三大法人、融資」逐日對齊明細表", block)
+        self.assertIn("近 20 個交易日「價、量、五線歷史均線、KD/RSI/MACD、外資與投信、融資」逐日對齊明細表", block)
         self.assertIsNotNone(pkg["trust_vwap_20d"])
         self.assertIsNotNone(pkg["foreign_vwap_20d"])
 
@@ -535,12 +535,104 @@ class ReboundV6Tests(unittest.TestCase):
                     )
                 )
 
-            mock_macro.assert_called_once_with()
+            mock_macro.assert_called_once()
+            _, macro_kwargs = mock_macro.call_args
+            self.assertEqual(macro_kwargs.get("context_mode"), "post_market")
+            self.assertTrue(bool(macro_kwargs.get("tw_latest_date")))
             self.assertIsNotNone(decision)
             self.assertEqual(model_ver, "gemini-4-argon")
             self.assertEqual(len(decision["top_picks"]), 1)
             self.assertEqual(decision["top_picks"][0]["stock_id"], "2379")
             self.assertEqual(audit_records["2379"]["Allocation_Weight_Pct"], 100)
             self.assertIn("718~722", audit_records["2379"]["Tier1_Entry_Plan"])
+
+    def test_broken_ma_trend_stock_tiers_never_invert_and_include_forward_eps(self) -> None:
+        """驗證急殺跌破 17MA/45MA 之標的：三階低接價嚴格遞減不倒掛、輸出前瞻 EPS 明數且不寫三大法人。"""
+        from finmind_stock_scanner import build_market_daily_trend_block, build_strategic_tech_and_chip_package
+
+        dates = pd.date_range("2026-06-01", periods=100, freq="B")
+        # 前 99 天緩步上漲至 800，最後一天暴跌至 750（跌破 MA3/MA17/MA45，模擬 3293 鈊象 11/20）
+        closes = [700.0 + i * 1.0 for i in range(99)] + [750.0]
+        df_stock = pd.DataFrame({
+            "stock_id": ["3293"] * 100,
+            "date": [d.strftime("%Y-%m-%d") for d in dates],
+            "open": [c + 2.0 for c in closes],
+            "max": [c + 10.0 for c in closes],
+            "min": [c - 8.0 for c in closes],
+            "close": closes,
+            "Trading_Volume": [2_000_000] * 100,
+        })
+        pkg = build_strategic_tech_and_chip_package(
+            "3293",
+            "鈊象",
+            df_stock,
+            forward_eps=46.24,
+            peer_median_pe=20.0,
+            annual_cash_dividend=36.0,
+            selection_mode="alignment",
+        )
+        # 嚴格單調遞減：hard_stop_loss < tier3 < tier2 < tier1 <= close_t
+        self.assertLessEqual(pkg["tier1_price"], pkg["close_t"])
+        self.assertLess(pkg["tier2_price"], pkg["tier1_price"])
+        self.assertLess(pkg["tier3_price"], pkg["tier2_price"])
+        self.assertLess(pkg["hard_stop_loss"], pkg["tier3_price"])
+
+        prompt_block = str(pkg["prompt_block"])
+        self.assertIn("破線防禦", prompt_block)
+        self.assertIn("本業前瞻EPS=46.24元", prompt_block)
+        self.assertIn("外資與投信", prompt_block)
+        self.assertNotIn("三大法人", prompt_block)
+        self.assertNotRegex(prompt_block, r"(?<!\d)5MA")
+
+        # 驗證 build_market_daily_trend_block 在無 OTC 時明確聲明、有 OTC 時附摘要
+        df_taiex = pd.DataFrame({
+            "stock_id": ["TAIEX"] * 30,
+            "date": [d.strftime("%Y-%m-%d") for d in dates[-30:]],
+            "open": [38000.0] * 30,
+            "max": [38500.0] * 30,
+            "min": [37500.0] * 30,
+            "close": [38000.0 - i * 50.0 for i in range(30)],
+            "Trading_Volume": [1_000_000] * 30,
+        })
+        blk_no_otc = build_market_daily_trend_block(df_taiex, benchmark_id="TAIEX", days=5)
+        self.assertIn("無 OTC 櫃買指數日線數據", blk_no_otc)
+
+        df_otc = df_taiex.copy()
+        df_otc["stock_id"] = "OTC"
+        df_otc["close"] = [250.0 - i * 0.5 for i in range(30)]
+        blk_with_otc = build_market_daily_trend_block(
+            pd.concat([df_taiex, df_otc], ignore_index=True),
+            benchmark_id="TAIEX",
+            days=5,
+        )
+        self.assertIn("櫃買指數 (OTC)", blk_with_otc)
+
+    def test_post_market_macro_context_adds_us_date_and_no_double_counting_note(self) -> None:
+        """驗證盤後選股呼叫 fetch_global_macro_context 時標註美東收盤日與防重複計價提醒，且不含早盤用語。"""
+        from unittest.mock import patch
+        from taishin.macro_context import fetch_global_macro_context
+
+        fake_quotes = {
+            "^SOX": {"symbol": "^SOX", "price": 5000.0, "prev_close": 5123.5, "change": -123.5, "change_pct": -2.41, "as_of_date": "2026-11-19"},
+            "^IXIC": {"symbol": "^IXIC", "price": 18000.0, "prev_close": 18414.0, "change": -414.0, "change_pct": -2.25, "as_of_date": "2026-11-19"},
+            "^VIX": {"symbol": "^VIX", "price": 30.15, "prev_close": 28.44, "change": 1.71, "change_pct": 6.01, "as_of_date": "2026-11-19"},
+        }
+        with (
+            patch(
+                "taishin.macro_context.fetch_yahoo_quote_snapshot",
+                side_effect=lambda sym, session=None: fake_quotes.get(sym),
+            ),
+            patch("taishin.macro_context.fetch_macro_news_headlines", return_value=[]),
+        ):
+            ctx = fetch_global_macro_context(
+                context_mode="post_market",
+                tw_latest_date="2026-11-20",
+            )
+        blk = ctx["prompt_block"]
+        self.assertEqual(ctx["us_as_of_date"], "2026-11-19")
+        self.assertIn("美東交易日 2026-11-19 收盤", blk)
+        self.assertIn("時間軸防重複計價提醒", blk)
+        self.assertNotIn("早盤嚴防", blk)
+
 
 

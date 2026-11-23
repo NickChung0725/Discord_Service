@@ -2598,8 +2598,18 @@ async def execute_v61_quality_and_strategic_pipeline(
         return empty_decision, {}, q_raw, q_model_ver
 
     # Step 2: 為入選之 Top 3~5 績優股組裝「20日逐日價量均線指標籌碼大表 ＋ 三大大量支撐定位器 ＋ 台美股總經」
+    tw_latest_date_str = ""
+    if prices is not None and not prices.empty and "date" in prices.columns:
+        try:
+            tw_latest_date_str = str(pd.to_datetime(prices["date"], errors="coerce").dropna().max().strftime("%Y-%m-%d"))
+        except Exception:  # noqa: BLE001
+            tw_latest_date_str = ""
     try:
-        macro_ctx = await asyncio.to_thread(fetch_global_macro_context)
+        macro_ctx = await asyncio.to_thread(
+            fetch_global_macro_context,
+            context_mode="post_market",
+            tw_latest_date=tw_latest_date_str or None,
+        )
         macro_block = str(macro_ctx.get("prompt_block") or "")
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] 抓取隔夜美股總經環境失敗（略過）：{exc}")
@@ -2771,6 +2781,15 @@ async def execute_v61_quality_and_strategic_pipeline(
         t1_num = parse_plan_price(t1_plan, close_ref=close_ref, fallback=t1_fallback)
         t2_num = parse_plan_price(t2_plan, close_ref=close_ref, fallback=t2_fallback)
         t3_num = parse_plan_price(t3_plan, close_ref=close_ref, fallback=t3_fallback)
+        # 最後一道數值單調性防呆：確保三階掛單嚴格遞減 (t1 > t2 > t3) 且不倒掛
+        valid_tiers = [v for v in (t1_num, t2_num, t3_num) if v is not None and v > 0]
+        if len(valid_tiers) == 3 and not (t1_num > t2_num > t3_num):  # type: ignore[operator]
+            desc_tiers = sorted(valid_tiers, reverse=True)
+            t1_num, t2_num, t3_num = desc_tiers[0], desc_tiers[1], desc_tiers[2]
+            if t2_num >= t1_num and t2_fallback and t2_fallback < t1_num:
+                t2_num = t2_fallback
+            if t3_num >= t2_num and t3_fallback and t3_fallback < t2_num:
+                t3_num = t3_fallback
         tp1_num = parse_plan_price(tp1_str, close_ref=close_ref, fallback=_parse_optional_num(pkg.get("tp1_price")))
         tp2_num = parse_plan_price(tp2_str, close_ref=close_ref, fallback=None)
         if tp1_num is not None and tp2_num is not None and tp2_num <= tp1_num:

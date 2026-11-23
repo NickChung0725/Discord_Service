@@ -911,17 +911,25 @@ def build_strategic_tech_and_chip_package(
             f"MA{p}={ma_v:.2f}(乖離{bias_pct:+.1f}%/5日斜率{slope5:+.1f}%{ded_txt})"
         )
 
-    # 基本面價值鐵底參考價
+    # 基本面價值鐵底與前瞻 EPS 參考（明數輸出，避免 AI 反推算術誤差）
     val_floors: list[str] = []
     if forward_eps and forward_eps > 0:
         conservative_pe = max(10.0, (peer_median_pe or 16.0) * 0.78)
         pe_floor = round_tw_tick(forward_eps * conservative_pe)
-        val_floors.append(f"本業前瞻EPS保守估值底({conservative_pe:.1f}x PE)={pe_floor:.2f}元")
+        if peer_median_pe and peer_median_pe > 0:
+            fair_pe_val = round_tw_tick(forward_eps * peer_median_pe)
+            val_floors.append(
+                f"本業前瞻EPS={forward_eps:.2f}元（同業中位{peer_median_pe:.1f}x PE合理價={fair_pe_val:.2f}元／保守底{conservative_pe:.1f}x PE={pe_floor:.2f}元）"
+            )
+        else:
+            val_floors.append(
+                f"本業前瞻EPS={forward_eps:.2f}元（保守估值底{conservative_pe:.1f}x PE={pe_floor:.2f}元）"
+            )
     if annual_cash_dividend and annual_cash_dividend > 0:
         div_4pct_floor = round_tw_tick(annual_cash_dividend / 0.04)
         val_floors.append(f"4%殖利率保護價={div_4pct_floor:.2f}元")
 
-    # 3) 組裝近 20 個交易日「價、量、五線均線、KD/RSI/MACD、三大法人、融資」合一逐日大表
+    # 3) 組裝近 20 個交易日「價、量、五線均線、KD/RSI/MACD、外資與投信、融資」合一逐日大表
     table_lines = [
         "| 日期 | 開盤 | 最高 | 最低 | 收盤 | 漲跌% | K棒特徵 | 量(張)/20MA量 | MA3 | MA17 | MA45 | MA117 | MA189 | K9/D9 | RSI14 | MACD柱 | 外資(張) | 投信(張) | 融資增減(餘額) |",
         "|:---|---:|---:|---:|---:|---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -962,21 +970,56 @@ def build_strategic_tech_and_chip_package(
         ma17_v = float(last_r["MA17"])
         ma45_v = float(last_r["MA45"])
         ma117_v = float(last_r["MA117"])
-        t1_low = round_tw_tick(min(close_t * 0.985, max(ma17_v, fib_236)))
-        t1_high = round_tw_tick(min(close_t * 0.995, max(t1_low, close_t - 0.3 * atr)))
-        t2_low = round_tw_tick(min(ma17_v, fib_382))
-        t2_high = round_tw_tick(max(ma17_v, fib_382))
-        t3_low = round_tw_tick(min(ma45_v, fib_618))
-        t3_high = round_tw_tick(max(ma45_v, fib_500))
-        t1_ref = f"{min(t1_low, t1_high):.2f}~{max(t1_low, t1_high):.2f}（回測5MA~17MA/0.236回檔量縮區）"
-        t2_ref = f"{t2_low:.2f}~{t2_high:.2f}（回測17MA與0.382黃金分割核心支撐區）"
-        t3_ref = f"{t3_low:.2f}~{t3_high:.2f}（大盤急殺回測45MA季線/0.618黃金坑防守區）"
-        t1_price = max(t1_low, t1_high)
-        t2_price = t2_high
-        t3_price = t3_high
-        chase_lim = round_tw_tick(min(close_t, ma17_v * 1.06))
-        hard_sl = round_tw_tick(min(ma45_v * 0.97, ma117_v, close_t - 2.2 * atr))
-        tp1_def = round_tw_tick(max(h60_val, close_t + 2.5 * atr))
+        ma189_v = float(last_r.get("MA189") or ma117_v)
+        is_broken_below_ma = (close_t < ma17_v) or (close_t < ma45_v)
+
+        if is_broken_below_ma:
+            # 破線防禦模式：現價已跌破 17MA 或 45MA，嚴禁將上方均線當支撐，改依現價下方結構階梯承接
+            t1_high = round_tw_tick(close_t * 0.99)
+            t1_low = round_tw_tick(min(t1_high, close_t - 0.5 * atr))
+            t2_high = round_tw_tick(min(t1_low * 0.99, close_t - 1.0 * atr))
+            lower_ma_anchor = max(v for v in (ma117_v, ma189_v, l60_val) if v < t2_high) if any(
+                v < t2_high for v in (ma117_v, ma189_v, l60_val)
+            ) else round_tw_tick(t2_high - 0.5 * atr)
+            t2_low = round_tw_tick(min(t2_high, max(lower_ma_anchor, close_t - 1.5 * atr)))
+            t3_high = round_tw_tick(min(t2_low * 0.99, close_t - 1.8 * atr))
+            t3_low = round_tw_tick(min(t3_high, max(l60_val * 0.98, close_t - 2.3 * atr)))
+            t1_ref = f"{min(t1_low, t1_high):.2f}~{max(t1_low, t1_high):.2f}（⚠️破線防禦：現價下方止穩試單區，上方17MA/45MA已轉反壓）"
+            t2_ref = f"{min(t2_low, t2_high):.2f}~{max(t2_low, t2_high):.2f}（下檔大量支撐/MA117核心承接區）"
+            t3_ref = f"{min(t3_low, t3_high):.2f}~{max(t3_low, t3_high):.2f}（左側極限黃金坑/MA189與前低防守區）"
+            t1_price = max(t1_low, t1_high)
+            t2_price = max(t2_low, t2_high)
+            t3_price = max(t3_low, t3_high)
+            chase_lim = round_tw_tick(close_t)
+            hard_sl = round_tw_tick(min(min(t3_low, t3_high) * 0.97, ma189_v * 0.97, l60_val * 0.97))
+            tp1_def = round_tw_tick(max(ma17_v, ma45_v, close_t + 1.5 * atr))
+        else:
+            # 正常多頭排列模式：強制嚴格遞減 t3 < t2 < t1 <= close_t
+            t1_high = round_tw_tick(min(close_t * 0.995, max(ma17_v, close_t - 0.3 * atr)))
+            t1_low = round_tw_tick(min(t1_high, max(ma17_v, min(fib_236, close_t * 0.985))))
+            t2_high = round_tw_tick(min(t1_low * 0.995, max(ma17_v, fib_382) if max(ma17_v, fib_382) < t1_low else t1_low * 0.98))
+            t2_low = round_tw_tick(min(t2_high, min(ma17_v, fib_382) if min(ma17_v, fib_382) <= t2_high else t2_high * 0.98))
+            t3_high = round_tw_tick(min(t2_low * 0.995, max(ma45_v, fib_500) if max(ma45_v, fib_500) < t2_low else t2_low * 0.98))
+            t3_low = round_tw_tick(min(t3_high, min(ma45_v, fib_618) if min(ma45_v, fib_618) <= t3_high else t3_high * 0.98))
+            t1_ref = f"{min(t1_low, t1_high):.2f}~{max(t1_low, t1_high):.2f}（回測MA3~MA17/0.236回檔量縮區）"
+            t2_ref = f"{min(t2_low, t2_high):.2f}~{max(t2_low, t2_high):.2f}（回測17MA與0.382黃金分割核心支撐區）"
+            t3_ref = f"{min(t3_low, t3_high):.2f}~{max(t3_low, t3_high):.2f}（大盤急殺回測45MA季線/0.618黃金坑防守區）"
+            t1_price = max(t1_low, t1_high)
+            t2_price = max(t2_low, t2_high)
+            t3_price = max(t3_low, t3_high)
+            chase_lim = round_tw_tick(min(close_t, ma17_v * 1.06))
+            hard_sl = round_tw_tick(min(min(t3_low, t3_high) * 0.97, ma45_v * 0.97, ma117_v, close_t - 2.2 * atr))
+            tp1_def = round_tw_tick(max(h60_val, close_t + 2.5 * atr))
+
+    # 最終單調性護欄：確保 t3_price < t2_price < t1_price <= close_t 且 hard_sl < t3_price
+    if t1_price > close_t:
+        t1_price = round_tw_tick(close_t * 0.995)
+    if t2_price >= t1_price:
+        t2_price = round_tw_tick(t1_price * 0.98)
+    if t3_price >= t2_price:
+        t3_price = round_tw_tick(t2_price * 0.98)
+    if hard_sl >= t3_price:
+        hard_sl = round_tw_tick(t3_price * 0.97)
 
     prompt_lines = [
         f"#### 📌 【{stock_id} {stock_name} — 技術、籌碼與大量支撐定位全覽】",
@@ -1001,7 +1044,7 @@ def build_strategic_tech_and_chip_package(
         ),
         "- **🛡️ 基本面價值鐵底參考**：" + (" ｜ ".join(val_floors) if val_floors else "依長均線與前波低點防守"),
         f"- **🧭 Python 預設三階回檔低接參考區（禁止現價 {close_t:.2f} 追高）**：第1批(30%) {t1_ref}｜第2批(40%) {t2_ref}｜第3批(30%) {t3_ref}｜硬停損參考 {hard_sl:.2f}｜TP1參考 {tp1_def:.2f}",
-        "- **📊 近 20 個交易日「價、量、五線歷史均線、KD/RSI/MACD、三大法人、融資」逐日對齊明細表**：",
+        "- **📊 近 20 個交易日「價、量、五線歷史均線、KD/RSI/MACD、外資與投信、融資」逐日對齊明細表**：",
         "",
         *table_lines,
     ]
@@ -1050,7 +1093,12 @@ def build_market_daily_trend_block(
     sorted_m_dates = sorted(margin_map.keys())
     margin_chg_by_date: dict[str, float] = {}
     for idx, d_key in enumerate(sorted_m_dates):
-        cur_tot = _parse_optional_float((margin_map.get(d_key) or {}).get("total_margin_yi"))
+        rec = margin_map.get(d_key) or {}
+        explicit_chg = _parse_optional_float(rec.get("margin_chg_1d_yi"))
+        if explicit_chg is not None:
+            margin_chg_by_date[d_key] = round(explicit_chg, 2)
+            continue
+        cur_tot = _parse_optional_float(rec.get("total_margin_yi"))
         prev_tot = _parse_optional_float((margin_map.get(sorted_m_dates[idx - 1]) or {}).get("total_margin_yi")) if idx > 0 else None
         if cur_tot is not None and prev_tot is not None:
             margin_chg_by_date[d_key] = round(cur_tot - prev_tot, 2)
@@ -1091,6 +1139,34 @@ def build_market_daily_trend_block(
             f"{float(r['K9']):.1f}/{float(r['D9']):.1f} | {float(r['RSI14']):.1f} | {float(r['MACD_OSC']):+.2f} | "
             f"{f'{m_tot:.1f}' if m_tot is not None else '-'} | {f'{m_chg:+.1f}' if m_chg is not None else '-'} |"
         )
+
+    # 補充 OTC 櫃買指數近 5 日摘要（若有本地日線則提供，若無則明確聲明以避免 AI 腦補）
+    otc_sub = prices.loc[prices["stock_id"].astype(str).isin(["TPEx", "OTC"])].copy()
+    if not otc_sub.empty and str(benchmark_id) not in ("TPEx", "OTC"):
+        otc_norm = add_momentum_indicators(_normalize_ohlcv(otc_sub))
+        for p in MOVING_AVERAGE_PERIODS:
+            c = f"MA{p}"
+            if c not in otc_norm.columns or otc_norm[c].isna().all():
+                otc_norm[c] = otc_norm["close"].rolling(window=p, min_periods=1).mean()
+        otc_norm["date_str"] = otc_norm["date"].dt.strftime("%Y-%m-%d")
+        otc_norm["pct_chg"] = (otc_norm["close"].pct_change() * 100.0).fillna(0.0).round(2)
+        otc_recent = otc_norm.tail(min(5, days))
+        lines.extend([
+            "",
+            f"【櫃買指數 (OTC) 近 {len(otc_recent)} 交易日價量與五線均線摘要】",
+            "| 日期 | OTC收盤 | 漲跌% | MA3 | MA17 | MA45 | MA117 | MA189 |",
+            "|:---|---:|---:|---:|---:|---:|---:|---:|",
+        ])
+        for _, orow in otc_recent.iterrows():
+            lines.append(
+                f"| {orow['date_str']} | {float(orow['close']):.2f} | {float(orow['pct_chg']):+.2f}% | "
+                f"{float(orow['MA3']):.2f} | {float(orow['MA17']):.2f} | {float(orow['MA45']):.2f} | "
+                f"{float(orow['MA117']):.2f} | {float(orow['MA189']):.2f} |"
+            )
+    elif str(benchmark_id) not in ("TPEx", "OTC"):
+        lines.append("")
+        lines.append("（註：本次本地日線僅提供主基準指數，無 OTC 櫃買指數日線數據，請勿自行編造 OTC 點位。）")
+
     return "\n".join(lines)
 
 
@@ -2158,44 +2234,75 @@ def classify_rebound_signal(
     }
 
 
+def _parse_tw_api_date(raw: Any) -> str | None:
+    """解析 TWSE/TPEx API 回傳之西元或民國日期字串為 YYYY-MM-DD。"""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    # 西元 YYYY-MM-DD 或 YYYY/MM/DD
+    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", s)
+    if m:
+        try:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        except ValueError:
+            return None
+    # 西元 YYYYMMDD
+    if re.fullmatch(r"\d{8}", s):
+        try:
+            return date(int(s[:4]), int(s[4:6]), int(s[6:8])).isoformat()
+        except ValueError:
+            return None
+    # 民國 YYY/MM/DD 或 YYY-MM-DD
+    m_roc = re.match(r"^(\d{2,3})[-/](\d{1,2})[-/](\d{1,2})$", s)
+    if m_roc:
+        try:
+            return date(int(m_roc.group(1)) + 1911, int(m_roc.group(2)), int(m_roc.group(3))).isoformat()
+        except ValueError:
+            return None
+    # 民國 YYYMMDD (7 碼)
+    if re.fullmatch(r"\d{7}", s):
+        try:
+            return date(int(s[:3]) + 1911, int(s[3:5]), int(s[5:7])).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
 def fetch_market_margin_snapshot(
     history_path: Path | None = None,
     as_of: date | None = None,
     timeout: float = 12.0,
 ) -> dict[str, Any]:
-    """官方免費抓取上市櫃融資總表（TWSE / TPEx OpenAPI 與官方備援），並計算全市場融資增減。
+    """官方免費抓取上市櫃融資總表（TWSE / TPEx RWD 與 OpenAPI 備援），並以 API 實際交易日入帳。
 
-    不消耗 FinMind 配額，網路異常 Graceful Degradation 回傳空 dict。
+    - 解析 TWSE / TPEx 回傳之實際交易日 (`date`)，避免 19:00 尚未公布當日融資時將前一日 (T-1)
+      數據誤寫為當日 (T) 導致整條融資時間軸錯位。
+    - 若上市與上櫃公告日期不同步（例如一市已更新 T 日、另一市仍停在 T-1 日），自動將較新市場
+      退回使用其「前日餘額」對齊至同一交易日 (`min(twse_date, tpex_date)`)，不混加跨日數據。
+    - 不消耗 FinMind 配額，網路異常 Graceful Degradation 回傳空 dict。
     """
     today = as_of or _today_in_taipei()
     today_str = today.isoformat()
 
     twse_today_yi: float | None = None
     twse_prev_yi: float | None = None
+    twse_date: str | None = None
     tpex_today_yi: float | None = None
     tpex_prev_yi: float | None = None
+    tpex_date: str | None = None
 
-    # 1. 上市 (TWSE) 信用交易統計
+    # 1. 上市 (TWSE) 信用交易統計：優先使用含全市場合計與明確交易日期之 RWD 端點
     twse_urls = [
-        "https://openapi.twse.com.tw/v1/exchangeReport/MI_MARGN",
         "https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?response=json",
+        "https://openapi.twse.com.tw/v1/exchangeReport/MI_MARGN",
     ]
     for url in twse_urls:
         try:
             req = Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
             with urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, list):
-                for row in data:
-                    item_name = str(row.get("項目") or row.get("股票名稱") or "")
-                    if "融資金額" in item_name or "融資(仟元)" in item_name:
-                        prev_val = str(row.get("前日餘額") or row.get("融資前日餘額") or "").replace(",", "").strip()
-                        today_val = str(row.get("今日餘額") or row.get("融資今日餘額") or "").replace(",", "").strip()
-                        if prev_val and today_val:
-                            twse_prev_yi = float(prev_val) / 100000.0
-                            twse_today_yi = float(today_val) / 100000.0
-                            break
-            elif isinstance(data, dict):
+            if isinstance(data, dict):
+                parsed_d = _parse_tw_api_date(data.get("date"))
                 tables = data.get("tables", [])
                 for t in tables:
                     table_data = t.get("data", [])
@@ -2205,18 +2312,30 @@ def fetch_market_margin_snapshot(
                             today_val = str(row[5]).replace(",", "").strip()
                             twse_prev_yi = float(prev_val) / 100000.0
                             twse_today_yi = float(today_val) / 100000.0
+                            twse_date = parsed_d
                             break
                     if twse_today_yi is not None:
                         break
+            elif isinstance(data, list):
+                for row in data:
+                    item_name = str(row.get("項目") or row.get("股票名稱") or "")
+                    if "融資金額" in item_name or "融資(仟元)" in item_name:
+                        prev_val = str(row.get("前日餘額") or row.get("融資前日餘額") or "").replace(",", "").strip()
+                        today_val = str(row.get("今日餘額") or row.get("融資今日餘額") or "").replace(",", "").strip()
+                        if prev_val and today_val:
+                            twse_prev_yi = float(prev_val) / 100000.0
+                            twse_today_yi = float(today_val) / 100000.0
+                            twse_date = _parse_tw_api_date(row.get("日期") or row.get("Date"))
+                            break
             if twse_today_yi is not None:
                 break
         except Exception:
             logger.debug("Failed to fetch TWSE margin from %s", url, exc_info=True)
 
-    # 2. 上櫃 (TPEx) 信用交易統計
+    # 2. 上櫃 (TPEx) 信用交易統計：優先使用含全市場合計與明確交易日期之 RWD 端點
     tpex_urls = [
-        "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance",
         "https://www.tpex.org.tw/web/stock/margin_trading/margin_balance/margin_bal_result.php?l=zh-tw&o=json",
+        "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_margin_balance",
     ]
     for url in tpex_urls:
         try:
@@ -2224,8 +2343,10 @@ def fetch_market_margin_snapshot(
             with urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             if isinstance(data, dict):
+                top_d = _parse_tw_api_date(data.get("date"))
                 tables = data.get("tables", [])
                 for t in tables:
+                    table_d = _parse_tw_api_date(t.get("date")) or top_d
                     summary = t.get("summary", [])
                     for srow in summary:
                         if isinstance(srow, list) and len(srow) >= 7 and "融資" in str(srow[1]):
@@ -2234,6 +2355,7 @@ def fetch_market_margin_snapshot(
                             if prev_val and today_val:
                                 tpex_prev_yi = float(prev_val) / 100000.0
                                 tpex_today_yi = float(today_val) / 100000.0
+                                tpex_date = table_d
                                 break
                     if tpex_today_yi is not None:
                         break
@@ -2246,6 +2368,7 @@ def fetch_market_margin_snapshot(
                         if prev_val and today_val:
                             tpex_prev_yi = float(prev_val) / 100000.0
                             tpex_today_yi = float(today_val) / 100000.0
+                            tpex_date = _parse_tw_api_date(row.get("Date"))
                             break
             if tpex_today_yi is not None:
                 break
@@ -2255,11 +2378,41 @@ def fetch_market_margin_snapshot(
     if twse_today_yi is None and tpex_today_yi is None:
         return {}
 
+    # 若兩市公告日期不一致（如 20:10 僅單一市場更新），自動對齊至較舊共同交易日，避免跨日混加
+    aligned_fallback = False
+    if twse_date and tpex_date and twse_date != tpex_date:
+        if twse_date > tpex_date and twse_prev_yi is not None:
+            twse_today_yi = twse_prev_yi
+            twse_prev_yi = None
+            data_date = tpex_date
+            aligned_fallback = True
+        elif tpex_date > twse_date and tpex_prev_yi is not None:
+            tpex_today_yi = tpex_prev_yi
+            tpex_prev_yi = None
+            data_date = twse_date
+            aligned_fallback = True
+        else:
+            data_date = min(twse_date, tpex_date)
+            aligned_fallback = True
+    else:
+        data_date = twse_date or tpex_date or today_str
+
     twse_margin_yi = round(twse_today_yi or 0.0, 2)
     tpex_margin_yi = round(tpex_today_yi or 0.0, 2)
     total_margin_yi = round(twse_margin_yi + tpex_margin_yi, 2)
 
-    # 3. 本地滾動歷史紀錄 (保留近 30 個交易日)
+    # 若雙市皆未跨日回退且各有前日餘額，直接以官方前日餘額計算最精確單日增減
+    official_chg_1d: float | None = None
+    if not aligned_fallback:
+        if twse_today_yi is not None and tpex_today_yi is not None:
+            if twse_prev_yi is not None and tpex_prev_yi is not None:
+                official_chg_1d = round(total_margin_yi - (twse_prev_yi + tpex_prev_yi), 2)
+        elif twse_today_yi is not None and twse_prev_yi is not None:
+            official_chg_1d = round(twse_margin_yi - twse_prev_yi, 2)
+        elif tpex_today_yi is not None and tpex_prev_yi is not None:
+            official_chg_1d = round(tpex_margin_yi - tpex_prev_yi, 2)
+
+    # 3. 本地滾動歷史紀錄 (保留近 30 個交易日，嚴格以實際交易日 data_date 為 key)
     hist_file = history_path or Path("finmind_reports/.state/market_margin_history.json")
     history: dict[str, dict[str, Any]] = {}
     if hist_file.is_file():
@@ -2272,12 +2425,15 @@ def fetch_market_margin_snapshot(
         except Exception:
             logger.debug("Failed to load existing margin history from %s", hist_file, exc_info=True)
 
-    history[today_str] = {
-        "date": today_str,
+    entry: dict[str, Any] = {
+        "date": data_date,
         "twse_margin_yi": twse_margin_yi,
         "tpex_margin_yi": tpex_margin_yi,
         "total_margin_yi": total_margin_yi,
     }
+    if official_chg_1d is not None:
+        entry["margin_chg_1d_yi"] = official_chg_1d
+    history[data_date] = entry
 
     sorted_dates = sorted(history.keys())
     if len(sorted_dates) > 30:
@@ -2290,13 +2446,12 @@ def fetch_market_margin_snapshot(
     except Exception:
         logger.debug("Failed to persist margin history to %s", hist_file, exc_info=True)
 
-    cur_idx = sorted_dates.index(today_str) if today_str in sorted_dates else len(sorted_dates) - 1
-    if cur_idx >= 1:
+    cur_idx = sorted_dates.index(data_date) if data_date in sorted_dates else len(sorted_dates) - 1
+    if official_chg_1d is not None:
+        margin_chg_1d_yi = official_chg_1d
+    elif cur_idx >= 1:
         prev_d = sorted_dates[cur_idx - 1]
         prev_tot = float(history[prev_d].get("total_margin_yi") or 0.0)
-        margin_chg_1d_yi = round(total_margin_yi - prev_tot, 2)
-    elif twse_prev_yi is not None or tpex_prev_yi is not None:
-        prev_tot = (twse_prev_yi or 0.0) + (tpex_prev_yi or 0.0)
         margin_chg_1d_yi = round(total_margin_yi - prev_tot, 2)
     else:
         margin_chg_1d_yi = 0.0
@@ -2313,7 +2468,9 @@ def fetch_market_margin_snapshot(
         margin_chg_5d_yi = margin_chg_1d_yi
 
     return {
-        "date": today_str,
+        "date": data_date,
+        "as_of_date": today_str,
+        "is_stale": bool(data_date < today_str),
         "twse_margin_yi": twse_margin_yi,
         "tpex_margin_yi": tpex_margin_yi,
         "total_margin_yi": total_margin_yi,
@@ -2421,9 +2578,15 @@ def evaluate_market_regime(
                 recommended_max_exposure_pct = "70% ~ 80%"
                 recommended_top_picks_cap = 5
 
+        stale_prefix = ""
+        m_date_str = str(margin_info.get("date") or "").strip()
+        if margin_info.get("is_stale") and m_date_str:
+            mm_dd = m_date_str[5:].replace("-", "/") if len(m_date_str) >= 10 else m_date_str
+            stale_prefix = f"截至 {mm_dd}，"
+
         summary += (
             f"｜💳 大盤融資 {total_yi:,.1f} 億"
-            f"（單日 {chg_1d:+.1f} 億 / 5日 {chg_5d:+.1f} 億｜{margin_regime}）"
+            f"（{stale_prefix}單日 {chg_1d:+.1f} 億 / 5日 {chg_5d:+.1f} 億｜{margin_regime}）"
             f"｜🛡️ 建議總持倉上限：{recommended_max_exposure_pct}"
         )
 
@@ -2514,11 +2677,31 @@ def fetch_or_load_market_regime(
         if daily_directory is not None
         else None
     )
+    today_str = today.isoformat()
+    hist_p = daily_directory.parent / ".state" / "market_margin_history.json" if daily_directory else None
+
     if cache_path is not None and cache_path.is_file():
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
             if isinstance(cached, dict) and cached.get("light") and "MA189" in cached:
-                if ("margin_regime" in cached or margin_info is None) and (
+                cached_margin = cached.get("margin_info") if isinstance(cached.get("margin_info"), dict) else None
+                cached_margin_date = str((cached_margin or {}).get("date") or "").strip()
+                margin_is_stale = margin_info is None and (not cached_margin or cached_margin_date < today_str)
+
+                refreshed_margin: dict[str, Any] | None = None
+                if margin_is_stale:
+                    try:
+                        cand = fetch_market_margin_snapshot(hist_p, as_of=today)
+                        cand_date = str(cand.get("date") or "").strip() if isinstance(cand, dict) else ""
+                        if cand and cand.get("total_margin_yi") is not None and cand_date > cached_margin_date:
+                            refreshed_margin = cand
+                    except Exception:
+                        refreshed_margin = None
+
+                if refreshed_margin is not None:
+                    # 官方已公布更新交易日之融資數據 -> 走下方流程用新融資重算並刷新快取
+                    margin_info = refreshed_margin
+                elif ("margin_regime" in cached or margin_info is None) and (
                     not enable_dual_index_router or "regime_quota" in cached
                 ):
                     if "regime_quota" not in cached:
@@ -2528,7 +2711,6 @@ def fetch_or_load_market_regime(
             pass
 
     if margin_info is None:
-        hist_p = daily_directory.parent / ".state" / "market_margin_history.json" if daily_directory else None
         try:
             margin_info = fetch_market_margin_snapshot(hist_p, as_of=today)
         except Exception:

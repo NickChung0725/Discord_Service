@@ -4,6 +4,22 @@
 
 ---
 
+## [v6.2.2] - 2026-11-23
+### 🔧 優化與修正 — 修復大盤融資餘額時間軸錯位 1 日 Bug 與 21:30 過期快取自動補刷
+* **修復 `fetch_market_margin_snapshot()` 未核對官方交易日導致融資錯位 1 日之問題（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)）**：
+  * 新增 `_parse_tw_api_date()`，並將 TWSE / TPEx 抓取順序調整為優先使用含「全市場合計列與明確交易日 (`date`)」之官方 RWD 端點（OpenAPI 作為備援），嚴格以 **API 實際交易日** 作為 key 寫入 `finmind_reports/.state/market_margin_history.json`，徹底根除 19:00 官方尚未公布當日融資時將前一日（T-1）數據硬寫為當日（T）所造成的 `+0.0` 假凍結與全表時間軸遞延。
+  * **跨市公告不同步防呆**：若 TWSE 與 TPEx 公告日期不一致（例如僅單一市場更新 T 日），自動將較新市場退回使用其「前日餘額」對齊至較舊共同交易日，避免跨日混加。
+  * **官方精確單日增減與過期標記**：優先直接採用 API 內建「前日餘額」計算並保存 `margin_chg_1d_yi`（同步供 `build_market_daily_trend_block()` 與 [`taishin_portfolio_service.py`](/taishin_portfolio_service.py) 0050 DCA 讀取）；回傳新增 `as_of_date` 與 `is_stale`，當為前一日舊資料時 `evaluate_market_regime()` 會在摘要中明確標註 `截至 MM/DD`。
+* **修復 21:30 / 22:00 讀取 19:00 過期融資快取未刷新之問題（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)）**：
+  * `fetch_or_load_market_regime()` 命中當日 `{date}_market_regime.json` 快取時，若發現快取內 `margin_info.date < today`，會自動重抓一次最新融資；一旦官方已公布當日數據即重算並覆寫更新快取。
+* **修復 AI #3 戰略布局（`strategic_layout_trend` / `strategic_layout_rebound`）三階低接價位倒掛、破線前提衝突、美股重複計價與幻覺溫床（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`taishin/macro_context.py`](/taishin/macro_context.py)、[`quant/fundamental_config.py`](/quant/fundamental_config.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
+  * **破線防禦與三階單調性護欄**：修正 `build_strategic_tech_and_chip_package()` 預設三階公式，當個股急殺跌破 `17MA / 45MA` 時自動切換為「破線防禦模式」改依現價下方結構階梯定位，並於 Python 產出與 AI #3 解析後雙重強制 `現價 >= 第1批 > 第2批 > 第3批 > 硬停損`，徹底杜絕價位倒掛；同步於 Prompt 補齊破線分流規則與「暫緩追價觀望」逃生閥。
+  * **補齊缺失數據並防腦補**：在基本面鐵底行明數印出「本業前瞻 EPS 與同業中位 PE 合理價」；`build_market_daily_trend_block()` 新增 OTC 櫃買指數近 5 日摘要（無 OTC 時明確聲明勿編造）；將 Prompt 與 20 日表標題之 `5MA` 修正為 `MA3`、簡體錯字修正為繁體，並將「三大法人」統一改為「**外資與投信**」，杜絕 AI 腦補自營商動向；於第一層補上「台新帳戶庫存共伴曝險降權規則」。
+  * **美股時間軸防重複計價**：`fetch_global_macro_context()` 新增 `context_mode="post_market"` 與 `tw_latest_date` 參數，印出美東實際收盤日並於美股日期早於台股今日時自動附加防重複計價提醒，並移除盤後不合時宜之「早盤嚴防跳空」晨報用語。
+* **補充單元測試（[`tests/test_margin_features.py`](/tests/test_margin_features.py)、[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**：新增 API 實際日期入帳防錯位、上市櫃跨日自動對齊、21:30 過期快取自動刷新、破線股三階防倒掛與前瞻 EPS 明數、OTC 防腦補以及盤後美股防重複計價等回歸測試。
+
+---
+
 ## [v6.2.1] - 2026-11-19
 ### 🔧 優化與修正 — Discord 選股推播瘦身為單則精簡卡片、先發布網頁再推播，並修正晨報反彈新星篩選邏輯
 * **修正 08:15 晨間報告「型態 A 反彈潛力新星」誤納 AI 剔除股之問題（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：

@@ -16,6 +16,7 @@ import pandas as pd
 from finmind_stock_scanner import (
     evaluate_market_regime,
     fetch_market_margin_snapshot,
+    fetch_or_load_market_regime,
 )
 from fundamental_analyzer import build_hard_warnings
 from fundamental_cache import FundamentalCacheManager
@@ -127,6 +128,177 @@ class TestMarginFeatures(unittest.TestCase):
 
             if tmp_hist.is_file():
                 tmp_hist.unlink()
+
+    def test_fetch_market_margin_snapshot_uses_api_date_no_shift(self):
+        # 模擬 19:00 執行 (as_of=2026-11-20)，但官方 API 僅更新至 2026-11-19
+        twse_data = {
+            "date": "20261119",
+            "tables": [
+                {
+                    "data": [
+                        ["融資金額(仟元)", "0", "0", "0", "508026000", "484368000"],
+                    ]
+                }
+            ],
+        }
+        tpex_data = {
+            "date": "20261119",
+            "tables": [
+                {
+                    "date": "115/11/19",
+                    "summary": [
+                        ["", "融資金(仟元)", "157223000", "0", "0", "0", "147413000"],
+                    ],
+                }
+            ],
+        }
+
+        tmp_hist = Path("finmind_reports/.state/test_margin_no_shift.json")
+        if tmp_hist.is_file():
+            tmp_hist.unlink()
+        try:
+            with patch("finmind_stock_scanner.urlopen") as mock_url:
+                r1, r2 = MagicMock(), MagicMock()
+                r1.read.return_value = json.dumps(twse_data).encode("utf-8")
+                r2.read.return_value = json.dumps(tpex_data).encode("utf-8")
+                mock_url.side_effect = [
+                    MagicMock(__enter__=MagicMock(return_value=r1)),
+                    MagicMock(__enter__=MagicMock(return_value=r2)),
+                ]
+                res = fetch_market_margin_snapshot(history_path=tmp_hist, as_of=date(2026, 11, 20))
+
+            # 嚴格以 API 實際日期 2026-11-19 入帳，不可寫入 2026-11-20
+            self.assertEqual(res["date"], "2026-11-19")
+            self.assertEqual(res["as_of_date"], "2026-11-20")
+            self.assertTrue(res["is_stale"])
+            self.assertAlmostEqual(res["total_margin_yi"], 6317.81, places=2)
+            self.assertAlmostEqual(res["margin_chg_1d_yi"], -334.68, places=2)
+
+            saved = json.loads(tmp_hist.read_text(encoding="utf-8"))
+            self.assertIn("2026-11-19", saved)
+            self.assertNotIn("2026-11-20", saved)
+            self.assertAlmostEqual(saved["2026-11-19"]["margin_chg_1d_yi"], -334.68, places=2)
+
+            # evaluate_market_regime 應在 summary 標註「截至 11/19」
+            dates = pd.date_range("2026-08-01", periods=60, freq="B")
+            df_bench = pd.DataFrame({"date": dates, "close": [24000.0 - i * 50.0 for i in range(60)]})
+            regime = evaluate_market_regime(df_bench, benchmark_label="TAIEX", margin_info=res)
+            self.assertIn("截至 11/19", regime["summary"])
+        finally:
+            if tmp_hist.is_file():
+                tmp_hist.unlink()
+
+    def test_fetch_market_margin_snapshot_mixed_market_dates_aligns_to_older(self):
+        # 模擬 20:15 TWSE 已更新 11/20，但 TPEx 仍停在 11/19 -> 應對齊至 11/19（TWSE 退回前日餘額）
+        twse_data = {
+            "date": "20261120",
+            "tables": [
+                {
+                    "data": [
+                        ["融資金額(仟元)", "0", "0", "0", "484368000", "435227000"],
+                    ]
+                }
+            ],
+        }
+        tpex_data = {
+            "date": "20261119",
+            "tables": [
+                {
+                    "date": "115/11/19",
+                    "summary": [
+                        ["", "融資金(仟元)", "157223000", "0", "0", "0", "147413000"],
+                    ],
+                }
+            ],
+        }
+
+        tmp_hist = Path("finmind_reports/.state/test_margin_mixed_dates.json")
+        if tmp_hist.is_file():
+            tmp_hist.unlink()
+        try:
+            with patch("finmind_stock_scanner.urlopen") as mock_url:
+                r1, r2 = MagicMock(), MagicMock()
+                r1.read.return_value = json.dumps(twse_data).encode("utf-8")
+                r2.read.return_value = json.dumps(tpex_data).encode("utf-8")
+                mock_url.side_effect = [
+                    MagicMock(__enter__=MagicMock(return_value=r1)),
+                    MagicMock(__enter__=MagicMock(return_value=r2)),
+                ]
+                res = fetch_market_margin_snapshot(history_path=tmp_hist, as_of=date(2026, 11, 20))
+
+            self.assertEqual(res["date"], "2026-11-19")
+            self.assertTrue(res["is_stale"])
+            self.assertAlmostEqual(res["twse_margin_yi"], 4843.68, places=2)
+            self.assertAlmostEqual(res["tpex_margin_yi"], 1474.13, places=2)
+            self.assertAlmostEqual(res["total_margin_yi"], 6317.81, places=2)
+        finally:
+            if tmp_hist.is_file():
+                tmp_hist.unlink()
+
+    def test_fetch_or_load_market_regime_refreshes_stale_margin_cache(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            daily_dir = root / "daily"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            as_of = date(2026, 11, 20)
+
+            # 準備本地 prices.csv（供重算大盤紅綠燈用）
+            dates = pd.date_range("2026-08-01", periods=60, freq="B")
+            pd.DataFrame({
+                "stock_id": ["TAIEX"] * 60,
+                "date": [d.strftime("%Y-%m-%d") for d in dates],
+                "close": [42000.0 - i * 100.0 for i in range(60)],
+            }).to_csv(daily_dir / "2026-11-20_prices.csv", index=False)
+
+            # 模擬 19:00 存下的快取（融資日期為昨日 2026-11-19）
+            stale_cache = {
+                "light": "🔴紅燈",
+                "MA17": 37000.0,
+                "MA45": 39000.0,
+                "MA117": 40000.0,
+                "MA189": 41000.0,
+                "margin_regime": "⚡ 融資斷頭宣洩（留意止穩黃金坑）",
+                "margin_info": {
+                    "date": "2026-11-19",
+                    "as_of_date": "2026-11-20",
+                    "is_stale": True,
+                    "total_margin_yi": 6317.81,
+                    "margin_chg_1d_yi": -334.68,
+                    "margin_chg_5d_yi": -768.4,
+                },
+                "summary": "old summary",
+            }
+            cache_file = daily_dir / "2026-11-20_market_regime.json"
+            cache_file.write_text(json.dumps(stale_cache, ensure_ascii=False), encoding="utf-8")
+
+            # 模擬 21:30 官方已公布 2026-11-20 最新融資
+            fresh_margin = {
+                "date": "2026-11-20",
+                "as_of_date": "2026-11-20",
+                "is_stale": False,
+                "twse_margin_yi": 4352.27,
+                "tpex_margin_yi": 1328.53,
+                "total_margin_yi": 5680.80,
+                "margin_chg_1d_yi": -637.01,
+                "margin_chg_5d_yi": -1405.39,
+            }
+            with patch("finmind_stock_scanner.fetch_market_margin_snapshot", return_value=fresh_margin) as mock_fetch:
+                regime = fetch_or_load_market_regime(
+                    daily_directory=daily_dir,
+                    as_of=as_of,
+                    benchmark_id="TAIEX",
+                )
+
+            mock_fetch.assert_called_once()
+            self.assertEqual(regime["margin_info"]["date"], "2026-11-20")
+            self.assertAlmostEqual(regime["margin_info"]["total_margin_yi"], 5680.80, places=2)
+            self.assertIn("5,680.8", regime["summary"])
+            self.assertNotIn("截至", regime["summary"])
+            # 確認快取檔已被覆寫更新
+            reloaded = json.loads(cache_file.read_text(encoding="utf-8"))
+            self.assertEqual(reloaded["margin_info"]["date"], "2026-11-20")
 
     def test_sync_chip_summary_margin_and_quadrant(self):
         mgr = FundamentalCacheManager.__new__(FundamentalCacheManager)
