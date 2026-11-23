@@ -819,5 +819,71 @@ class ReboundV6Tests(unittest.TestCase):
             self.assertEqual(audit_records["3293"]["Allocation_Weight_Pct"], 0)
             self.assertIn("保留現金觀望", str(audit_records["3293"]["Ideal_Buy_Or_Ref"]))
 
+    def test_lower_support_poc_strictly_below_close_and_dump_prompt_only_zero_ai(self) -> None:
+        """驗證下檔大量支撐區嚴格低於現價、不印 X~X 重複區間，且 --dump-prompt-only 0-Token 產出完整 Prompt。"""
+        import json
+        import re
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import MagicMock, patch
+
+        from finmind_stock_scanner import build_strategic_tech_and_chip_package
+        from quant.alignment_ai_picker import dump_strategic_layout_prompt_only
+
+        dates = pd.date_range("2026-08-01", periods=65, freq="B")
+        # 模擬 2207 和泰車：前面 64 天在 514~550 盤整，最後一天收 516
+        closes = [530.0 + (i % 10) * 2.0 for i in range(64)] + [516.0]
+        df_stock = pd.DataFrame({
+            "stock_id": ["2207"] * 65,
+            "date": [d.strftime("%Y-%m-%d") for d in dates],
+            "open": [c + 1.0 for c in closes],
+            "max": [c + 4.0 for c in closes],
+            "min": [c - 3.0 for c in closes],
+            "close": closes,
+            "Trading_Volume": [500_000] * 65,
+        })
+        pkg = build_strategic_tech_and_chip_package("2207", "和泰車", df_stock, selection_mode="trend")
+        for node_txt in pkg["lower_support_nodes"]:
+            m = re.search(r"(\d+(?:\.\d+)?)~(\d+(?:\.\d+)?)\s*元", node_txt)
+            if m:
+                lo_v, hi_v = float(m.group(1)), float(m.group(2))
+                self.assertNotEqual(lo_v, hi_v)
+                self.assertLessEqual((lo_v + hi_v) / 2.0, 516.0)
+
+        # 驗證 dump_strategic_layout_prompt_only 0-Token 產出完整 Prompt（含 AI #2 標頭與台新曝險）
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            daily_dir = root / "daily"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            cfg_path = Path("finmind_scanner.json")
+            df_taiex = df_stock.copy()
+            df_taiex["stock_id"] = "TAIEX"
+            df_taiex["close"] = [38000.0 - i * 30.0 for i in range(65)]
+            pd.concat([df_stock, df_taiex], ignore_index=True).to_csv(
+                daily_dir / "2026-11-20_prices.csv", index=False
+            )
+
+            with (
+                patch("taishin.macro_context.fetch_global_macro_context", return_value={"prompt_block": "- 美股測試"}),
+                patch("finmind_stock_scanner.fetch_or_load_market_regime", return_value={"summary": "🔴紅燈"}),
+                patch("finmind_stock_scanner.fetch_or_cache_tdcc_holding", return_value=None),
+                patch("taishin_portfolio_service.load_portfolio_exposure_inputs", return_value=([], {})),
+                patch("quant.alignment_ai_picker.FundamentalCacheManager", side_effect=RuntimeError("offline")),
+            ):
+                out_md = dump_strategic_layout_prompt_only(
+                    config_path=cfg_path,
+                    target_date="2026-11-20",
+                    selection_mode="trend",
+                    stock_ids=["2207"],
+                    output_dir=root,
+                )
+
+            self.assertTrue(out_md.is_file())
+            txt = out_md.read_text(encoding="utf-8")
+            self.assertIn("### 🏆 【入選績優股 #1】2207", txt)
+            self.assertIn("台新帳戶庫存共伴曝險", txt)
+            self.assertIn("極端股災熔斷", txt)
+            self.assertIn("僅有單週快照", txt)
+
 
 

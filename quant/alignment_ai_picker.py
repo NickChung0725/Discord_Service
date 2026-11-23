@@ -2845,9 +2845,10 @@ async def execute_v61_quality_and_strategic_pipeline(
             rr_val = round((tp1_num - entry_for_rr) / (entry_for_rr - sl_num), 2)
 
         ai_action = str(s_item.get("action") or "").strip().upper()
+        w_pct_num = _parse_optional_num(w_pct)
         is_wait_observe = (
             ai_action == "WAIT_OBSERVE"
-            or (isinstance(w_pct, (int, float)) and float(w_pct) <= 0.0)
+            or (w_pct_num is not None and w_pct_num <= 0.0)
             or (isinstance(rr_val, float) and rr_val < 1.5)
         )
         if is_wait_observe:
@@ -4518,6 +4519,248 @@ async def run_rebound_pipeline(
     _cleanup_old_daily_reports(daily_dir, target_date, int(config["local_retention_days"]))
     flush_bq_archives()
     return 0
+
+
+def dump_strategic_layout_prompt_only(
+    *,
+    config_path: Path,
+    target_date: str | None = None,
+    selection_mode: str = "trend",
+    stock_ids: list[str] | None = None,
+    output_dir: Path | None = None,
+    max_stocks: int = 5,
+) -> Path:
+    """0-Token 全真預覽模式：完整執行所有免費／快取資料流並產出 AI #3 Prompt，但不呼叫任何 AI。
+
+    - 完整串接：本地日線、大盤紅綠燈（含融資過期補刷）、OTC 摘要、盤後美股（含美東交易日）、
+      Google Sheets 財報快取（前瞻 EPS／同業 PE／股本／股利）、FinMind 60 日法人與融資明細（VWAP）、
+      近 12 週 TDCC 集保大戶歷史、以及台新帳戶庫存共伴曝險。
+    - 嚴格不呼叫 Gemini / Vertex AI、不寫入 Google Sheets、不推播 Discord。
+    """
+    load_dotenv()
+    config = load_scan_config(config_path)
+    as_of = date.fromisoformat(target_date) if target_date else _today_in_taipei()
+    base_dir = output_dir or Path(str(_cfg(config, "output_directory", "finmind_reports")))
+    daily_dir = base_dir / "daily"
+    state_dir = base_dir / ".state"
+
+    prices_csv = daily_dir / f"{as_of.isoformat()}_prices.csv"
+    if not prices_csv.is_file():
+        raise FileNotFoundError(f"找不到當日日線檔：{prices_csv}")
+    prices = pd.read_csv(prices_csv, dtype={"stock_id": str})
+
+    is_rebound = (selection_mode or "").strip().lower() == "rebound"
+    sig_csv = daily_dir / f"{as_of.isoformat()}_{'rebound' if is_rebound else 'alignment'}_signals.csv"
+    sig_df = pd.read_csv(sig_csv, dtype={"stock_id": str}) if sig_csv.is_file() else pd.DataFrame()
+    sig_row_map: dict[str, dict[str, object]] = {}
+    if not sig_df.empty and "stock_id" in sig_df.columns:
+        for _, r in sig_df.iterrows():
+            sig_row_map[str(r["stock_id"]).strip()] = r.to_dict()
+
+    if stock_ids:
+        chosen_sids = [s.strip() for s in stock_ids if s.strip()]
+    elif not sig_df.empty and "stock_id" in sig_df.columns:
+        chosen_sids = [str(s).strip() for s in sig_df["stock_id"].head(max_stocks).tolist()]
+    else:
+        raise RuntimeError(f"未指定 --stocks 且找不到訊號檔：{sig_csv}")
+
+    tw_latest_date_str = ""
+    if not prices.empty and "date" in prices.columns:
+        try:
+            tw_latest_date_str = str(pd.to_datetime(prices["date"], errors="coerce").dropna().max().strftime("%Y-%m-%d"))
+        except Exception:  # noqa: BLE001
+            tw_latest_date_str = as_of.isoformat()
+
+    from taishin.macro_context import fetch_global_macro_context
+    from taishin_portfolio_service import evaluate_candidate_exposure, load_portfolio_exposure_inputs
+    from finmind_stock_scanner import (
+        build_market_daily_trend_block,
+        build_strategic_tech_and_chip_package,
+        compensate_ex_dividend_gaps,
+        fetch_or_cache_tdcc_holding,
+        fetch_or_load_market_regime,
+    )
+
+    benchmark_id = str(_cfg(config, "market_benchmark_id", "TAIEX"))
+    macro_ctx = fetch_global_macro_context(
+        context_mode="post_market",
+        tw_latest_date=tw_latest_date_str or as_of.isoformat(),
+    )
+    macro_block = str(macro_ctx.get("prompt_block") or "")
+    market_regime = fetch_or_load_market_regime(
+        daily_directory=daily_dir,
+        as_of=as_of,
+        benchmark_id=benchmark_id,
+    )
+    market_daily_block = build_market_daily_trend_block(
+        prices,
+        benchmark_id=benchmark_id,
+        margin_history_path=state_dir / "market_margin_history.json",
+        days=10,
+    )
+
+    bench_prices_df: pd.DataFrame | None = None
+    for b_cand in ("TAIEX", benchmark_id, "0050"):
+        b_sub = prices.loc[prices["stock_id"].astype(str) == str(b_cand)].copy()
+        if not b_sub.empty:
+            bench_prices_df = b_sub
+            break
+
+    cache: FundamentalCacheManager | None = None
+    analyzer: FundamentalAnalyzer | None = None
+    try:
+        cache = FundamentalCacheManager()
+        analyzer = FundamentalAnalyzer(cache=cache)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[dump-prompt] 初始化財報快取失敗（改以純價格預覽）：{exc}")
+
+    try:
+        holdings, holding_prices = load_portfolio_exposure_inputs(prices)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[dump-prompt] 讀取台新庫存曝險失敗（略過）：{exc}")
+        holdings, holding_prices = [], {}
+
+    sector_pe_lookup: dict[str, float] = {}
+    if analyzer is not None and hasattr(analyzer, "compute_cross_sectional_pe_map"):
+        try:
+            sector_pe_lookup = analyzer.compute_cross_sectional_pe_map(chosen_sids)
+        except Exception:  # noqa: BLE001
+            sector_pe_lookup = {}
+
+    tdcc_cache_path = state_dir / "tdcc_holding_cache.json"
+    finmind_loader = getattr(cache, "_finmind", None) if cache is not None else None
+    enable_ex_div = bool(_cfg(config, "enable_ex_dividend_compensation", True))
+
+    strategic_blocks: list[str] = []
+    for rank_i, sid in enumerate(chosen_sids, start=1):
+        row = sig_row_map.get(sid, {})
+        sname = str(row.get("stock_name") or sid)
+        sub_ind = str(row.get("sub_industry") or row.get("industry_category") or "未分類")
+
+        raw_stock_prices = prices.loc[prices["stock_id"].astype(str) == sid].copy()
+        div_df: pd.DataFrame | None = None
+        if analyzer is not None and hasattr(analyzer, "cache"):
+            try:
+                div_df = analyzer.cache._read_stock_rows(  # noqa: SLF001
+                    analyzer.cache._get_worksheet("06_Dividend_Policy"),  # noqa: SLF001
+                    sid,
+                )
+            except Exception:  # noqa: BLE001
+                div_df = None
+
+        prices_for_tech = raw_stock_prices
+        if not raw_stock_prices.empty and enable_ex_div and div_df is not None and not div_df.empty:
+            try:
+                prices_for_tech = compensate_ex_dividend_gaps(raw_stock_prices, div_df)
+            except Exception:  # noqa: BLE001
+                prices_for_tech = raw_stock_prices
+
+        daily_chip_df = pd.DataFrame()
+        if cache is not None:
+            try:
+                daily_chip_df = cache.get_daily_chip_history(sid, 60)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[dump-prompt] 讀取 {sid} 60日法人/融資明細失敗：{exc}")
+
+        feat_obj = None
+        if analyzer is not None and hasattr(analyzer, "compute_fundamental_features"):
+            try:
+                close_hint = (
+                    float(pd.to_numeric(raw_stock_prices["close"], errors="coerce").dropna().iloc[-1])
+                    if not raw_stock_prices.empty
+                    else _parse_optional_num(row.get("close"))
+                )
+                feat_obj = analyzer.compute_fundamental_features(
+                    sid,
+                    close=close_hint,
+                    stock_name=sname,
+                    sub_industry=sub_ind,
+                    sector_pe_lookup=sector_pe_lookup,
+                )
+            except Exception:  # noqa: BLE001
+                feat_obj = None
+
+        fwd_val = getattr(feat_obj, "forward_valuation", {}) if feat_obj is not None else {}
+        fwd_eps = _parse_optional_num(fwd_val.get("implied_core_forward_eps")) if isinstance(fwd_val, Mapping) else None
+        peer_pe = _parse_optional_num(fwd_val.get("sector_median_pe")) if isinstance(fwd_val, Mapping) else None
+        cap_twd: float | None = None
+        if feat_obj is not None:
+            cs_val = getattr(feat_obj, "capital_stock", None)
+            if cs_val is None and isinstance(fwd_val, Mapping):
+                cs_val = fwd_val.get("capital_stock")
+            cap_num = _parse_optional_num(cs_val)
+            if cap_num and cap_num > 0:
+                cap_twd = cap_num * 1e6 if cap_num < 1_000_000 else cap_num
+
+        tdcc_df: pd.DataFrame | None = None
+        try:
+            tdcc_df = fetch_or_cache_tdcc_holding(
+                sid,
+                as_of=as_of,
+                cache_path=tdcc_cache_path,
+                loader=finmind_loader,
+            )
+        except Exception:  # noqa: BLE001
+            tdcc_df = None
+
+        ann_div: float | None = None
+        if div_df is not None and not div_df.empty and "cash_dividend" in div_df.columns:
+            div_vals = pd.to_numeric(div_df["cash_dividend"], errors="coerce").dropna()
+            if not div_vals.empty:
+                ann_div = float(div_vals.iloc[-1])
+
+        pkg = build_strategic_tech_and_chip_package(
+            sid,
+            sname,
+            prices_for_tech,
+            daily_chip_df=daily_chip_df,
+            benchmark_prices=bench_prices_df,
+            tdcc_holding_df=tdcc_df,
+            paid_in_capital_twd=cap_twd,
+            forward_eps=fwd_eps,
+            peer_median_pe=peer_pe,
+            annual_cash_dividend=ann_div,
+            selection_mode=selection_mode,
+        )
+
+        exposure = evaluate_candidate_exposure(
+            sid,
+            sub_ind,
+            holdings,
+            candidate_prices=raw_stock_prices,
+            holding_prices=holding_prices,
+        )
+        exp_status = _exposure_field(exposure, "exposure_status", "OPEN")
+
+        block_lines = [
+            f"### 🏆 【入選績優股 #{rank_i}】{sid} {sname}（{sub_ind}｜AI#2 體質評級：PREVIEW_0_TOKEN｜體質分：N/A｜法說展望：PREVIEW）",
+            "- **AI #2 績優選拔核心理由**：（--dump-prompt-only 0-Token 預覽模式：未呼叫 AI #2）",
+            "- **AI #2 法人與大戶底氣**：（--dump-prompt-only 0-Token 預覽模式：未呼叫 AI #2）",
+            f"- **台新帳戶庫存共伴曝險**：{exp_status}（同產業持股：{list(_exposure_field(exposure, 'same_sector_holdings', []) or [])}｜最高相關持股：{_exposure_field(exposure, 'max_corr_holding_id')} 相關係數 {_exposure_field(exposure, 'max_corr_value', 0.0)}）",
+            str(pkg.get("prompt_block") or ""),
+        ]
+        strategic_blocks.append("\n".join(block_lines))
+
+    template_key = "strategic_layout_rebound" if is_rebound else "strategic_layout_trend"
+    market_light_str = str(market_regime.get("summary") or market_regime.get("light") or "🟡黃燈")
+    full_prompt = (
+        PROMPT_TEMPLATES[template_key]
+        + "\n\n==================================================\n"
+        + "【一、隔夜美股與國際總經環境（費半 SOX / 那指 IXIC / 標普 GSPC / 台積電 ADR / NVDA / VIX / 台幣匯率）】\n"
+        + (macro_block.strip() or "（無國際盤快取資料）")
+        + "\n\n==================================================\n"
+        + "【二、台股大盤雙指數氣候與近 10 交易日價量、均線及大盤整體融資趨勢】\n"
+        + f"- 大盤即時狀態：{market_light_str}\n"
+        + (market_daily_block.strip() or "")
+        + "\n\n==================================================\n"
+        + f"【三、入選 Top 績優股（共 {len(strategic_blocks)} 檔）— 20日逐日價量均線指標籌碼合一表 ＋ 三大大量支撐定位器】\n\n"
+        + "\n\n---\n\n".join(strategic_blocks)
+    )
+    mode_tag = "rebound" if is_rebound else "trend"
+    out_path = daily_dir / f"{as_of.isoformat()}_preview_{mode_tag}_prompt.md"
+    out_path.write_text(full_prompt, encoding="utf-8")
+    print(f"[dump-prompt] ✅ 已產出 0-Token 全真預覽 Prompt：{out_path}（共 {len(full_prompt)} 字，未呼叫任何 AI）")
+    return out_path
 
 
 def run_rebound_from_cli(

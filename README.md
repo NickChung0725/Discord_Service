@@ -230,6 +230,10 @@ uv run python finmind_stock_scanner.py recalc-signals --date YYYY-MM-DD         
 # 手動預覽 21:30 AI 財報選股（--dry-run 不寫入 08 表、不推播 Discord，僅印在終端機）
 uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD --dry-run
 
+# 0-Token 全真預覽 AI #3 Prompt（完整重跑所有免費/快取資料流並匯出 .md，不呼叫任何 AI、不寫 Sheets、不發 Discord）
+uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD --dump-prompt-only --stocks 3293,2207
+uv run python finmind_stock_scanner.py analyze-rebound --date YYYY-MM-DD --dump-prompt-only --stocks 3293,2207
+
 # 正式執行 21:30 AI 財報選股並推播至 Discord 與 Google Sheets
 uv run python finmind_stock_scanner.py analyze-alignment --date YYYY-MM-DD
 

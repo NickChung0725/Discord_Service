@@ -19,7 +19,9 @@
   * **相對大盤強弱 (RS / 60日Beta)、近 8～12 週集保大戶濃縮摘要與 R/R < 1.5 留現金逃生閥**：
     * 新增 `compute_relative_strength_and_beta()` 純本地計算近 5 日 / 20 日超額報酬與 60 日 Beta 注入 AI #3（零外部配額）。
     * 新增 `summarize_tdcc_multiweek_trend()` 並擴充 `fetch_or_cache_tdcc_holding()` 至 12～13 週（95 天），依動態門檻（股價 `> 200` 或股本 `< 50` 億看 400 張，否則看 1000 張）輸出含基準日之單行濃縮摘要（大戶近 1/4/8 週增減與連增減週數、10 張以下散戶近 4 週變動、總股東人數近 4 週增減）。
-    * AI #3 權重總和放寬為 `<= 100%`（未分配保留現金），新增 `action: "BUY_3TIER | WAIT_OBSERVE"` 與 `R/R < 1.5` 強制歸零權重保留現金觀望防呆。
+    * AI #3 權重總和放寬為 `<= 100%`（未分配保留現金），新增 `action: "BUY_3TIER | WAIT_OBSERVE"` 與 `R/R < 1.5` 強制歸零權重保留現金觀望防呆；補齊「極端股災熔斷（VIX > 30 或費半 < -5% 總倉位壓低至 0%～20%）」與「集保僅有單週快照嚴禁腦補趨勢」規則。
+    * 修正 `build_strategic_tech_and_chip_package()` 下檔大量支撐區過濾條件為 `區間上緣 <= 現價`（杜絕高於現價之套牢區誤標為下檔支撐），且區間上下緣相同時只印單一價位。
+  * **新增 `--dump-prompt-only` 0-Token 全真預覽 CLI（[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：`analyze-alignment` 與 `analyze-rebound` 支援 `--dump-prompt-only [--stocks 3293,2207]`，完整執行所有免費／快取資料流（日線、大盤融資、美股、法人與融資 60 日表／VWAP、TDCC 12 週集保、前瞻 EPS 與台新庫存共伴曝險）並匯出 AI #3 Prompt 至 `daily/{date}_preview_{mode}_prompt.md`，完全不呼叫任何 AI。
 * **補充單元測試（[`tests/test_margin_features.py`](/tests/test_margin_features.py)、[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**：新增 API 實際日期入帳防錯位、上市櫃跨日自動對齊、21:30 過期快取自動刷新、破線股三階防倒掛與前瞻 EPS 明數、OTC 防腦補、盤後美股防重複計價、RS/Beta 與近 8～12 週集保動態門檻摘要，以及 `R/R < 1.5` / `WAIT_OBSERVE` 留現金逃生閥等回歸測試。
 
 ---

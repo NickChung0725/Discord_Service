@@ -1045,11 +1045,16 @@ def build_strategic_tech_and_chip_package(
         if va_lows and va_highs:
             val_60d = round_tw_tick(min(va_lows))
             vah_60d = round_tw_tick(max(va_highs))
-        below_bins = [b for b in sorted_bins if b[0] <= close_t * 1.01 and b[3] > 0]
+        below_bins = [b for b in sorted_bins if b[1] <= close_t and b[3] > 0]
+        if not below_bins:
+            # 若現價正落於最低分箱內，退而允許區間中點 <= 現價
+            below_bins = [b for b in sorted_bins if b[2] <= close_t and b[3] > 0]
         for rank_i, (b_lo, b_hi, _b_mid, v_sum) in enumerate(below_bins[:2], start=1):
             share_pct = round(v_sum / total_v60 * 100.0, 1)
+            lo_t, hi_t = round_tw_tick(b_lo), round_tw_tick(b_hi)
+            zone_txt = f"{lo_t:.2f}" if lo_t == hi_t else f"{lo_t:.2f}~{hi_t:.2f}"
             lower_support_nodes.append(
-                f"下檔大量支撐區 #{rank_i}：{round_tw_tick(b_lo):.2f}~{round_tw_tick(b_hi):.2f} 元"
+                f"下檔大量支撐區 #{rank_i}：{zone_txt} 元"
                 f"（累計 {int(v_sum):,} 張，佔60日量 {share_pct}%）"
             )
     if not lower_support_nodes:
@@ -1215,6 +1220,10 @@ def build_strategic_tech_and_chip_package(
         ma189_v = float(last_r.get("MA189") or ma117_v)
         is_broken_below_ma = (close_t < ma17_v) or (close_t < ma45_v)
 
+        def _fmt_zone(a: float, b: float) -> str:
+            lo_v, hi_v = min(a, b), max(a, b)
+            return f"{lo_v:.2f}" if abs(hi_v - lo_v) < 1e-6 else f"{lo_v:.2f}~{hi_v:.2f}"
+
         if is_broken_below_ma:
             # 破線防禦模式：現價已跌破 17MA 或 45MA，嚴禁將上方均線當支撐，改依現價下方結構階梯承接
             t1_high = round_tw_tick(close_t * 0.99)
@@ -1226,9 +1235,9 @@ def build_strategic_tech_and_chip_package(
             t2_low = round_tw_tick(min(t2_high, max(lower_ma_anchor, close_t - 1.5 * atr)))
             t3_high = round_tw_tick(min(t2_low * 0.99, close_t - 1.8 * atr))
             t3_low = round_tw_tick(min(t3_high, max(l60_val * 0.98, close_t - 2.3 * atr)))
-            t1_ref = f"{min(t1_low, t1_high):.2f}~{max(t1_low, t1_high):.2f}（⚠️破線防禦：現價下方止穩試單區，上方17MA/45MA已轉反壓）"
-            t2_ref = f"{min(t2_low, t2_high):.2f}~{max(t2_low, t2_high):.2f}（下檔大量支撐/MA117核心承接區）"
-            t3_ref = f"{min(t3_low, t3_high):.2f}~{max(t3_low, t3_high):.2f}（左側極限黃金坑/MA189與前低防守區）"
+            t1_ref = f"{_fmt_zone(t1_low, t1_high)}（⚠️破線防禦：現價下方止穩試單區，上方17MA/45MA已轉反壓）"
+            t2_ref = f"{_fmt_zone(t2_low, t2_high)}（下檔大量支撐/MA117核心承接區）"
+            t3_ref = f"{_fmt_zone(t3_low, t3_high)}（左側極限黃金坑/MA189與前低防守區）"
             t1_price = max(t1_low, t1_high)
             t2_price = max(t2_low, t2_high)
             t3_price = max(t3_low, t3_high)
@@ -1243,9 +1252,9 @@ def build_strategic_tech_and_chip_package(
             t2_low = round_tw_tick(min(t2_high, min(ma17_v, fib_382) if min(ma17_v, fib_382) <= t2_high else t2_high * 0.98))
             t3_high = round_tw_tick(min(t2_low * 0.995, max(ma45_v, fib_500) if max(ma45_v, fib_500) < t2_low else t2_low * 0.98))
             t3_low = round_tw_tick(min(t3_high, min(ma45_v, fib_618) if min(ma45_v, fib_618) <= t3_high else t3_high * 0.98))
-            t1_ref = f"{min(t1_low, t1_high):.2f}~{max(t1_low, t1_high):.2f}（回測MA3~MA17/0.236回檔量縮區）"
-            t2_ref = f"{min(t2_low, t2_high):.2f}~{max(t2_low, t2_high):.2f}（回測17MA與0.382黃金分割核心支撐區）"
-            t3_ref = f"{min(t3_low, t3_high):.2f}~{max(t3_low, t3_high):.2f}（大盤急殺回測45MA季線/0.618黃金坑防守區）"
+            t1_ref = f"{_fmt_zone(t1_low, t1_high)}（回測MA3~MA17/0.236回檔量縮區）"
+            t2_ref = f"{_fmt_zone(t2_low, t2_high)}（回測17MA與0.382黃金分割核心支撐區）"
+            t3_ref = f"{_fmt_zone(t3_low, t3_high)}（大盤急殺回測45MA季線/0.618黃金坑防守區）"
             t1_price = max(t1_low, t1_high)
             t2_price = max(t2_low, t2_high)
             t3_price = max(t3_low, t3_high)
@@ -1881,7 +1890,7 @@ def fetch_or_cache_tdcc_holding(
     records: list[dict[str, Any]] = []
     if loader is not None and hasattr(loader, "taiwan_stock_holding_shares_per"):
         try:
-            start_str = (pd.Timestamp(today) - pd.Timedelta(days=95)).strftime("%Y-%m-%d")
+            start_str = (today - timedelta(days=95)).isoformat()
             df = loader.taiwan_stock_holding_shares_per(
                 stock_id=sid, start_date=start_str, end_date=today.isoformat()
             )
@@ -5944,6 +5953,12 @@ def _make_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--force-ai", action="store_true", help="忽略單股 AI 快取，強制重新診斷")
     analyze_parser.add_argument("--dry-run", action="store_true", help="不寫入 Sheets、不推播 Discord，只輸出結果")
     analyze_parser.add_argument(
+        "--dump-prompt-only",
+        action="store_true",
+        help="0-Token 全真預覽：完整執行所有免費/快取資料流並匯出 AI #3 Prompt 至 daily/{date}_preview_trend_prompt.md，不呼叫任何 AI",
+    )
+    analyze_parser.add_argument("--stocks", help="搭配 --dump-prompt-only 指定預覽股號（逗號分隔，如 3293,2207）")
+    analyze_parser.add_argument(
         "--batch",
         dest="batch",
         action="store_true",
@@ -5988,6 +6003,12 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     rebound_parser.add_argument("--force-ai", action="store_true", help="忽略單股 AI 快取，強制重新診斷")
     rebound_parser.add_argument("--dry-run", action="store_true", help="只在終端機印出結果，不寫入 Sheets 與 Discord")
+    rebound_parser.add_argument(
+        "--dump-prompt-only",
+        action="store_true",
+        help="0-Token 全真預覽：完整執行所有免費/快取資料流並匯出反彈 AI #3 Prompt 至 daily/{date}_preview_rebound_prompt.md，不呼叫任何 AI",
+    )
+    rebound_parser.add_argument("--stocks", help="搭配 --dump-prompt-only 指定預覽股號（逗號分隔，如 3293,2207）")
     rebound_parser.add_argument("--no-gsheet", action="store_true", help="不更新 Google Sheets Rebound_Watchlist")
     rebound_parser.add_argument("--no-discord", action="store_true", help="不推播 Discord 訊息")
     rebound_parser.add_argument(
@@ -6114,6 +6135,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "analyze-alignment":
+            if getattr(args, "dump_prompt_only", False):
+                from alignment_ai_picker import dump_strategic_layout_prompt_only
+
+                sids = [s.strip() for s in str(args.stocks or "").split(",") if s.strip()] or None
+                dump_strategic_layout_prompt_only(
+                    config_path=args.config,
+                    target_date=args.date,
+                    selection_mode="trend",
+                    stock_ids=sids,
+                )
+                return 0
             from alignment_ai_picker import run_from_cli
 
             return run_from_cli(
@@ -6125,6 +6157,18 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         if args.command == "analyze-rebound":
+            if getattr(args, "dump_prompt_only", False):
+                from alignment_ai_picker import dump_strategic_layout_prompt_only
+
+                sids = [s.strip() for s in str(args.stocks or "").split(",") if s.strip()] or None
+                dump_strategic_layout_prompt_only(
+                    config_path=args.config,
+                    target_date=args.date,
+                    selection_mode="rebound",
+                    stock_ids=sids,
+                    output_dir=args.output_dir,
+                )
+                return 0
             from alignment_ai_picker import run_rebound_from_cli
 
             return run_rebound_from_cli(
