@@ -783,7 +783,8 @@ PROMPT_TEMPLATES: dict[str, str] = {
 【核心戰略鐵律：寧可等拉回買在支撐，絕不現價無腦追高買在山頂！】
 1. **第一層：總體倉位控管與各股資金權重分配（Top-Down Position Sizing）**：
    - 綜合美股（費半 SOX / TSM ADR / VIX，並核對美東交易日避免重複計價）、台股大盤位階與「大盤整體融資增減（散戶凹單 vs 清洗完畢）」，決定今日建議總投入資金上限 `recommended_total_exposure_pct`（0~100%，如大盤偏空或美股重挫時建議 30%~50%，順風時 60%~80%）。
-   - 為入選的每檔績優股分配 `allocation_weight_pct`（佔總可用額度之百分比，所有入選股權重加總必須等於 100%，如 3 檔可配 40% / 35% / 25%）。
+   - 為入選的每檔績優股分配 `allocation_weight_pct`（佔總可用額度之百分比，**所有入選股權重加總須 `<= 100%`，未分配之餘額自動保留為現金部位，絕不為了湊滿 100% 而硬買！**）。
+   - **相對大盤強弱 (RS / 60日Beta) 與集保大戶交叉驗證**：空頭盤優先將較高權重配置給「低 Beta、近 5/20 日正超額報酬 (RS)」之抗跌強股；並核對「📦 集保大戶籌碼（含資料基準日）」之近 4～8 週大戶增減、10 張以下散戶與總股東人數變化（大戶增＋散戶減＋股東人數降＝籌碼真正集中；若外資帳面大買但大戶近 4 週連降，慎防假外資拉高出貨）。
    - **台新帳戶庫存共伴曝險降權規則**：檢視每檔附帶之「台新帳戶庫存共伴曝險」欄位，若狀態為 `SECTOR_OR_CORR_FULL_SWAP_ONLY`、同產業已有持股或與現有庫存相關係數 `> 0.70`，應顯著調降該股 `allocation_weight_pct` 並於診斷中註明優先以汰弱換強／換股方式進場，避免集中度過高。
 2. **第二層：21:30 順勢績優股專屬「三階金字塔回檔低接掛單（30% / 40% / 30%）」與破線防禦分流**：
    - **嚴格單調遞減鐵律**：三批掛單價位必須嚴格滿足 **`現價 >= 第1批 > 第2批 > 第3批 > 硬停損`**，嚴禁高於現價追買或批次價位倒掛！
@@ -792,13 +793,14 @@ PROMPT_TEMPLATES: dict[str, str] = {
      * **第 2 批核心低接 (`tier2_entry`，佔該股部位 40%)**：鎖定主部隊甜美承接區（如回測上升 `17MA ~ 45MA`、**現價下方第 1 大量換手支撐區 Support POC #1**、或 **投信/外資 20 日買超成本均價 VWAP**），搭配「留長下影線承接或 RSI/KD 落底再金叉」觸發。
      * **第 3 批極限黃金坑 (`tier3_entry`，佔該股部位 30%)**：鎖定大盤急殺洗盤之極限鐵板區（如回測上升 `45MA` 季線、**下檔第 2 大量支撐區 Support POC #2**、黃金分割 `0.500~0.618` 或關鍵爆量紅K最低價），搭配「融資斷頭減肥、外資與投信逆勢護盤」觸發。
    - **狀態 B（破線防禦分流：若個股當日急殺導致 `收盤 < MA17` 或 `收盤 < MA45`）**：**嚴禁再將已跌破的上方 `17MA / 45MA` 寫成下檔低接支撐**（上方均線與向下跳空缺口已轉為反壓）！必須切換為「🛡️ 破線防禦／左側急殺承接模式」：三批低接全部改依**現價下方**之 `Support POC #1/#2`、`117MA / 189MA` 長均線、關鍵爆量紅K低點與基本面價值鐵底規劃，且若大盤紅燈疊加個股破線無下檔承接，允許將 `tactical_type` 改為 `🛡️ 破線防禦／暫緩追價觀望`。
-3. **精確點位與波段停利停損**：
+3. **精確點位、強制風報比 (R/R) 檢核與空手觀望逃生閥**：
    - 必須給出三批買滿後的預估加權均價 `weighted_avg_entry_price` 與嚴禁追高警戒線 `chase_limit_price`。
    - `target_price_1`（第一波段目標，先調節 50%）對齊前波高點或 ATR 波段延伸（破線股優先對齊上方 `17MA/45MA` 反壓或跳空缺口下緣）；`target_price_2`（第二波段目標）對齊內文明示之「本業前瞻 EPS × 合理目標 PE」；`stop_loss_price` 設於跌破第 3 批極限支撐與結構防線之下。
+   - **強制風報比檢核與空手逃生閥**：計算預估風報比 `R/R = (target_price_1 - weighted_avg_entry_price) / (weighted_avg_entry_price - stop_loss_price)`。若 **`R/R < 1.5`**，或大盤紅燈且個股剛跌破季線 (`45MA`) 無下檔明確支撐，**必須強制輸出 `"action": "WAIT_OBSERVE"`、`"allocation_weight_pct": 0`**，保留現金觀望，嚴禁為了湊滿 100% 而硬給買點！
 
 【輸出規定】
 只輸出一個合法 JSON 物件（不要 markdown 程式碼區塊、嚴禁結尾雜字）：
-{"market_light": "🟢綠燈|🟡黃燈|🔴紅燈", "recommended_total_exposure_pct": 0~100整數, "market_comment": "結合美股(費半SOX/TSM/VIX)、台股大盤與大盤整體融資增減之總體倉位與進場節奏判讀，130字內", "strategic_picks": [{"rank": 1, "stock_id": "代號", "stock_name": "股名", "sector": "細分產業", "score": 0~100整數, "allocation_weight_pct": 0~100整數, "tactical_type": "🎯 強勢股拉回三階低接（依附17MA/45MA與大量區） | 🛡️ 破線防禦／左側急殺承接（跌破17MA/45MA） | 🛡️ 破線防禦／暫緩追價觀望", "current_tech_and_chip_diagnosis": "解讀近20日K線、五線均線斜率、KD/RSI/MACD位階、外資與投信及個股融資逐日動向及下檔大量支撐位置（嚴禁腦補表內未提供之自營商動向），120字內", "tier1_entry": "【第1批 30% 試單】具體掛單價位區間 ＋ 均線/大量區依據與指標觸發條件，70字內", "tier2_entry": "【第2批 40% 核心】具體掛單價位區間 ＋ 法人成本/Support POC依據與量價觸發條件，70字內", "tier3_entry": "【第3批 30% 黃金坑】具體掛單價位區間 ＋ 季線/爆量紅K低點/估值底依據與觸發條件，70字內", "weighted_avg_entry_price": "三批加權平均成本價(元)", "chase_limit_price": "嚴禁追高上限價(元)", "target_price_1": "第一目標價(元)與依據", "target_price_2": "第二目標價(元)與依據", "stop_loss_price": "波段硬停損價(元)與依據", "invalidation_rule": "技術或籌碼結構失效退場條件，70字內"}]}
+{"market_light": "🟢綠燈|🟡黃燈|🔴紅燈", "recommended_total_exposure_pct": 0~100整數, "market_comment": "結合美股(費半SOX/TSM/VIX)、台股大盤與大盤整體融資增減之總體倉位與進場節奏判讀，130字內", "strategic_picks": [{"rank": 1, "stock_id": "代號", "stock_name": "股名", "sector": "細分產業", "score": 0~100整數, "action": "BUY_3TIER | WAIT_OBSERVE", "allocation_weight_pct": 0~100整數, "tactical_type": "🎯 強勢股拉回三階低接（依附17MA/45MA與大量區） | 🛡️ 破線防禦／左側急殺承接（跌破17MA/45MA） | 🛡️ 破線防禦／暫緩追價觀望", "current_tech_and_chip_diagnosis": "解讀近20日K線、五線均線斜率、KD/RSI/MACD、RS/Beta、外資與投信、集保大戶週變動及個股融資動向（嚴禁腦補表內未提供之自營商動向），120字內", "tier1_entry": "【第1批 30% 試單】具體掛單價位區間 ＋ 均線/大量區依據與指標觸發條件，70字內", "tier2_entry": "【第2批 40% 核心】具體掛單價位區間 ＋ 法人成本/Support POC依據與量價觸發條件，70字內", "tier3_entry": "【第3批 30% 黃金坑】具體掛單價位區間 ＋ 季線/爆量紅K低點/估值底依據與觸發條件，70字內", "weighted_avg_entry_price": "三批加權平均成本價(元)", "chase_limit_price": "嚴禁追高上限價(元)", "target_price_1": "第一目標價(元)與依據", "target_price_2": "第二目標價(元)與依據", "stop_loss_price": "波段硬停損價(元)與依據", "invalidation_rule": "技術或籌碼結構失效退場條件，70字內"}]}
 """,
     # SASD v6.1 AI #3 (22:00 型態 A 反彈版)：跌深回踩長均線績優股「右腳/破線洗盤三階低接 ＋ 雙層籌碼分配」
     "strategic_layout_rebound": """你是台股機構級「逆勢價值與型態 A 反彈戰略布局軍師（Chief Contrarian & Rebound Entry Strategist）」。
@@ -810,7 +812,7 @@ PROMPT_TEMPLATES: dict[str, str] = {
 【核心戰略鐵律：跌深反彈股之 17MA 是上方反壓（TP1），絕非支撐！堅持長均線右腳與破線洗盤分批低接！】
 1. **第一層：總體倉位控管與各股資金權重分配（Top-Down Position Sizing）**：
    - 綜合美股（費半 SOX / TSM ADR / VIX，核對美東交易日勿重複計價）、台股大盤位階與「大盤整體融資清洗程度」，決定今日建議總投入資金上限 `recommended_total_exposure_pct`（0~100%）。
-   - 為入選的每檔反彈績優股分配 `allocation_weight_pct`（所有入選股權重加總必須等於 100%）；若「台新帳戶庫存共伴曝險」顯示 `SECTOR_OR_CORR_FULL_SWAP_ONLY` 或相關係數 `> 0.70`，應調降權重並建議以換股替代加碼。
+   - 為入選的每檔反彈績優股分配 `allocation_weight_pct`（**所有入選股權重加總須 `<= 100%`，未分配額度保留為現金，絕不為湊滿 100% 而硬接飛刀**）；結合 RS/60日Beta 與「📦 集保大戶籌碼（含基準日）」優先配置給抗跌且大戶鎖碼標的；若「台新帳戶庫存共伴曝險」顯示 `SECTOR_OR_CORR_FULL_SWAP_ONLY` 或相關係數 `> 0.70`，應調降權重並建議以換股替代加碼。
 2. **第二層：22:00 型態 A 反彈股專屬「三階金字塔回檔低接掛單（30% / 40% / 30%）」**：
    - 本批標的股價已跌破 `17MA`，正在回測 `45MA / 117MA / 189MA` 長均線，請嚴格依下檔結構規劃三批低接掛單（嚴格遞減 `現價 >= 第1批 > 第2批 > 第3批 > 硬停損`，嚴禁在反彈逼近 17MA 反壓時追高）：
    - **第 1 批試單 (`tier1_entry`，佔該股部位 30%)**：鎖定當前長均線支撐（`45MA / 117MA / 189MA` 整數關卡）或 W 底右腳回測區，必須搭配「日 KD 低檔金叉 (K9>D9)、RSI(14) 止跌回升或 MACD 綠柱連續收斂（拒絕在 MACD 綠柱放大連跌時盲目接飛刀）」。
@@ -820,9 +822,10 @@ PROMPT_TEMPLATES: dict[str, str] = {
    - **`target_price_1`（第一停利目標，必先落袋 50% 防二次探底）**：優先設於**上方下彎之 `17MA` 或 `45MA` 反壓區**！
    - **`target_price_2`（第二波段修復目標）**：設於上方 **60 日全區 Volume POC 套牢密集區** 或內文明示之本業前瞻 EPS × 合理目標 PE 修復價。
    - **`stop_loss_price`（無條件硬停損價）**：設於帶量實體長黑灌破前波左腳低點與第 3 批極限防守區之下。
+   - **強制風報比 (R/R) 檢核與空手逃生閥**：計算 `R/R = (target_price_1 - weighted_avg_entry_price) / (weighted_avg_entry_price - stop_loss_price)`；若 **`R/R < 1.5`** 或大盤系統性崩盤且個股無下檔承接，**強制輸出 `"action": "WAIT_OBSERVE"`、`"allocation_weight_pct": 0`** 保留現金觀望。
 
 【輸出規定】
 只輸出一個合法 JSON 物件（不要 markdown 程式碼區塊、嚴禁結尾雜字）：
-{"market_light": "🟢綠燈|🟡黃燈|🔴紅燈", "recommended_total_exposure_pct": 0~100整數, "market_comment": "結合美股(費半SOX/TSM/VIX)、台股大盤與大盤整體融資清洗度之總體倉位與低接節奏判讀，130字內", "strategic_picks": [{"rank": 1, "stock_id": "代號", "stock_name": "股名", "sector": "細分產業", "score": 0~100整數, "allocation_weight_pct": 0~100整數, "tactical_type": "🎯 型態A長均線三階低接（右腳止穩＋破線洗盤承接）", "current_tech_and_chip_diagnosis": "解讀近20日K線、長均線支撐、KD/RSI/MACD收斂狀態、外資與投信成本及個股融資清洗度及下檔大量支撐位置（嚴禁腦補表內未提供之自營商動向），120字內", "tier1_entry": "【第1批 30% 試單】具體掛單價位區間 ＋ 長均線/右腳依據與KD/MACD止穩觸發條件，70字內", "tier2_entry": "【第2批 40% 核心】具體掛單價位區間 ＋ 0.786洗盤區/Support POC/投信成本依據與觸發條件，70字內", "tier3_entry": "【第3批 30% 黃金坑】具體掛單價位區間 ＋ 前波左腳/價值鐵底依據與觸發條件，70字內", "weighted_avg_entry_price": "三批加權平均成本價(元)", "chase_limit_price": "嚴禁追高上限價(元)", "target_price_1": "第一目標價(元，優先對齊上方17MA/45MA反壓)", "target_price_2": "第二目標價(元，對齊60日POC或前瞻PE修復)", "stop_loss_price": "波段硬停損價(元，跌破左腳低點)", "invalidation_rule": "法說事件或投信棄守/破底之If-Then退場預案，70字內"}]}
+{"market_light": "🟢綠燈|🟡黃燈|🔴紅燈", "recommended_total_exposure_pct": 0~100整數, "market_comment": "結合美股(費半SOX/TSM/VIX)、台股大盤與大盤整體融資清洗度之總體倉位與低接節奏判讀，130字內", "strategic_picks": [{"rank": 1, "stock_id": "代號", "stock_name": "股名", "sector": "細分產業", "score": 0~100整數, "action": "BUY_3TIER | WAIT_OBSERVE", "allocation_weight_pct": 0~100整數, "tactical_type": "🎯 型態A長均線三階低接（右腳止穩＋破線洗盤承接） | 🛡️ 破線防禦／暫緩追價觀望", "current_tech_and_chip_diagnosis": "解讀近20日K線、長均線支撐、KD/RSI/MACD、RS/Beta、外資與投信、集保大戶週變動及個股融資清洗度（嚴禁腦補表內未提供之自營商動向），120字內", "tier1_entry": "【第1批 30% 試單】具體掛單價位區間 ＋ 長均線/右腳依據與KD/MACD止穩觸發條件，70字內", "tier2_entry": "【第2批 40% 核心】具體掛單價位區間 ＋ 0.786洗盤區/Support POC/投信成本依據與觸發條件，70字內", "tier3_entry": "【第3批 30% 黃金坑】具體掛單價位區間 ＋ 前波左腳/價值鐵底依據與觸發條件，70字內", "weighted_avg_entry_price": "三批加權平均成本價(元)", "chase_limit_price": "嚴禁追高上限價(元)", "target_price_1": "第一目標價(元，優先對齊上方17MA/45MA反壓)", "target_price_2": "第二目標價(元，對齊60日POC或前瞻PE修復)", "stop_loss_price": "波段硬停損價(元，跌破左腳低點)", "invalidation_rule": "法說事件或投信棄守/破底之If-Then退場預案，70字內"}]}
 """,
 }

@@ -16,7 +16,11 @@
   * **破線防禦與三階單調性護欄**：修正 `build_strategic_tech_and_chip_package()` 預設三階公式，當個股急殺跌破 `17MA / 45MA` 時自動切換為「破線防禦模式」改依現價下方結構階梯定位，並於 Python 產出與 AI #3 解析後雙重強制 `現價 >= 第1批 > 第2批 > 第3批 > 硬停損`，徹底杜絕價位倒掛；同步於 Prompt 補齊破線分流規則與「暫緩追價觀望」逃生閥。
   * **補齊缺失數據並防腦補**：在基本面鐵底行明數印出「本業前瞻 EPS 與同業中位 PE 合理價」；`build_market_daily_trend_block()` 新增 OTC 櫃買指數近 5 日摘要（無 OTC 時明確聲明勿編造）；將 Prompt 與 20 日表標題之 `5MA` 修正為 `MA3`、簡體錯字修正為繁體，並將「三大法人」統一改為「**外資與投信**」，杜絕 AI 腦補自營商動向；於第一層補上「台新帳戶庫存共伴曝險降權規則」。
   * **美股時間軸防重複計價**：`fetch_global_macro_context()` 新增 `context_mode="post_market"` 與 `tw_latest_date` 參數，印出美東實際收盤日並於美股日期早於台股今日時自動附加防重複計價提醒，並移除盤後不合時宜之「早盤嚴防跳空」晨報用語。
-* **補充單元測試（[`tests/test_margin_features.py`](/tests/test_margin_features.py)、[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**：新增 API 實際日期入帳防錯位、上市櫃跨日自動對齊、21:30 過期快取自動刷新、破線股三階防倒掛與前瞻 EPS 明數、OTC 防腦補以及盤後美股防重複計價等回歸測試。
+  * **相對大盤強弱 (RS / 60日Beta)、近 8～12 週集保大戶濃縮摘要與 R/R < 1.5 留現金逃生閥**：
+    * 新增 `compute_relative_strength_and_beta()` 純本地計算近 5 日 / 20 日超額報酬與 60 日 Beta 注入 AI #3（零外部配額）。
+    * 新增 `summarize_tdcc_multiweek_trend()` 並擴充 `fetch_or_cache_tdcc_holding()` 至 12～13 週（95 天），依動態門檻（股價 `> 200` 或股本 `< 50` 億看 400 張，否則看 1000 張）輸出含基準日之單行濃縮摘要（大戶近 1/4/8 週增減與連增減週數、10 張以下散戶近 4 週變動、總股東人數近 4 週增減）。
+    * AI #3 權重總和放寬為 `<= 100%`（未分配保留現金），新增 `action: "BUY_3TIER | WAIT_OBSERVE"` 與 `R/R < 1.5` 強制歸零權重保留現金觀望防呆。
+* **補充單元測試（[`tests/test_margin_features.py`](/tests/test_margin_features.py)、[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**：新增 API 實際日期入帳防錯位、上市櫃跨日自動對齊、21:30 過期快取自動刷新、破線股三階防倒掛與前瞻 EPS 明數、OTC 防腦補、盤後美股防重複計價、RS/Beta 與近 8～12 週集保動態門檻摘要，以及 `R/R < 1.5` / `WAIT_OBSERVE` 留現金逃生閥等回歸測試。
 
 ---
 

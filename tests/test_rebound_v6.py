@@ -490,7 +490,7 @@ class ReboundV6Tests(unittest.TestCase):
                 '"tier2_entry": "【第2批 40% 核心】695~705元", '
                 '"tier3_entry": "【第3批 30% 黃金坑】650~665元", '
                 '"weighted_avg_entry_price": "695.00", "chase_limit_price": "725.00", '
-                '"target_price_1": "760.00", "target_price_2": "820.00", '
+                '"target_price_1": "820.00", "target_price_2": "880.00", '
                 '"stop_loss_price": "630.00", "invalidation_rule": "跌破630元"}]}'
             )
 
@@ -514,6 +514,7 @@ class ReboundV6Tests(unittest.TestCase):
                     return_value={"prompt_block": "- 國際盤氣候：🔴 國際逆風警戒"},
                 ) as mock_macro,
                 patch("taishin_portfolio_service.load_portfolio_exposure_inputs", return_value=([], {})),
+                patch("finmind_stock_scanner.fetch_or_cache_tdcc_holding", return_value=None),
             ):
                 decision, audit_records, _raw, model_ver = asyncio.run(
                     execute_v61_quality_and_strategic_pipeline(
@@ -633,6 +634,190 @@ class ReboundV6Tests(unittest.TestCase):
         self.assertIn("美東交易日 2026-11-19 收盤", blk)
         self.assertIn("時間軸防重複計價提醒", blk)
         self.assertNotIn("早盤嚴防", blk)
+
+    def test_rs_beta_and_tdcc_multiweek_summary(self) -> None:
+        """驗證 RS/60日Beta 純本地計算與近 8~12 週集保大戶動態門檻濃縮摘要。"""
+        from finmind_stock_scanner import (
+            build_strategic_tech_and_chip_package,
+            compute_relative_strength_and_beta,
+            summarize_tdcc_multiweek_trend,
+        )
+
+        dates = pd.date_range("2026-07-01", periods=80, freq="B")
+        # 大盤下跌，個股逆勢緩漲 -> 正超額報酬 + 低/負 Beta
+        bench_closes = [40000.0 - i * 40.0 + (200.0 if i % 2 == 0 else -150.0) for i in range(80)]
+        stock_closes = [700.0 + i * 0.8 + (1.0 if i % 2 == 0 else -0.5) for i in range(80)]
+        df_bench = pd.DataFrame({
+            "stock_id": ["TAIEX"] * 80,
+            "date": [d.strftime("%Y-%m-%d") for d in dates],
+            "open": bench_closes,
+            "max": [c + 100.0 for c in bench_closes],
+            "min": [c - 100.0 for c in bench_closes],
+            "close": bench_closes,
+            "Trading_Volume": [1_000_000] * 80,
+        })
+        df_stock = pd.DataFrame({
+            "stock_id": ["3293"] * 80,
+            "date": [d.strftime("%Y-%m-%d") for d in dates],
+            "open": stock_closes,
+            "max": [c + 5.0 for c in stock_closes],
+            "min": [c - 5.0 for c in stock_closes],
+            "close": stock_closes,
+            "Trading_Volume": [2_000_000] * 80,
+        })
+
+        rs_info = compute_relative_strength_and_beta(df_stock, df_bench)
+        self.assertIsNotNone(rs_info)
+        self.assertGreater(rs_info["rs_5d_pct"], 0.0)
+        self.assertGreater(rs_info["rs_20d_pct"], 0.0)
+        self.assertIsNotNone(rs_info["beta_60d"])
+
+        # 建立 9 週集保資料（每週五），模擬 400 張以上大戶連 3 週增、10 張以下散戶降、股東人數降
+        tdcc_dates = pd.date_range("2026-09-25", periods=9, freq="W-FRI")
+        major_series = [65.0, 65.2, 65.4, 65.8, 66.2, 66.0, 66.8, 67.5, 68.4]
+        retail_series = [14.0, 13.8, 13.6, 13.4, 13.2, 13.0, 12.7, 12.4, 12.1]
+        people_series = [26000, 25800, 25600, 25500, 25360, 25100, 24900, 24700, 24510]
+        tdcc_rows = []
+        for dt, m_pct, r_pct, ppl in zip(tdcc_dates, major_series, retail_series, people_series):
+            ds = dt.strftime("%Y-%m-%d")
+            # 10張以下散戶 (lvl 1+2+3)
+            tdcc_rows.append({"date": ds, "HoldingSharesLevel": "1", "percent": round(r_pct * 0.4, 2), "people": 10000})
+            tdcc_rows.append({"date": ds, "HoldingSharesLevel": "2", "percent": round(r_pct * 0.4, 2), "people": 8000})
+            tdcc_rows.append({"date": ds, "HoldingSharesLevel": "3", "percent": round(r_pct * 0.2, 2), "people": 3000})
+            # 400~1000張 (lvl 12) + 1000張以上 (lvl 15)
+            tdcc_rows.append({"date": ds, "HoldingSharesLevel": "12", "percent": 18.4, "people": 30})
+            tdcc_rows.append({"date": ds, "HoldingSharesLevel": "15", "percent": round(m_pct - 18.4, 2), "people": 15})
+            tdcc_rows.append({"date": ds, "HoldingSharesLevel": "17", "percent": 100.0, "people": ppl})
+        tdcc_df = pd.DataFrame(tdcc_rows)
+
+        # 高價股 (754元) -> 強制採 400 張門檻
+        tdcc_high_price = summarize_tdcc_multiweek_trend(
+            tdcc_df, paid_in_capital_twd=10_000_000_000, close_price=754.0
+        )
+        self.assertEqual(tdcc_high_price["major_threshold_lots"], 400)
+        self.assertEqual(tdcc_high_price["tdcc_base_date"], "2026-11-20")
+        self.assertIn("基準日 2026-11-20", tdcc_high_price["summary"])
+        self.assertIn("400張以上大戶 68.4%", tdcc_high_price["summary"])
+        self.assertIn("連 3 週增", tdcc_high_price["summary"])
+        self.assertIn("近4週 -1.1%", tdcc_high_price["summary"])
+        self.assertIn("近4週 -850 人", tdcc_high_price["summary"])
+
+        # 大股本 (>=50億) 且低價 (<=200元) -> 採 1000 張門檻
+        tdcc_large_cap = summarize_tdcc_multiweek_trend(
+            tdcc_df, paid_in_capital_twd=10_000_000_000, close_price=80.0
+        )
+        self.assertEqual(tdcc_large_cap["major_threshold_lots"], 1000)
+
+        pkg = build_strategic_tech_and_chip_package(
+            "3293",
+            "鈊象",
+            df_stock,
+            benchmark_prices=df_bench,
+            tdcc_holding_df=tdcc_df,
+            paid_in_capital_twd=2_800_000_000,
+            selection_mode="alignment",
+        )
+        self.assertIn("相對大盤強弱度 (RS / 60日Beta)", str(pkg["prompt_block"]))
+        self.assertIn("集保大戶籌碼", str(pkg["prompt_block"]))
+
+    def test_wait_observe_and_low_rr_forces_zero_weight_cash_reserve(self) -> None:
+        """驗證 AI #3 輸出 WAIT_OBSERVE 或 R/R < 1.5 時自動歸零權重保留現金觀望。"""
+        import asyncio
+        import json
+        import tempfile
+        from datetime import date
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from quant.alignment_ai_picker import execute_v61_quality_and_strategic_pipeline
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            daily_dir = Path(tmpdir) / "daily"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            dates = pd.date_range("2026-08-01", periods=65, freq="B")
+            pd.DataFrame({
+                "stock_id": ["3293"] * 65,
+                "date": [d.strftime("%Y-%m-%d") for d in dates],
+                "open": [760.0] * 65,
+                "max": [770.0] * 65,
+                "min": [745.0] * 65,
+                "close": [750.0] * 65,
+                "Trading_Volume": [2_000_000] * 65,
+            }).to_csv(daily_dir / "2026-11-20_prices.csv", index=False)
+
+            analyzed = pd.DataFrame([{
+                "stock_id": "3293", "stock_name": "鈊象", "industry_category": "遊戲",
+                "sub_industry": "遊戲", "close": 750.0, "MA17": 778.0, "MA45": 772.0, "MA117": 750.0,
+            }])
+            q_json = json.dumps({
+                "selection_summary": "ok",
+                "quality_picks": [{
+                    "rank": 1, "stock_id": "3293", "stock_name": "鈊象", "sector": "遊戲",
+                    "quality_score": 92, "quality_grade": "S_TIER_CORE", "outlook_verdict": "無資料",
+                    "fundamental_moat_and_catalysts": "高毛利", "chip_and_institutional_backing": "外資買",
+                    "fundamental_invalidation": "毛利下滑",
+                }],
+                "watchlist": [], "avoid": [],
+            }, ensure_ascii=False)
+            # 測試 R/R < 1.5（三批均價約 730，TP1=750 獲利 +20，SL=700 風險 -30 -> R/R = 0.67 < 1.5）
+            s_json = json.dumps({
+                "market_light": "🔴紅燈",
+                "recommended_total_exposure_pct": 30,
+                "market_comment": "空頭防禦",
+                "strategic_picks": [{
+                    "rank": 1, "stock_id": "3293", "stock_name": "鈊象", "sector": "遊戲",
+                    "score": 85, "action": "BUY_3TIER", "allocation_weight_pct": 50,
+                    "tactical_type": "🛡️ 破線防禦",
+                    "current_tech_and_chip_diagnosis": "破線",
+                    "tier1_entry": "740", "tier2_entry": "730", "tier3_entry": "720",
+                    "weighted_avg_entry_price": "730", "chase_limit_price": "750",
+                    "target_price_1": "750", "target_price_2": "800", "stop_loss_price": "700",
+                    "invalidation_rule": "破700停損",
+                }],
+            }, ensure_ascii=False)
+
+            async def fake_batch(requests_map, **kwargs):
+                if "QUALITY_SELECT_STAGE2" in requests_map:
+                    return {"QUALITY_SELECT_STAGE2": SimpleNamespace(text=q_json, model_version="gemini-4-argon")}
+                return {"STRATEGIC_LAYOUT_STAGE3": SimpleNamespace(text=s_json, model_version="gemini-4-argon")}
+
+            cache = MagicMock()
+            cache.get_daily_chip_history.return_value = pd.DataFrame()
+            analyzer = MagicMock()
+            analyzer.cache._read_stock_rows.return_value = pd.DataFrame()
+            analyzer.compute_cross_sectional_pe_map.return_value = {}
+            analyzer._fetch_yahoo_stock_rss.return_value = []
+
+            with (
+                patch("quant.alignment_ai_picker.run_vertex_batch_requests", side_effect=fake_batch),
+                patch("taishin.macro_context.fetch_global_macro_context", return_value={"prompt_block": ""}),
+                patch("taishin_portfolio_service.load_portfolio_exposure_inputs", return_value=([], {})),
+                patch("finmind_stock_scanner.fetch_or_cache_tdcc_holding", return_value=None),
+            ):
+                _dec, audit_records, _raw, _mv = asyncio.run(
+                    execute_v61_quality_and_strategic_pipeline(
+                        analyzed,
+                        {"market_benchmark_id": "TAIEX", "enable_ex_dividend_compensation": False},
+                        target_date=date(2026, 11, 20),
+                        daily_dir=daily_dir,
+                        cache=cache,
+                        analyzer=analyzer,
+                        stage1_results={"3293": {"score": 90}},
+                        market_regime={"light": "🔴紅燈", "summary": "🔴紅燈"},
+                        max_top=5,
+                        model="gemini-4-argon",
+                        use_vertex_batch=True,
+                        poll_interval=60.0,
+                        timeout_seconds=7200.0,
+                        selection_mode="alignment",
+                        dry_run=True,
+                    )
+                )
+
+            self.assertEqual(audit_records["3293"]["Execution_Tactic"], "WAIT_OBSERVE")
+            self.assertEqual(audit_records["3293"]["Allocation_Weight_Pct"], 0)
+            self.assertIn("保留現金觀望", str(audit_records["3293"]["Ideal_Buy_Or_Ref"]))
 
 
 

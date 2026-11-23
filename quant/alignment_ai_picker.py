@@ -2622,6 +2622,18 @@ async def execute_v61_quality_and_strategic_pipeline(
         margin_history_path=daily_dir.parent / ".state" / "market_margin_history.json",
         days=10,
     )
+    bench_prices_df: pd.DataFrame | None = None
+    if prices is not None and not prices.empty and "stock_id" in prices.columns:
+        for b_cand in ("TAIEX", benchmark_id, "0050"):
+            b_sub = prices.loc[prices["stock_id"].astype(str) == str(b_cand)].copy()
+            if not b_sub.empty:
+                bench_prices_df = b_sub
+                break
+
+    from finmind_stock_scanner import fetch_or_cache_tdcc_holding
+
+    tdcc_cache_path = daily_dir.parent / ".state" / "tdcc_holding_cache.json"
+    finmind_loader = getattr(cache, "_finmind", None)
 
     row_map = _row_lookup(analyzed)
     strategic_blocks: list[str] = []
@@ -2676,6 +2688,27 @@ async def execute_v61_quality_and_strategic_pipeline(
         fwd_val = getattr(feat_obj, "forward_valuation", {}) if feat_obj is not None else {}
         fwd_eps = _parse_optional_num(fwd_val.get("implied_core_forward_eps")) if isinstance(fwd_val, Mapping) else None
         peer_pe = _parse_optional_num(fwd_val.get("sector_median_pe")) if isinstance(fwd_val, Mapping) else None
+        cap_twd: float | None = None
+        if feat_obj is not None:
+            cs_val = getattr(feat_obj, "capital_stock", None)
+            if cs_val is None and isinstance(fwd_val, Mapping):
+                cs_val = fwd_val.get("capital_stock")
+            cap_num = _parse_optional_num(cs_val)
+            if cap_num and cap_num > 0:
+                cap_twd = cap_num * 1e6 if cap_num < 1_000_000 else cap_num
+
+        tdcc_df: pd.DataFrame | None = None
+        try:
+            tdcc_df = await asyncio.to_thread(
+                fetch_or_cache_tdcc_holding,
+                sid,
+                as_of=target_date,
+                cache_path=tdcc_cache_path,
+                loader=finmind_loader,
+            )
+        except Exception:  # noqa: BLE001
+            tdcc_df = None
+
         ann_div: float | None = None
         if div_df is not None and not div_df.empty and "cash_dividend" in div_df.columns:
             div_vals = pd.to_numeric(div_df["cash_dividend"], errors="coerce").dropna()
@@ -2687,6 +2720,9 @@ async def execute_v61_quality_and_strategic_pipeline(
             sname,
             prices_for_tech,
             daily_chip_df=daily_chip_df,
+            benchmark_prices=bench_prices_df,
+            tdcc_holding_df=tdcc_df,
+            paid_in_capital_twd=cap_twd,
             forward_eps=fwd_eps,
             peer_median_pe=peer_pe,
             annual_cash_dividend=ann_div,
@@ -2800,10 +2836,25 @@ async def execute_v61_quality_and_strategic_pipeline(
         chase_num = parse_plan_price(
             chase_lim, close_ref=close_ref, fallback=_parse_optional_num(pkg.get("chase_limit_price"))
         )
-        entry_for_rr = t1_num or close_ref or 0.0
+        if t1_num and t2_num and t3_num:
+            entry_for_rr = round(0.3 * t1_num + 0.4 * t2_num + 0.3 * t3_num, 2)
+        else:
+            entry_for_rr = t1_num or close_ref or 0.0
         rr_val: float | str = ""
         if tp1_num and sl_num and entry_for_rr > sl_num:
             rr_val = round((tp1_num - entry_for_rr) / (entry_for_rr - sl_num), 2)
+
+        ai_action = str(s_item.get("action") or "").strip().upper()
+        is_wait_observe = (
+            ai_action == "WAIT_OBSERVE"
+            or (isinstance(w_pct, (int, float)) and float(w_pct) <= 0.0)
+            or (isinstance(rr_val, float) and rr_val < 1.5)
+        )
+        if is_wait_observe:
+            w_pct = 0
+            if not swap:
+                tactic_code = "WAIT_OBSERVE"
+            ideal_summary = f"🛡️ 保留現金觀望（權重 0%｜R/R {rr_val if rr_val != '' else 'N/A'}）"
 
         audit_rec = {
             "Audit_Grade": str(q_item.get("quality_grade") or "S_TIER_CORE"),

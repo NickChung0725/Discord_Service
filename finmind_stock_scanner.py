@@ -717,12 +717,254 @@ def _classify_candle_shadow(open_p: float, high_p: float, low_p: float, close_p:
     return "一般震盪"
 
 
+def compute_relative_strength_and_beta(
+    stock_prices: pd.DataFrame,
+    benchmark_prices: pd.DataFrame | None,
+) -> dict[str, Any] | None:
+    """純本地計算個股相對大盤之近 5 日 / 20 日超額報酬 (RS) 與 60 日 Beta 值（零外部 API 配額）。"""
+    if (
+        stock_prices is None
+        or stock_prices.empty
+        or benchmark_prices is None
+        or benchmark_prices.empty
+    ):
+        return None
+    s_norm = _normalize_ohlcv(stock_prices)
+    b_norm = _normalize_ohlcv(benchmark_prices)
+    if s_norm.empty or b_norm.empty:
+        return None
+
+    s_df = s_norm[["date", "close"]].rename(columns={"close": "s_close"}).drop_duplicates(subset=["date"], keep="last")
+    b_df = b_norm[["date", "close"]].rename(columns={"close": "b_close"}).drop_duplicates(subset=["date"], keep="last")
+    merged = pd.merge(s_df, b_df, on="date", how="inner").sort_values("date").reset_index(drop=True)
+    if len(merged) < 6:
+        return None
+
+    s_close = merged["s_close"].astype(float)
+    b_close = merged["b_close"].astype(float)
+
+    def _window_ret(series: pd.Series, window: int) -> float | None:
+        if len(series) <= window:
+            return None
+        base = float(series.iloc[-(window + 1)])
+        cur = float(series.iloc[-1])
+        if base <= 0:
+            return None
+        return round((cur / base - 1.0) * 100.0, 2)
+
+    s_ret_5d = _window_ret(s_close, 5)
+    b_ret_5d = _window_ret(b_close, 5)
+    rs_5d = round(s_ret_5d - b_ret_5d, 2) if (s_ret_5d is not None and b_ret_5d is not None) else None
+
+    s_ret_20d = _window_ret(s_close, 20)
+    b_ret_20d = _window_ret(b_close, 20)
+    rs_20d = round(s_ret_20d - b_ret_20d, 2) if (s_ret_20d is not None and b_ret_20d is not None) else None
+
+    beta_60d: float | None = None
+    ret_df = pd.DataFrame({
+        "s_ret": s_close.pct_change(),
+        "b_ret": b_close.pct_change(),
+    }).dropna().tail(60)
+    if len(ret_df) >= 20:
+        var_b = float(ret_df["b_ret"].var())
+        if var_b > 1e-12:
+            cov_sb = float(ret_df["s_ret"].cov(ret_df["b_ret"]))
+            beta_60d = round(cov_sb / var_b, 2)
+
+    if rs_5d is None and rs_20d is None and beta_60d is None:
+        return None
+
+    # 抗跌／強弱風格標籤
+    tag = "➖ 隨大盤同步"
+    if beta_60d is not None and beta_60d <= 0.85 and (rs_5d or 0.0) >= 1.0:
+        tag = "🛡️ 低Beta相對抗跌防禦"
+    elif (rs_5d or 0.0) >= 2.0 and (rs_20d or 0.0) >= 3.0:
+        tag = "🔥 強於大盤領漲強勢"
+    elif beta_60d is not None and beta_60d >= 1.25 and (rs_5d or 0.0) <= -2.0:
+        tag = "⚠️ 高Beta補跌弱勢"
+    elif (rs_5d or 0.0) <= -2.0 and (rs_20d or 0.0) <= -3.0:
+        tag = "⚠️ 弱於大盤修正"
+
+    parts: list[str] = []
+    if rs_5d is not None:
+        parts.append(f"近5日超額報酬 {rs_5d:+.2f}%（個股 {s_ret_5d:+.2f}% vs 大盤 {b_ret_5d:+.2f}%）")
+    if rs_20d is not None:
+        parts.append(f"近20日超額報酬 {rs_20d:+.2f}%")
+    if beta_60d is not None:
+        parts.append(f"60日 Beta={beta_60d:.2f}（{tag}）")
+
+    return {
+        "rs_5d_pct": rs_5d,
+        "rs_20d_pct": rs_20d,
+        "beta_60d": beta_60d,
+        "rs_tag": tag,
+        "summary": "｜".join(parts),
+    }
+
+
+def summarize_tdcc_multiweek_trend(
+    df_holding: pd.DataFrame | None,
+    *,
+    paid_in_capital_twd: float | None = None,
+    close_price: float | None = None,
+) -> dict[str, Any] | None:
+    """將近 8~12 週集保股權分散表濃縮成高訊號單行摘要（含動態 400/1000 張門檻與資料基準日）。
+
+    動態大戶門檻：
+    - 股價 > 200 元 或 股本 < 50 億（含缺股本）➔ 採 400 張以上大戶
+    - 股本 >= 50 億 且 股價 <= 200 元 ➔ 採 1,000 張以上大戶
+    """
+    if df_holding is None or not isinstance(df_holding, pd.DataFrame) or df_holding.empty:
+        return None
+    frame = df_holding.copy()
+    if "date" not in frame.columns or "HoldingSharesLevel" not in frame.columns:
+        return None
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame["percent"] = pd.to_numeric(frame.get("percent"), errors="coerce")
+    frame = frame.dropna(subset=["date", "percent"])
+    if frame.empty:
+        return None
+
+    dates = sorted(frame["date"].unique())
+    if not dates:
+        return None
+
+    use_1000 = (
+        paid_in_capital_twd is not None
+        and paid_in_capital_twd >= 5_000_000_000
+        and (close_price is None or close_price <= 200.0)
+    )
+    big_lots = 1000 if use_1000 else 400
+    threshold_shares = big_lots * 1000
+
+    def _calc_day_stats(day: object) -> tuple[float, float, int | None]:
+        day_rows = frame.loc[frame["date"] == day]
+        major_pct = 0.0
+        retail_pct = 0.0
+        for row in day_rows.itertuples(index=False):
+            lvl_raw = str(row.HoldingSharesLevel).strip()
+            lower = _holding_level_lower_bound(lvl_raw)
+            if lower is None:
+                continue
+            pct_v = float(row.percent)
+            if lower >= threshold_shares:
+                major_pct += pct_v
+            # 10 張以下散戶：級距 1 (1-999)、2 (1,000-5,000)、3 (5,001-10,000) -> lower <= 5001
+            if lower <= 5001.0:
+                retail_pct += pct_v
+
+        people_total: int | None = None
+        if "people" in frame.columns:
+            lvl_s = day_rows["HoldingSharesLevel"].astype(str).str.strip().str.lower()
+            tot_rows = day_rows.loc[(lvl_s == "17") | lvl_s.str.contains("total|合計", regex=True)]
+            if not tot_rows.empty:
+                p_vals = pd.to_numeric(tot_rows["people"], errors="coerce").dropna()
+                if not p_vals.empty and float(p_vals.iloc[0]) > 0:
+                    people_total = int(round(float(p_vals.iloc[0])))
+            if people_total is None:
+                non_diff = day_rows.loc[~lvl_s.isin(["16"]) & ~lvl_s.str.contains("差異", regex=False)]
+                p_sum = float(pd.to_numeric(non_diff["people"], errors="coerce").sum())
+                if p_sum > 0:
+                    people_total = int(round(p_sum))
+        return round(major_pct, 2), round(retail_pct, 2), people_total
+
+    weekly_stats: list[tuple[pd.Timestamp, float, float, int | None]] = []
+    for d in dates:
+        m_pct, r_pct, ppl = _calc_day_stats(d)
+        weekly_stats.append((pd.Timestamp(d), m_pct, r_pct, ppl))
+
+    latest_dt, latest_major, latest_retail, latest_people = weekly_stats[-1]
+    base_date = latest_dt.strftime("%Y-%m-%d")
+
+    def _pick_ago(weeks_ago: int) -> tuple[float, float, int | None] | None:
+        if len(weekly_stats) <= weeks_ago:
+            return None
+        _, mp, rp, pp = weekly_stats[-(weeks_ago + 1)]
+        return mp, rp, pp
+
+    w1 = _pick_ago(1)
+    w4 = _pick_ago(4)
+    w8 = _pick_ago(8)
+    w12 = _pick_ago(12)
+
+    diff_1w = round(latest_major - w1[0], 2) if w1 else None
+    diff_4w = round(latest_major - w4[0], 2) if w4 else None
+    diff_8w = round(latest_major - w8[0], 2) if w8 else None
+    diff_12w = round(latest_major - w12[0], 2) if w12 else None
+
+    retail_diff_4w = round(latest_retail - w4[1], 2) if w4 else None
+    people_diff_4w = (
+        int(latest_people - w4[2])
+        if (w4 and latest_people is not None and w4[2] is not None)
+        else None
+    )
+
+    # 計算大戶連續增減週數
+    streak_text = ""
+    if len(weekly_stats) >= 2:
+        last_step = round(weekly_stats[-1][1] - weekly_stats[-2][1], 4)
+        if last_step != 0:
+            direction = 1 if last_step > 0 else -1
+            streak = 1
+            for idx in range(len(weekly_stats) - 2, 0, -1):
+                step = round(weekly_stats[idx][1] - weekly_stats[idx - 1][1], 4)
+                if (direction > 0 and step > 0) or (direction < 0 and step < 0):
+                    streak += 1
+                else:
+                    break
+            if streak >= 2:
+                streak_text = f"，連 {streak} 週{'增' if direction > 0 else '減'}"
+
+    major_diffs: list[str] = []
+    if diff_1w is not None:
+        major_diffs.append(f"近1週 {diff_1w:+.1f}%")
+    if diff_4w is not None:
+        major_diffs.append(f"近4週 {diff_4w:+.1f}%")
+    if diff_8w is not None:
+        major_diffs.append(f"近8週 {diff_8w:+.1f}%")
+    elif diff_12w is not None:
+        major_diffs.append(f"近12週 {diff_12w:+.1f}%")
+    major_diff_str = f"（{' / '.join(major_diffs)}{streak_text}）" if major_diffs else "（僅有單週快照）"
+
+    retail_part = f"10張以下散戶 {latest_retail:.1f}%"
+    if retail_diff_4w is not None:
+        retail_part += f"（近4週 {retail_diff_4w:+.1f}%）"
+
+    people_part = ""
+    if latest_people is not None:
+        people_part = f"｜總股東人數 {latest_people:,} 人"
+        if people_diff_4w is not None:
+            people_part += f"（近4週 {people_diff_4w:+,} 人）"
+
+    summary = (
+        f"基準日 {base_date}：{big_lots}張以上大戶 {latest_major:.1f}%{major_diff_str}"
+        f"｜{retail_part}{people_part}"
+    )
+    return {
+        "tdcc_base_date": base_date,
+        "major_threshold_lots": big_lots,
+        "latest_major_pct": latest_major,
+        "diff_1w_pct": diff_1w,
+        "diff_4w_pct": diff_4w,
+        "diff_8w_pct": diff_8w,
+        "latest_retail_pct": latest_retail,
+        "retail_diff_4w_pct": retail_diff_4w,
+        "latest_total_shareholders": latest_people,
+        "people_diff_4w": people_diff_4w,
+        "weeks_available": len(weekly_stats),
+        "summary": summary,
+    }
+
+
 def build_strategic_tech_and_chip_package(
     stock_id: str,
     stock_name: str,
     prices: pd.DataFrame,
     *,
     daily_chip_df: pd.DataFrame | None = None,
+    benchmark_prices: pd.DataFrame | None = None,
+    tdcc_holding_df: pd.DataFrame | None = None,
+    paid_in_capital_twd: float | None = None,
     forward_eps: float | None = None,
     peer_median_pe: float | None = None,
     annual_cash_dividend: float | None = None,
@@ -1021,11 +1263,28 @@ def build_strategic_tech_and_chip_package(
     if hard_sl >= t3_price:
         hard_sl = round_tw_tick(t3_price * 0.97)
 
+    rs_beta_info = compute_relative_strength_and_beta(prices, benchmark_prices)
+    tdcc_summary_info = summarize_tdcc_multiweek_trend(
+        tdcc_holding_df,
+        paid_in_capital_twd=paid_in_capital_twd,
+        close_price=close_t,
+    )
+
     prompt_lines = [
         f"#### 📌 【{stock_id} {stock_name} — 技術、籌碼與大量支撐定位全覽】",
         f"- **最新收盤**：{close_t:.2f} 元｜ATR(14)：{atr:.2f} 元｜布林通道(20,2)：上軌 {float(last_r['BB_UPPER']):.2f} / 中軌 {float(last_r['BB_MID']):.2f} / 下軌 {float(last_r['BB_LOWER']):.2f}",
         f"- **五線均線位階、斜率與未來5日扣抵價**：{' ｜ '.join(ma_deduction_parts)}",
         f"- **動能指標現況**：K9={float(last_r['K9']):.2f}, D9={float(last_r['D9']):.2f}｜RSI(14)={float(last_r['RSI14']):.2f}｜MACD_DIF={float(last_r['MACD_DIF']):+.3f}, DEA={float(last_r['MACD_DEA']):+.3f}, OSC柱={float(last_r['MACD_OSC']):+.3f}",
+        *(
+            [f"- **⚖️ 相對大盤強弱度 (RS / 60日Beta)**：{rs_beta_info['summary']}"]
+            if rs_beta_info
+            else []
+        ),
+        *(
+            [f"- **📦 集保大戶籌碼**：{tdcc_summary_info['summary']}"]
+            if tdcc_summary_info
+            else []
+        ),
         "- **🎯 【Python 大量支撐定位器（一眼看出下檔鐵板支撐價位）】**：",
         f"  1. **60日分價量密集區 (Volume Profile)**：全區最大量 POC={round_tw_tick(poc_60d):.2f} 元｜70%籌碼密集區 VAL={val_60d:.2f} ~ VAH={vah_60d:.2f} 元｜" + "；".join(lower_support_nodes),
         "  2. **近60日關鍵爆量紅K／長下影承接防守價**：" + ("；".join(key_bullish_bars) if key_bullish_bars else "無明顯爆量紅K"),
@@ -1069,6 +1328,8 @@ def build_strategic_tech_and_chip_package(
         "chase_limit_price": chase_lim,
         "hard_stop_loss": hard_sl,
         "tp1_price": tp1_def,
+        "rs_beta": rs_beta_info,
+        "tdcc_summary": tdcc_summary_info,
         "prompt_block": "\n".join(prompt_lines),
     }
 
@@ -1620,7 +1881,7 @@ def fetch_or_cache_tdcc_holding(
     records: list[dict[str, Any]] = []
     if loader is not None and hasattr(loader, "taiwan_stock_holding_shares_per"):
         try:
-            start_str = (pd.Timestamp(today) - pd.Timedelta(days=35)).strftime("%Y-%m-%d")
+            start_str = (pd.Timestamp(today) - pd.Timedelta(days=95)).strftime("%Y-%m-%d")
             df = loader.taiwan_stock_holding_shares_per(
                 stock_id=sid, start_date=start_str, end_date=today.isoformat()
             )
@@ -1646,6 +1907,12 @@ def fetch_or_cache_tdcc_holding(
 
     if not records:
         return pd.DataFrame(existing_rows) if existing_rows else None
+
+    # 僅保留最新 13 週去重紀錄，避免本地快取無限膨脹
+    unique_dates = sorted({str(r.get("date", "")) for r in records if r.get("date")})
+    if len(unique_dates) > 13:
+        keep_dates = set(unique_dates[-13:])
+        records = [r for r in records if str(r.get("date", "")) in keep_dates]
 
     store[sid] = {"fetched_at": today.isoformat(), "rows": records}
     try:
