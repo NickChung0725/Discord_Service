@@ -1,0 +1,42 @@
+{
+  "date": "2026-11-23",
+  "last_verified_date": "2026-11-23",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "RED_DEFENSIVE",
+    "recommended_exposure_pct": 50,
+    "summary": "🔴紅燈｜TAIEX 收盤 36,811.89（17MA 41,509.51／45MA 45,314.27／117MA 45,224.75／189MA 42,103.86）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 5,680.8 億（截至 11/20，單日 -637.0 億 / 5日 -1405.4 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "PENDING_AI",
+      "status_badge": "⏳ 等待 21:30 AI 審計",
+      "total_candidates": 1,
+      "analyzed_count": 0,
+      "ai_model": "",
+      "strategy_comment": "⏳ 等待 21:30 AI 審計：以下為盤後量化初選清單，AI 深度財報與三階低接點位將於排程完成後自動更新。",
+      "recommended_exposure_pct": null,
+      "has_false_negative_alert": false,
+      "top_picks": [],
+      "watchlist": [],
+      "avoid": [],
+      "pending_candidates": [
+        {
+          "stock_id": "3714",
+          "stock_name": "富采",
+          "sector": "LED與Micro LED光電元件",
+          "close": 68.6,
+          "signal": "剛金叉起漲",
+          "vol_status": "💧 量縮整理 (0.59x)",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3714/technical-chart",
+            "war_room": "charts/3714_fund.html"
+          }
+        }
+      ]
+    }
+  ]
+}

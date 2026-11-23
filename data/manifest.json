@@ -1,6 +1,7 @@
 {
-  "updated_at": "2026-11-20 22:21:38",
+  "updated_at": "2026-11-23 21:18:07",
   "available_dates": [
+    "2026-11-23",
     "2026-11-20",
     "2026-11-19",
     "2026-11-18",
@@ -20,10 +21,7 @@
     "2026-10-29",
     "2026-10-28",
     "2026-10-27",
-    "2026-10-26",
-    "2026-10-23",
-    "2026-10-22",
-    "2026-10-21"
+    "2026-10-26"
   ],
   "strategies_catalog": [
     {
@@ -38,9 +36,9 @@
     }
   ],
   "rolling_30d_summary": {
-    "settled_trades": 13,
-    "win_rate_pct": 15.4,
-    "profit_factor": 0.05,
+    "settled_trades": 16,
+    "win_rate_pct": 12.5,
+    "profit_factor": 0.04,
     "false_negative_rate_pct": 12.2
   },
   "stock_search_index": {
@@ -632,13 +630,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -654,13 +645,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 2,
-          "score": 85
         }
       ]
     },
@@ -853,13 +837,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "rebound_2200",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -933,27 +910,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 2,
-          "score": 78
-        },
-        {
-          "date": "2026-10-22",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 4,
-          "score": 78
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -1002,20 +958,6 @@
           "date": "2026-10-26",
           "strategy_id": "alignment_2130",
           "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 3,
-          "score": 82
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
           "rank": null,
           "score": null
         }
@@ -1158,27 +1100,6 @@
           "date": "2026-10-26",
           "strategy_id": "alignment_2130",
           "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 4,
-          "score": 85
-        },
-        {
-          "date": "2026-10-22",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 3,
-          "score": 85
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
           "rank": null,
           "score": null
         }
@@ -1331,21 +1252,6 @@
         }
       ]
     },
-    "3006": {
-      "stock_name": "晶豪科",
-      "sector": "利基型記憶體IC設計",
-      "wantgoo_url": "https://www.wantgoo.com/stock/3006/technical-chart",
-      "war_room_url": "charts/3006_fund.html",
-      "appearances": [
-        {
-          "date": "2026-10-21",
-          "strategy_id": "rebound_2200",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
-        }
-      ]
-    },
     "3017": {
       "stock_name": "奇鋐",
       "sector": "散熱模組與水冷散熱",
@@ -1452,27 +1358,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 1,
-          "score": 86
-        },
-        {
-          "date": "2026-10-22",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 1,
-          "score": 86
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 1,
-          "score": 90
         }
       ]
     },
@@ -1640,27 +1525,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 5,
-          "score": 84
-        },
-        {
-          "date": "2026-10-22",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 2,
-          "score": 84
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 4,
-          "score": 82
         }
       ]
     },
@@ -1868,21 +1732,6 @@
         }
       ]
     },
-    "3532": {
-      "stock_name": "台勝科",
-      "sector": "半導體業",
-      "wantgoo_url": "https://www.wantgoo.com/stock/3532/technical-chart",
-      "war_room_url": "charts/3532_fund.html",
-      "appearances": [
-        {
-          "date": "2026-10-21",
-          "strategy_id": "rebound_2200",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
-        }
-      ]
-    },
     "3564": {
       "stock_name": "其陽",
       "sector": "網路安全設備與工業電腦",
@@ -2035,6 +1884,13 @@
       "war_room_url": "charts/3714_fund.html",
       "appearances": [
         {
+          "date": "2026-11-23",
+          "strategy_id": "alignment_2130",
+          "category": "PENDING_SCAN",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-20",
           "strategy_id": "alignment_2130",
           "category": "AVOID",
@@ -2111,27 +1967,6 @@
           "date": "2026-10-26",
           "strategy_id": "alignment_2130",
           "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-22",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
           "rank": null,
           "score": null
         }
@@ -2309,20 +2144,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-22",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -2359,27 +2180,6 @@
           "category": "PENDING_SCAN",
           "rank": null,
           "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-22",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
-          "rank": null,
-          "score": null
         }
       ]
     },
@@ -2393,21 +2193,6 @@
           "date": "2026-11-19",
           "strategy_id": "alignment_2130",
           "category": "WATCHLIST",
-          "rank": null,
-          "score": null
-        }
-      ]
-    },
-    "6154": {
-      "stock_name": "順發",
-      "sector": "電子通路業",
-      "wantgoo_url": "https://www.wantgoo.com/stock/6154/technical-chart",
-      "war_room_url": "charts/6154_fund.html",
-      "appearances": [
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "AVOID",
           "rank": null,
           "score": null
         }
@@ -2751,21 +2536,6 @@
         }
       ]
     },
-    "6922": {
-      "stock_name": "宸曜",
-      "sector": "電腦及週邊設備業",
-      "wantgoo_url": "https://www.wantgoo.com/stock/6922/technical-chart",
-      "war_room_url": "charts/6922_fund.html",
-      "appearances": [
-        {
-          "date": "2026-10-21",
-          "strategy_id": "rebound_2200",
-          "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
-        }
-      ]
-    },
     "7704": {
       "stock_name": "明遠精密",
       "sector": "半導體業",
@@ -2790,20 +2560,6 @@
           "date": "2026-10-26",
           "strategy_id": "alignment_2130",
           "category": "PENDING_SCAN",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-23",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
-          "rank": null,
-          "score": null
-        },
-        {
-          "date": "2026-10-22",
-          "strategy_id": "alignment_2130",
-          "category": "WATCHLIST",
           "rank": null,
           "score": null
         }
@@ -2895,21 +2651,6 @@
           "category": "AVOID",
           "rank": null,
           "score": null
-        }
-      ]
-    },
-    "8383": {
-      "stock_name": "千附",
-      "sector": "半導體業",
-      "wantgoo_url": "https://www.wantgoo.com/stock/8383/technical-chart",
-      "war_room_url": "charts/8383_fund.html",
-      "appearances": [
-        {
-          "date": "2026-10-21",
-          "strategy_id": "alignment_2130",
-          "category": "TOP_PICK",
-          "rank": 3,
-          "score": 78
         }
       ]
     },
