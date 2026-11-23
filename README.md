@@ -57,7 +57,7 @@
 
 ## 🏦 台新證券個人帳務與 AI 建倉記憶專屬 Google Sheets 架構 (獨立 5 張工作表)
 
-個人對帳單、庫存與建倉記憶完全隔離於獨立 Google Sheet（`TAISHIN_GSHEET_SPREADSHEET_ID`，定義於 [`taishin/taishin_config.py`](/taishin/taishin_config.py) 的 `TAISHIN_SHEET_SCHEMAS`），絕不污染公用 12 張財報快取表，且嚴禁上傳至 GitHub Pages 或暴露於公開 Discord 斜線指令：
+個人對帳單、庫存與建倉記憶完全隔離於獨立 Google Sheet（`TAISHIN_GSHEET_SPREADSHEET_ID`，定義於 [`taishin/taishin_config.py`](/taishin/taishin_config.py) 的 `TAISHIN_SHEET_SCHEMAS`），絕不污染公用 12 張財報快取表，且嚴禁以明文上傳至 GitHub Pages 或暴露於公開 Discord 斜線指令；僅允許透過 [`services/my_stock_publisher.py`](/services/my_stock_publisher.py) 以模式 B（`AES-256-GCM` + `PBKDF2 600K` + `Gzip` + `32 KB` 固定區塊填充 + `AAD`）端到端加密發布至 GitHub Pages `/private/`：
 
 | 分頁名稱 | 定位與去重主鍵 (Unique Key) | 更新時機與策略 |
 | :--- | :--- | :--- |
@@ -81,12 +81,16 @@ Discord_Service/
 ├── services/                    # [Discord 指令與共用外部服務層]
 │   ├── __init__.py
 │   ├── ai_service.py            # 雙軌 AI 服務：免費版 Google AI Studio 與付費版 Vertex AI 呼叫封裝與 /ai 指令
-│   ├── github_uploader.py       # 透過 GitHub Contents API 與 Git Trees API 發布個股戰情室與戰情總部單次批次提交
-│   ├── portal_publisher.py      # 量化戰情總部打包器（近 30 交易日 JSON、manifest/audit_summary 重建、檔案鎖與 30 日過期清理）
+│   ├── github_uploader.py       # 透過 GitHub Contents API 與 Git Trees API 發布個股戰情室、公開戰情總部與私人加密戰情中心（雙向路徑隔離）
+│   ├── my_stock_publisher.py    # MY_STOCK 私人戰情中心打包與模式 B 端到端加密發布器（Gzip+32KB填充+AES-256-GCM+AAD、知行合一紀律檢核、14日清理）
+│   ├── portal_publisher.py      # 量化戰情總部打包器（近 30 交易日 JSON、manifest/audit_summary/robots.txt 重建、檔案鎖與 30 日過期清理）
 │   ├── stock_ai_command.py      # /stock_ai 指令註冊（單股診斷、專題問答、多股比較與戰情室互動按鈕）
 │   └── bot.py                   # /stock 技術面 K 線指令註冊與獨立啟動入口
-├── web/                         # [量化戰情總部靜態前端]
-│   └── index.html               # 純唯讀暗黑看盤戰情總部（30 日日曆、動態策略分頁、T+0/T+1 雙模式、RWD 抽屜/新分頁與玩股網直達）
+├── web/                         # [量化戰情總部與 MY_STOCK 私人戰情中心靜態前端]
+│   ├── index.html               # 公開純唯讀暗黑看盤戰情總部（30 日日曆、動態策略分頁、T+0/T+1 雙模式、RWD 抽屜/新分頁與玩股網直達）
+│   └── private/                 # MY_STOCK 私人加密戰情指揮中心（零個資唯讀殼檔 + PWA）
+│       ├── index.html           # 模式 B IndexedDB 非可匯出金鑰解鎖、試撮/跳空模擬、三階子彈與法人VWAP尺規、掛單票匣、0050雷達與復盤帳本
+│       └── manifest.webmanifest # PWA 主畫面安裝設定（零個資）
 ├── quant/                       # [台股量化分析、財報快取與 AI 選股核心引擎]
 │   ├── __init__.py
 │   ├── fundamental_config.py    # 12 張 Google Sheets Schema、會計科目錨點與法人級 AI Prompt 模板
@@ -200,6 +204,12 @@ TAISHIN_ALERT_CHANNEL_ID=
 # 交易安全開關與 0050 每週不定期定額設定 (預設 false 僅推播訊號不真下單)
 TAISHIN_ENABLE_TRADING=false
 DCA_0050_WEEKLY_BUDGET_TWD=10000
+
+# 7. MY_STOCK 私人加密戰情指揮中心設定 (SASD v6.3.0，模式 B 端到端加密)
+MY_STOCK_PUBLISH_ENABLED=true
+MY_STOCK_ENC_PASSPHRASE=請透過 gen-my-stock-secret 產生至少16字元隨機高強度密碼
+MY_STOCK_KDF_SALT=請透過 gen-my-stock-secret 產生32字元隨機Hex
+MY_STOCK_RETENTION_TRADING_DAYS=14
 ```
 
 ---
@@ -289,9 +299,15 @@ uv run python taishin_portfolio_service.py morning-brief --no-discord # 僅寫�
 uv run python taishin_portfolio_service.py dump-context
 uv run python taishin_portfolio_service.py dump-context --refresh-live # 即時登入台新 API 刷新最新庫存
 
-# 7. 【週一至週五 13:15 排程任務】0050 每週不定期定額低點評估
+# 7. 【週一至週五 13:15 排程任務】0050 每週不定期定額低點評估（啟用 MY_STOCK 時同步刷新加密頁）
 uv run python taishin_portfolio_service.py eval-dca-0050 --dry-run
 uv run python taishin_portfolio_service.py eval-dca-0050
+
+# 8. 【SASD v6.3.0 MY_STOCK 私人加密戰情指揮中心】安全產生金鑰、乾跑預覽、手動發布與緊急全裝置金鑰輪換
+uv run python taishin_portfolio_service.py gen-my-stock-secret
+uv run python taishin_portfolio_service.py publish-my-stock --dry-run
+uv run python taishin_portfolio_service.py publish-my-stock
+uv run python taishin_portfolio_service.py publish-my-stock --rotate-all  # 更換 .env 密碼與 Salt 後全量重加密撤銷舊裝置
 
 # （向下相容手動單次健診指令）
 uv run python taishin_portfolio_service.py sync-daily --dry-run

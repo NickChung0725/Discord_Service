@@ -20,8 +20,10 @@ logger = logging.getLogger(__name__)
 _API_ROOT = "https://api.github.com"
 _REQUEST_TIMEOUT_SECONDS = 20
 _CHART_DIRECTORY = "charts"
+_PRIVATE_DIRECTORY = "private"
 _STOCK_ID_PATTERN = re.compile(r"^\d{4,6}$")
 _DAILY_JSON_PATH_PATTERN = re.compile(r"^data/daily/(\d{4}-\d{2}-\d{2})\.json$")
+_PRIVATE_DAILY_ENC_PATH_PATTERN = re.compile(r"^private/data/daily/(\d{4}-\d{2}-\d{2})\.enc$")
 _RETRYABLE_STATUS_CODES = (429, 500, 502, 503, 504)
 _RETRY_DELAYS_SECONDS = (2.0, 4.0, 8.0)
 _CONFLICT_RETRY_DELAYS_SECONDS = (1.5, 3.0, 5.0)
@@ -152,6 +154,14 @@ def get_github_pages_base_url(repository: str | None = None) -> str | None:
     return f"https://{owner}.github.io/{repo}"
 
 
+def get_my_stock_portal_url(repository: str | None = None) -> str | None:
+    """回傳 MY_STOCK 私人戰情指揮中心網址（固定為乾淨的 `/private/` 路徑，絕不夾帶金鑰）。"""
+    base = get_github_pages_base_url(repository)
+    if not base:
+        return None
+    return f"{base}/{_PRIVATE_DIRECTORY}/"
+
+
 def _compute_git_blob_sha(data: bytes) -> str:
     header = f"blob {len(data)}\0".encode("ascii")
     return hashlib.sha1(header + data).hexdigest()  # noqa: S324 - Git blob SHA-1 spec
@@ -161,24 +171,48 @@ def _normalize_remote_path(path: str) -> str:
     return path.strip().lstrip("/").replace("\\", "/")
 
 
+def _has_path_traversal(norm_path: str) -> bool:
+    return any(part in ("", ".", "..") for part in norm_path.split("/"))
+
+
+def _is_path_allowed_for_scope(norm_path: str, scope: str) -> bool:
+    """雙向路徑隔離檢查（SASD v6.3.0 §7.4）：
+    - `public` 僅可操作根目錄與 `data/*`，嚴禁觸碰 `charts/*` 與 `private/*`。
+    - `private` 僅可操作 `private/*`，嚴禁觸碰根目錄、`data/*` 與 `charts/*`。
+    """
+    if not norm_path or _has_path_traversal(norm_path):
+        return False
+    if scope == "private":
+        return norm_path.startswith(f"{_PRIVATE_DIRECTORY}/")
+    if norm_path.startswith(f"{_CHART_DIRECTORY}/") or norm_path.startswith(f"{_PRIVATE_DIRECTORY}/"):
+        return False
+    return True
+
+
 def sync_portal_batch(
     files: Mapping[str, bytes | str],
     *,
     delete_paths: Sequence[str] = (),
     keep_daily_dates: set[str] | None = None,
     commit_message: str = "Update quant portal data",
+    scope: str = "public",
     max_conflict_retries: int = 3,
     token: str | None = None,
     repository: str | None = None,
     branch: str | None = None,
 ) -> dict[str, Any]:
-    """透過 GitHub Git Trees API 以單次 Commit 批次上傳戰情總部資料並清理過期每日 JSON。
+    """透過 GitHub Git Trees API 以單次 Commit 批次上傳戰情總部或私人戰情室資料並清理過期每日檔案。
 
-    安全鐵律（SASD v6.2.0 §5.1~5.3）：
-    - 嚴禁刪除 `charts/` 下任何個股戰情室 HTML（確保舊 Discord 連結與 Sheet 快取網址永久有效）。
-    - 自動比對遠端 Blob SHA，跳過內容未變動的檔案（如未改版的 `index.html` 或未更新之歷史 JSON）。
+    安全鐵律（SASD v6.2.0 §5.1~5.3 + SASD v6.3.0 §7.4 雙向隔離）：
+    - `scope="public"`（預設）：嚴禁寫入或刪除 `charts/` 與 `private/` 下任何檔案；僅自動清理超過保留天數之 `data/daily/*.json`。
+    - `scope="private"`：強制 Path Allowlist，僅允許寫入或刪除 `private/` 前綴檔案；僅自動清理超過保留天數之 `private/data/daily/*.enc`。
+    - 自動比對遠端 Blob SHA，跳過內容未變動的檔案。
     - 更新 `refs/heads/{branch}` 若遇 HTTP 422（併發 non-fast-forward 衝突），自動重新拉取最新 ref 重建 commit，最多重試 `max_conflict_retries` 次。
     """
+    resolved_scope = str(scope or "public").strip().lower()
+    if resolved_scope not in ("public", "private"):
+        raise GitHubUploadError(f"不支援的發布 scope：{scope!r}（僅允許 'public' 或 'private'）。")
+
     resolved_token = (token if token is not None else os.getenv("GITHUB_TOKEN", "")).strip()
     resolved_repo = (repository if repository is not None else os.getenv("GITHUB_REPO", "")).strip()
     resolved_branch = (
@@ -205,16 +239,27 @@ def sync_portal_batch(
         norm_path = _normalize_remote_path(raw_path)
         if not norm_path:
             continue
+        if not _is_path_allowed_for_scope(norm_path, resolved_scope):
+            raise GitHubUploadError(
+                f"路徑隔離安全攔截（scope={resolved_scope}）：禁止寫入 {norm_path!r}。"
+            )
         data = raw_content.encode("utf-8") if isinstance(raw_content, str) else bytes(raw_content)
         normalized_files[norm_path] = data
 
     explicit_deletes = {
         _normalize_remote_path(p)
         for p in delete_paths
-        if _normalize_remote_path(p) and not _normalize_remote_path(p).startswith(f"{_CHART_DIRECTORY}/")
+        if _is_path_allowed_for_scope(_normalize_remote_path(p), resolved_scope)
     }
 
-    portal_url = get_github_pages_base_url(resolved_repo)
+    daily_pattern = (
+        _PRIVATE_DAILY_ENC_PATH_PATTERN if resolved_scope == "private" else _DAILY_JSON_PATH_PATTERN
+    )
+    portal_url = (
+        get_my_stock_portal_url(resolved_repo)
+        if resolved_scope == "private"
+        else get_github_pages_base_url(resolved_repo)
+    )
     attempts = max(1, int(max_conflict_retries))
 
     for attempt in range(1, attempts + 1):
@@ -248,7 +293,7 @@ def sync_portal_batch(
         if not base_tree_sha:
             raise GitHubUploadError("GitHub 未回傳 base_tree SHA。")
 
-        # 3. 遞迴讀取遠端檔案樹，用於比對未變更檔案與找出超過 30 交易日之舊每日 JSON
+        # 3. 遞迴讀取遠端檔案樹，用於比對未變更檔案與找出過期每日檔案
         tree_resp = _request_with_retry(
             requests.get,
             f"{base_api}/git/trees/{base_tree_sha}",
@@ -267,18 +312,18 @@ def sync_portal_batch(
                 tree_resp.status_code,
             )
 
-        # 計算要刪除的路徑（僅限顯式指定且非 charts/，以及 data/daily/ 下不在保留清單之舊 JSON）
+        # 計算要刪除的路徑（嚴格限縮於當前 scope 允許之範圍）
         to_delete: list[str] = []
         delete_set = set(explicit_deletes)
         if keep_daily_dates is not None:
             for remote_path in remote_blobs:
-                if remote_path.startswith(f"{_CHART_DIRECTORY}/"):
+                if not _is_path_allowed_for_scope(remote_path, resolved_scope):
                     continue
-                m = _DAILY_JSON_PATH_PATTERN.fullmatch(remote_path)
+                m = daily_pattern.fullmatch(remote_path)
                 if m and m.group(1) not in keep_daily_dates and remote_path not in normalized_files:
                     delete_set.add(remote_path)
         for path in sorted(delete_set):
-            if path.startswith(f"{_CHART_DIRECTORY}/"):
+            if not _is_path_allowed_for_scope(path, resolved_scope):
                 continue
             if path in remote_blobs and path not in normalized_files:
                 to_delete.append(path)

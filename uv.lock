@@ -713,6 +713,7 @@ name = "discord-service"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "discord-py" },
     { name = "finmind" },
     { name = "google-auth" },
@@ -730,6 +731,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=43.0.0" },
     { name = "discord-py", specifier = ">=2.3.0" },
     { name = "finmind", specifier = ">=1.6.0" },
     { name = "google-auth", specifier = ">=2.25.0" },

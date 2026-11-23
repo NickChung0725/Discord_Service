@@ -1230,6 +1230,8 @@ def build_portal_bundle(
     resolved_index = web_index_path or (_ROOT / WEB_INDEX_REL_PATH)
     if resolved_index.is_file():
         files_to_publish["index.html"] = resolved_index.read_bytes()
+    # 根目錄 robots.txt：禁止搜尋引擎檢索私人加密目錄 /private/ (SASD v6.3.0 §8.3)
+    files_to_publish["robots.txt"] = b"User-agent: *\nDisallow: /private/\n"
 
     return {
         "keep_dates": keep_dates,

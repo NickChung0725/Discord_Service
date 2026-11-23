@@ -1,9 +1,10 @@
 """Taishin Securities Nova API Historical Backfill, Daily Accounting Sync, AI Portfolio Diagnosis & 0050 Smart DCA Service.
 
-SASD v5.1.0:
+SASD v6.3.0:
 - Pure background scheduled & CLI service (zero Discord slash commands; never modifies `bot_server.py`).
 - Writes exclusively to personal Google Sheet (`TAISHIN_GSHEET_SPREADSHEET_ID`), never polluting `GSHEET_SPREADSHEET_ID`.
-- Never uploads personal accounting or holdings data to GitHub Pages.
+- Strictly forbids uploading plaintext personal accounting data to GitHub Pages; private dashboard publishing
+  is exclusively handled via `services/my_stock_publisher.py` with Mode B AES-256-GCM end-to-end encryption (`private/*.enc`).
 """
 
 from __future__ import annotations
@@ -123,6 +124,25 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 def _to_int(value: Any, default: int = 0) -> int:
     return int(round(_to_float(value, float(default))))
+
+
+def _prepend_my_stock_link(messages: list[str]) -> list[str]:
+    """若已啟用 MY_STOCK 加密發布且設定 GITHUB_REPO，於私人 Discord 推播首行附加乾淨網址。"""
+    if not messages:
+        return messages
+    try:
+        from my_stock_publisher import get_my_stock_portal_url, is_my_stock_publish_enabled
+    except Exception:  # noqa: BLE001
+        return messages
+    if not is_my_stock_publish_enabled():
+        return messages
+    url = get_my_stock_portal_url()
+    if not url or url in messages[0]:
+        return messages
+    header = f"🔐 [開啟 MY_STOCK 私人戰情指揮中心]({url})"
+    updated = list(messages)
+    updated[0] = f"{header}\n{updated[0]}"
+    return updated
 
 
 # --------------------------------------------------------------------------- #
@@ -2609,6 +2629,25 @@ def eval_dca_0050(
     if sheet_mgr is not None and not dry_run:
         sheet_mgr.append_deduplicated_rows(DCA_0050_SHEET_NAME, [tracker_row])
 
+    # SASD v6.3.0 §7.4：先加密發布 MY_STOCK、後推播 Discord（非阻塞降級）
+    if not dry_run:
+        try:
+            from my_stock_publisher import (
+                PHASE_DCA_0050_EVAL,
+                is_my_stock_publish_enabled,
+                publish_my_stock_portal,
+            )
+
+            if is_my_stock_publish_enabled():
+                publish_my_stock_portal(
+                    phase=PHASE_DCA_0050_EVAL,
+                    trade_date=today,
+                    sheet_mgr=sheet_mgr,
+                    reports_dir=reports_dir,
+                )
+        except Exception as pub_err:  # noqa: BLE001
+            logger.warning("MY_STOCK publish skipped during eval-dca-0050: %s", pub_err)
+
     msg = (
         f"📈 【0050 每週智慧尋底定投評估】({today.isoformat()} / {iso_year_week})\n"
         f"• 現價：{decision['close_price']}（盤中低點 {decision['intraday_low']}）｜"
@@ -2619,10 +2658,11 @@ def eval_dca_0050(
         f"• 執行模式：{order_mode} ｜ 建議買進股數：{decision['order_qty_shares']} 股 "
         f"@ {decision['order_price']} 元（委託單號：{order_no}）"
     )
-    print(msg)
+    dca_messages = _prepend_my_stock_link([msg])
+    print("\n\n".join(dca_messages))
 
     if post_discord and not dry_run:
-        post_to_taishin_discord([msg])
+        post_to_taishin_discord(dca_messages)
 
     return {
         **decision,
@@ -4967,6 +5007,32 @@ def sync_memory(
         except Exception as err:  # noqa: BLE001
             logger.warning("Fundamental cache auto-refresh skipped for tracked positions: %s", err)
 
+    # SASD v6.3.0 §7.4：盤後記憶同步先加密更新 MY_STOCK（含 history_pnl.enc 與知行合一紀律檢核），再推播 Discord
+    if not dry_run:
+        try:
+            from my_stock_publisher import (
+                PHASE_MEMORY_SYNC,
+                is_my_stock_publish_enabled,
+                publish_my_stock_portal,
+            )
+
+            if is_my_stock_publish_enabled():
+                publish_my_stock_portal(
+                    phase=PHASE_MEMORY_SYNC,
+                    trade_date=today,
+                    sheet_mgr=sheet_mgr,
+                    holdings_rows=projected_holdings,
+                    memory_rows=updated_memory,
+                    statement_rows=core["combined_statements"],
+                    settlement_rows=core["combined_settlements"],
+                    tech_map=core["tech_map"],
+                    market_regime=core["market_regime"],
+                    picks_bundle=picks_bundle,
+                    reports_dir=reports_dir,
+                )
+        except Exception as pub_err:  # noqa: BLE001
+            logger.warning("MY_STOCK publish skipped during sync-memory: %s", pub_err)
+
     messages = format_memory_sync_discord_report(as_of=today, events=events)
     if force_discord and not messages:
         active_cnt = sum(
@@ -4978,6 +5044,7 @@ def sync_memory(
         ]
 
     if messages:
+        messages = _prepend_my_stock_link(messages)
         print("\n\n".join(messages))
     else:
         print(f"[sync-memory] 同步完成（今日無新綁定或平倉事件，保持靜默不發推播）。")
@@ -5055,6 +5122,7 @@ def run_morning_brief(
     agg_holdings = _aggregate_holdings_by_stock(holdings_rows)
 
     decisions_by_sno: dict[str, dict[str, Any]] = {}
+    deep_fund_map: dict[str, dict[str, Any]] = {}
     battle_headline = ""
     model_version = ""
     ai_called = False
@@ -5117,6 +5185,50 @@ def run_morning_brief(
         battle_headline=battle_headline,
         model_version=model_version,
     )
+    full_brief_markdown = "\n\n".join(messages)
+
+    # SASD v6.3.0 §7.3~7.4：先落地本地晨報狀態快取並加密發布 MY_STOCK，再推播 Discord（非阻塞降級）
+    if not dry_run:
+        try:
+            from my_stock_publisher import (
+                PHASE_MORNING_BRIEF,
+                is_my_stock_publish_enabled,
+                publish_my_stock_portal,
+                save_morning_brief_state,
+            )
+
+            save_morning_brief_state(
+                Path(reports_dir or "finmind_reports"),
+                trade_date=today,
+                headline_summary=battle_headline,
+                full_markdown=full_brief_markdown,
+                decisions_by_sno=decisions_by_sno,
+                macro_context=macro_context,
+                model_version=model_version,
+            )
+            if is_my_stock_publish_enabled():
+                publish_my_stock_portal(
+                    phase=PHASE_MORNING_BRIEF,
+                    trade_date=today,
+                    sheet_mgr=sheet_mgr,
+                    holdings_rows=final_holdings,
+                    memory_rows=updated_memory,
+                    statement_rows=core["combined_statements"],
+                    settlement_rows=core["combined_settlements"],
+                    tech_map=core["tech_map"],
+                    market_regime=core["market_regime"],
+                    macro_context=macro_context,
+                    picks_bundle=picks_bundle,
+                    deep_fund_map=deep_fund_map or None,
+                    decisions_by_sno=decisions_by_sno,
+                    headline_summary=battle_headline,
+                    full_markdown=full_brief_markdown,
+                    reports_dir=reports_dir,
+                )
+        except Exception as pub_err:  # noqa: BLE001
+            logger.warning("MY_STOCK publish skipped during morning-brief: %s", pub_err)
+
+    messages = _prepend_my_stock_link(messages)
     print("\n\n".join(messages))
 
     sent_discord = 0
@@ -5529,6 +5641,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p_dca.add_argument("--no-discord", action="store_true", help="不發送 Discord 推播")
 
+    # 9. publish-my-stock (SASD v6.3.0)
+    p_pub = subparsers.add_parser(
+        "publish-my-stock",
+        help="將個人持股、建倉記憶、0050 定投與復盤帳本以 AES-256-GCM 加密並發布至 GitHub Pages /private/",
+    )
+    p_pub.add_argument("--date", default=None, help="指定基準交易日 YYYY-MM-DD（預設今日）")
+    p_pub.add_argument(
+        "--phase",
+        default="MANUAL_PUBLISH",
+        choices=("MORNING_BRIEF", "DCA_0050_EVAL", "MEMORY_SYNC", "MANUAL_PUBLISH"),
+        help="標記資料階段徽章（預設 MANUAL_PUBLISH）",
+    )
+    p_pub.add_argument("--dry-run", action="store_true", help="僅打包並加密寫入本地鏡像目錄，不推送至 GitHub")
+    p_pub.add_argument(
+        "--rotate-all",
+        action="store_true",
+        help="金鑰輪換模式：以目前 .env 新金鑰重新加密覆寫全部近 14 日快照與所有 .enc 檔案",
+    )
+    p_pub.add_argument("--no-macro", action="store_true", help="略過即時抓取 Yahoo 國際指數與新聞")
+
+    # 10. gen-my-stock-secret (SASD v6.3.0)
+    subparsers.add_parser(
+        "gen-my-stock-secret",
+        help="於終端機安全產生 MY_STOCK_ENC_PASSPHRASE 與 MY_STOCK_KDF_SALT（僅印出於終端，絕不寫入磁碟）",
+    )
+
     return parser
 
 
@@ -5631,6 +5769,33 @@ def main(argv: list[str] | None = None) -> int:
             post_discord=not bool(args.no_discord),
             dry_run=bool(args.dry_run),
         )
+        return 0
+
+    if args.command == "gen-my-stock-secret":
+        from my_stock_publisher import generate_my_stock_secret
+
+        sec = generate_my_stock_secret()
+        print("# 請將以下設定複製貼上至本機與 GCP VM 的 .env（此指令絕不會寫入任何檔案）：")
+        print("MY_STOCK_PUBLISH_ENABLED=true")
+        print(f"MY_STOCK_ENC_PASSPHRASE={sec['MY_STOCK_ENC_PASSPHRASE']}")
+        print(f"MY_STOCK_KDF_SALT={sec['MY_STOCK_KDF_SALT']}")
+        print("MY_STOCK_RETENTION_TRADING_DAYS=14")
+        return 0
+
+    if args.command == "publish-my-stock":
+        from my_stock_publisher import publish_my_stock_portal
+
+        target_dt = parse_flexible_date(args.date) if args.date else None
+        macro_ctx = None if args.no_macro else fetch_global_macro_context()
+        res = publish_my_stock_portal(
+            phase=str(args.phase),
+            trade_date=target_dt,
+            macro_context=macro_ctx,
+            dry_run=bool(args.dry_run),
+            rotate_all=bool(args.rotate_all),
+            raise_on_error=True,
+        )
+        print(json.dumps(res, ensure_ascii=False, indent=2, default=str))
         return 0
 
     return 1

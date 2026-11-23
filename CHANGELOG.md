@@ -4,6 +4,26 @@
 
 ---
 
+## [v6.3.0] - 2026-11-23
+### ✨ 新增功能 — MY_STOCK 私人持股總覽與早晨戰情指揮中心（Phase 1 ~ Phase 3 全階段落地）
+* **模式 B 端到端認證加密與雙向路徑隔離管線（[`services/my_stock_publisher.py`](/services/my_stock_publisher.py)、[`services/github_uploader.py`](/services/github_uploader.py)、[`services/portal_publisher.py`](/services/portal_publisher.py)、[`pyproject.toml`](/pyproject.toml)）**：
+  * 顯式納入 `cryptography>=43.0.0`，實作「JSON ➔ Gzip (`mtime=0`) ➔ 4-byte 長度標頭＋隨機填充對齊 32 KB 倍數 ➔ `AES-256-GCM` (`PBKDF2-HMAC-SHA256` 600,000 iter、固定部署級 `MY_STOCK_KDF_SALT`、單檔獨立 12-byte 隨機 IV、AAD 路徑綁定)」端到端加密封裝，徹底防止長度側漏與跨檔調包。
+  * 擴充 `sync_portal_batch()` 支援 `scope="public" | "private"` 雙向路徑隔離護欄：公開總部嚴禁觸碰 `charts/*` 與 `private/*`（同步於根目錄發布 `robots.txt` 禁止檢索 `/private/`）；私人發布強制 Path Allowlist 僅允許操作 `private/*`，自動清理超過 14 交易日之 `private/data/daily/*.enc`，並共用跨平台檔案鎖 `finmind_reports/.state/portal_publish.lock` 與固定零側漏 Commit Message (`chore(private): sync encrypted payload`)。
+  * 落地本地晨報快取 `finmind_reports/.state/my_stock_morning_state.json` 與本地 14 日溫備份，支援同日三階段無損合併刷新與 `--rotate-all` 一鍵緊急全裝置金鑰輪換撤銷。
+* **完整實戰交易核心與 0-Token 知行合一紀律引擎（[`services/my_stock_publisher.py`](/services/my_stock_publisher.py)）**：
+  * **T+2 / T+1 / T+0 交割款三時槽拆解**：結合 `01_Account_Statement` 近 2 日成交明細與 `03_Settlement_And_PnL` 交叉彙總，嚴禁包含已廢棄之 `bank_balance` / `shortfall_alert` 欄位。
+  * **0-Token 知行合一執行紀律檢核 (`evaluate_position_discipline`)**：自動比對 `recent_battle_log` 晨報指令／收盤觸價事實與對帳單實際成交，若昨日收盤破線未砍或達標 TP1 未鎖利，自動標註 `⚠️ 破線未砍` 並於隔日早盤強制升格為 P0 置頂警戒。
+  * **v6.2.3 實戰資料全整合**：封裝三階分批子彈藍圖 (`Tier1~3` + `wave_buy_log`)、投信/外資 20d/60d VWAP 與 60 日 POC/下檔大量支撐節點、近 5 日逐日價量籌碼軌跡表、既有持股 `🔥 昨晚再度入榜` 偵測、機會池 `evaluate_candidate_exposure()` 汰弱換股配對（直接點名建議替換弱勢持股 `weakest_holding_to_swap`），以及冷資料包 `history_pnl.enc` 串接 `data/signal_audit.db` 實盤 vs 系統 `TOP_PICK` 回測勝率對照。
+* **零外部依賴加密 SPA 與 PWA 前端（[`web/private/index.html`](/web/private/index.html)、[`web/private/manifest.webmanifest`](/web/private/manifest.webmanifest)）**：
+  * 嚴格 CSP 與 `noindex, nofollow, noarchive`；以 Web Crypto API 衍生 `extractable: false` 之 `CryptoKey` 存於本機 `IndexedDB`，支援首次解鎖後跨日／F5 秒開免重登、800ms 暴力試探延遲與遠端金鑰輪換自動強制登出。
+  * 完整實作 Zone 1～5、資金池三視角切換（全部 / 波段 / 長投）、**08:30 試撮／盤中現價單點覆寫 ＋ 頂部大盤跳空壓力測試滑桿 (`-5% ~ +5%`)**、**早盤一鍵掛單票匣（含底部靜態買賣總額加總）**、手動老闆鍵 (`H`) ＋ 切頁/閒置自動防窺遮罩、0050 五日進度燈與 12 週微笑曲線 SVG、個股 Drilldown 四大深度分頁（含多錨點優先權價格尺規、三階子彈進度卡、近 5 日晨報 vs 盤後事實時間軸、盤中加減碼/停利試算沙盤）、以及 Lazy Load `績效與風控` 分頁（次產業集中度 SVG、60 日高相關矩陣、月度損益 SVG 與知行合一對照表）。
+* **排程與 CLI 無縫整合（[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * `morning-brief`、`eval-dca-0050` 與 `sync-memory` 全面遵循「先加密發布網頁、後推播 Discord（非阻塞降級）」，並於私人 Discord 推播首行附加乾淨的 `🔐 [開啟 MY_STOCK 私人戰情指揮中心](.../private/)` 連結；同時維持原有 Guardrail 6（`taishin_portfolio_service.py` 不直接匯入 `github_uploader`，強制由 `my_stock_publisher.py` 單一加密閘道出口）。
+  * 新增 CLI 子命令：`gen-my-stock-secret`（僅印於終端不落盤）與 `publish-my-stock [--date] [--phase] [--dry-run] [--rotate-all] [--no-macro]`。
+* **新增單元測試（[`tests/test_my_stock_publisher.py`](/tests/test_my_stock_publisher.py)）**：完整驗證 AES-256-GCM 加解密與 32 KB Padding、1-bit 竄改與 AAD 攔截、雙向路徑隔離、三時槽交割、0-Token 紀律檢核、汰弱換股配對、空庫存 0-Token 模式、全檔靜態明文掃描、金鑰輪換 (`--rotate-all`) 與前端 CSP／零外部依賴檢核。
+
+---
+
 ## [v6.2.3] - 2026-11-23
 ### ✨ 新增功能 & 🔧 優化與修正 — 台新持股連續劇記憶閉環（22:45 ➔ 08:15 ➔ `portfolio-advisor` Skill）
 * **擴充 `05_Position_Thesis_Memory` 三階建倉藍圖、波段分批買進帳本與滾動戰略日記（[`taishin/taishin_config.py`](/taishin/taishin_config.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
