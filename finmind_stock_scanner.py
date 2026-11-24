@@ -2010,19 +2010,6 @@ def classify_daily_margin_efficiency(
         f"【➖ 日籌碼中性：法人淨買賣佔量 {inst_vol_ratio*100:.1f}%，融資增減 {int(margin_net_change_lots)} 張】",
     )
 
-def fetch_news_excerpt(url: str, *, timeout: float = 3.0, max_chars: int = 250) -> str:
-    """擷取新聞正文前 max_chars 字；逾時或失敗回傳空字串（呼叫端優雅降級回標題）。"""
-    try:
-        request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urlopen(request, timeout=timeout) as response:  # noqa: S310
-            raw = response.read(200_000).decode("utf-8", errors="ignore")
-    except Exception:  # noqa: BLE001
-        return ""
-    raw = re.sub(r"(?is)<(script|style).*?</\1>", " ", raw)
-    text = re.sub(r"(?s)<[^>]+>", " ", raw)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text[:max_chars]
-
 
 def _classify_news_reaction(
     *, vol_ratio_5d: float, close: float, open_: float, high: float, day_return_pct: float, upper_shadow_ratio: float

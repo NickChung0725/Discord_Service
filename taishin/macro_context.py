@@ -1,40 +1,28 @@
-"""Global Macro & Overnight US Tech / FX Sensor (`taishin/macro_context.py`).
+"""Global Macro & Overnight US Tech / Rates / FX Sensor (`taishin/macro_context.py`).
 
-SASD v5.2.0:
-- Uses zero extra third-party packages (`requests` + `xml.etree.ElementTree`).
-- Fetches overnight US indices (`^SOX`, `^IXIC`, `^GSPC`), key AI/TW bellwethers (`TSM`, `NVDA`),
-  risk gauge (`^VIX`), and FX (`TWD=X`) from Yahoo Finance v8 Chart API.
-- Fetches and cleans 48h international macro / semiconductor headlines via Google News RSS.
-- Degrades gracefully on network errors so scheduled morning-brief runs never crash.
+SASD v6.3.3:
+- Uses zero extra third-party packages (`requests`).
+- Fetches overnight US indices (`^SOX`, `^IXIC`, `^GSPC`), key AI/TW bellwethers (`TSM`, `NVDA`, `EWT`),
+  risk gauge (`^VIX`), rates/USD (`^TNX`, `DX-Y.NYB`), and FX (`TWD=X`) from Yahoo Finance v8 Chart API.
+- Delegates 48h international macro news crawling & free-tier AI fact distillation to
+  `services.news_intel_service` (high cohesion, low coupling).
+- Degrades gracefully on network errors so scheduled runs never crash.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
-import html
 import logging
 import math
-import re
 from typing import Any
 from urllib.parse import quote
-import xml.etree.ElementTree as ET
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-# 鎖定機構級通訊社與原生財經數據平台之 Google News 查詢語法
-_MACRO_QUERY_RAW = (
-    "(費半 OR 台積電ADR OR 輝達 OR 聯準會 OR 美股 OR 財報 OR 晶圓) "
-    "(鉅亨網 OR MoneyDJ OR 財經M平方 OR 中央社 OR 路透 OR 彭博 OR 華爾街日報 OR 經濟日報 OR 工商時報 OR Reuters OR Bloomberg OR CNBC) "
-    "when:2d"
-)
-GOOGLE_NEWS_MACRO_RSS_URL = (
-    f"https://news.google.com/rss/search?q={quote(_MACRO_QUERY_RAW)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-)
 DEFAULT_TIMEOUT_SECONDS = 12
 USER_AGENT_HEADERS = {
     "User-Agent": (
@@ -49,74 +37,15 @@ MACRO_SYMBOLS: tuple[tuple[str, str, str], ...] = (
     ("^GSPC", "SP500", "標普500"),
     ("TSM", "TSM", "台積電ADR"),
     ("NVDA", "NVDA", "輝達NVDA"),
+    ("EWT", "EWT", "台灣ETF"),
     ("^VIX", "VIX", "VIX恐慌"),
+    ("^TNX", "TNX", "美債10年殖利率"),
+    ("DX-Y.NYB", "DXY", "美元指數"),
     ("TWD=X", "USDTWD", "美元/台幣"),
 )
 
-# 機構級財經媒體白名單（必須命中至少一項才放行，或未標註來源但標題含彭博/路透/法說外電）
-TRUSTED_MACRO_SOURCES: tuple[str, ...] = (
-    "MoneyDJ",
-    "嘉實",
-    "鉅亨",
-    "Anue",
-    "cnyes",
-    "財經M平方",
-    "MacroMicro",
-    "中央社",
-    "CNA",
-    "經濟日報",
-    "工商時報",
-    "路透",
-    "Reuters",
-    "彭博",
-    "Bloomberg",
-    "華爾街日報",
-    "WSJ",
-    "金融時報",
-    "Financial Times",
-    "CNBC",
-    "公開資訊觀測站",
-)
-
-# 娛樂八卦、綜合電視台農場與「標題殺手」黑名單句型
-_MACRO_NOISE_PATTERNS: tuple[str, ...] = (
-    "股市爆料同學會",
-    "盤中焦點",
-    "即時新聞】",
-    "早盤",
-    "今日股價與討論",
-    "巴逆逆",
-    "外遇",
-    "醜聞",
-    "嚇壞全網",
-    "網驚",
-    "網哭",
-    "專家喊",
-    "法人點名",
-    "偷偷漲",
-    "飆股",
-    "明牌",
-    "後悔沒買",
-    "存股族",
-    "小資族",
-    "三立",
-    "SETN",
-    "東森",
-    "ETtoday",
-    "TVBS",
-    "民視",
-    "中天",
-    "中時新聞網",
-    "自由時報",
-    "自由財經",
-    "FTNN",
-    "鏡週刊",
-    "壹蘋",
-    "風傳媒",
-    "Newtalk",
-    "NOWnews",
-    "品觀點",
-)
+_LEVEL_GAUGE_YAHOO_SYMBOLS = frozenset({"^VIX", "TWD=X", "^TNX", "DX-Y.NYB"})
+_LEVEL_GAUGE_KEYS = frozenset({"VIX", "USDTWD", "TNX", "DXY"})
 
 
 def _safe_float(val: Any) -> float | None:
@@ -247,7 +176,7 @@ def fetch_yahoo_quote_snapshot(
                 }
             )
 
-        is_level_gauge = yahoo_symbol in ("^VIX", "TWD=X")
+        is_level_gauge = yahoo_symbol in _LEVEL_GAUGE_YAHOO_SYMBOLS
         step_strs: list[str] = []
         for step in recent_3d[-4:]:
             mm_dd = f"{step['date'][5:]} " if len(str(step.get("date", ""))) >= 10 else ""
@@ -272,99 +201,30 @@ def fetch_yahoo_quote_snapshot(
         return None
 
 
-def _is_trusted_macro_item(title: str, source: str) -> bool:
-    """Check if the headline comes from an institutional/trusted financial source and is free of clickbait."""
-    combined = f"{title} {source}"
-    if any(noise in combined for noise in _MACRO_NOISE_PATTERNS):
-        return False
-    if not source:
-        return True
-    return any(trusted.lower() in combined.lower() for trusted in TRUSTED_MACRO_SOURCES)
-
-
 def fetch_macro_news_headlines(
     *,
-    max_items: int = 5,
-    max_age_hours: int = 72,
+    max_items: int = 8,
     session: Any | None = None,
-    timeout: int = DEFAULT_TIMEOUT_SECONDS,
     now_utc: datetime | None = None,
 ) -> list[dict[str, str]]:
-    """Fetch and filter recent international macro / US semiconductor news from institutional sources only."""
-    http = session or requests
+    """Delegate macro news retrieval to `services.news_intel_service` (zero duplicated crawling)."""
     try:
-        resp = http.get(GOOGLE_NEWS_MACRO_RSS_URL, headers=USER_AGENT_HEADERS, timeout=timeout)
-        resp.raise_for_status()
-        xml_text = resp.text
+        from services.news_intel_service import get_macro_intel
+
+        card = get_macro_intel(session=session, now_utc=now_utc)
+        out: list[dict[str, str]] = []
+        for art in list(card.raw_articles or [])[:max_items]:
+            out.append(
+                {
+                    "title": str(art.get("title") or "").strip(),
+                    "source": str(art.get("source") or "").strip(),
+                    "pub_time": str(art.get("pub_date") or "")[5:16],
+                }
+            )
+        return out
     except Exception as err:  # noqa: BLE001
-        logger.warning("Macro RSS fetch failed: %s", err)
+        logger.warning("Macro news delegation failed: %s", err)
         return []
-
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError as err:
-        logger.warning("Macro RSS XML parse error: %s", err)
-        return []
-
-    ref_now = now_utc or datetime.now(timezone.utc)
-    cutoff = timedelta(hours=max_age_hours)
-    seen_titles: set[str] = set()
-    tier1_cleaned: list[dict[str, str]] = []
-    fallback_cleaned: list[dict[str, str]] = []
-
-    for item in root.findall(".//item"):
-        raw_title = html.unescape((item.findtext("title") or "").strip())
-        if not raw_title:
-            continue
-
-        source = (item.findtext("source") or "").strip()
-        title_body = raw_title
-        if " - " in raw_title:
-            parts = raw_title.rsplit(" - ", 1)
-            title_body = parts[0].strip()
-            if not source:
-                source = parts[1].strip()
-
-        # Hard block clickbait / tabloid noise immediately
-        if any(pat in f"{title_body} {source}" for pat in _MACRO_NOISE_PATTERNS):
-            continue
-
-        norm_key = re.sub(r"\s+", "", title_body.lower())[:36]
-        if not norm_key or norm_key in seen_titles:
-            continue
-
-        pub_raw = (item.findtext("pubDate") or "").strip()
-        pub_str = ""
-        if pub_raw:
-            try:
-                pub_dt = parsedate_to_datetime(pub_raw)
-                if pub_dt.tzinfo is None:
-                    pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-                if (ref_now - pub_dt) > cutoff:
-                    continue
-                pub_str = pub_dt.astimezone(timezone(timedelta(hours=8))).strftime("%m-%d %H:%M")
-            except (TypeError, ValueError):
-                pub_str = ""
-
-        seen_titles.add(norm_key)
-        entry = {
-            "title": title_body,
-            "source": source,
-            "pub_time": pub_str,
-        }
-        if _is_trusted_macro_item(title_body, source):
-            tier1_cleaned.append(entry)
-        else:
-            fallback_cleaned.append(entry)
-
-        if len(tier1_cleaned) >= max_items:
-            break
-
-    # Prioritize Tier-1 institutional sources; only pad with non-blacklisted fallback if needed
-    result = tier1_cleaned[:max_items]
-    if len(result) < max_items:
-        result.extend(fallback_cleaned[: max_items - len(result)])
-    return result
 
 
 def classify_macro_risk_tone(
@@ -436,19 +296,39 @@ def fetch_global_macro_context(
     context_mode: str = "morning",
     tw_latest_date: str | None = None,
 ) -> dict[str, Any]:
-    """Assemble overnight US indices, TSM/NVDA, VIX, USD/TWD, and macro news into a unified context."""
+    """Assemble overnight US indices, TSM/NVDA/EWT, VIX, TNX, DXY, USD/TWD, and distilled macro news."""
     quotes: dict[str, dict[str, Any]] = {}
     for yahoo_sym, key, label in MACRO_SYMBOLS:
         snap = fetch_yahoo_quote_snapshot(yahoo_sym, session=session)
         if snap is not None:
             quotes[key] = {**snap, "key": key, "label": label}
 
-    headlines = fetch_macro_news_headlines(session=session) if include_news else []
+    macro_news_block = ""
+    headlines: list[dict[str, str]] = []
+    macro_intel_card: Any | None = None
+    if include_news:
+        try:
+            from services.news_intel_service import get_macro_intel, render_macro_prompt_block
+
+            macro_intel_card = get_macro_intel(session=session)
+            macro_news_block = render_macro_prompt_block(macro_intel_card)
+            headlines = [
+                {
+                    "title": str(a.get("title") or "").strip(),
+                    "source": str(a.get("source") or "").strip(),
+                    "pub_time": str(a.get("pub_date") or "")[5:16],
+                }
+                for a in list(macro_intel_card.raw_articles or [])[:8]
+            ]
+        except Exception as err:  # noqa: BLE001
+            logger.warning("Macro news intel fetch failed: %s", err)
+            macro_news_block = "- 近 48 小時國際財經與產業事實摘要：暫無連線資料"
+
     risk_tone, risk_note = classify_macro_risk_tone(quotes, context_mode=context_mode)
 
     # 萃取美股實際收盤交易日（優先以費半/那指/標普為準）
     us_as_of_date = ""
-    for k in ("SOX", "IXIC", "GSPC", "TSM", "NVDA"):
+    for k in ("SOX", "IXIC", "SP500", "TSM", "NVDA", "EWT"):
         d_str = str((quotes.get(k) or {}).get("as_of_date") or "").strip()
         if d_str:
             us_as_of_date = d_str
@@ -460,7 +340,7 @@ def fetch_global_macro_context(
         q = quotes.get(key)
         if not q:
             continue
-        if key in ("VIX", "USDTWD"):
+        if key in _LEVEL_GAUGE_KEYS:
             chip_parts.append(f"{label} {q['price']} ({q['change_pct']:+.2f}%)")
         else:
             chip_parts.append(f"{label} {q['change_pct']:+.2f}%")
@@ -476,7 +356,7 @@ def fetch_global_macro_context(
         f"- 隔夜關鍵指標{date_tag}：{compact_line}",
     ]
     if trajectory_lines:
-        prompt_lines.append("- 近 3~5 日國際關鍵指標連續軌跡（判讀恐慌升溫/鈍化與外資匯率趨勢）：")
+        prompt_lines.append("- 近 3~5 日國際關鍵指標連續軌跡（判讀恐慌升溫/鈍化、利率美元與外資匯率趨勢）：")
         prompt_lines.extend(trajectory_lines)
     is_post_market = str(context_mode or "").strip().lower() == "post_market"
     tw_d = str(tw_latest_date or "").strip()
@@ -485,14 +365,10 @@ def fetch_global_macro_context(
             f"- ⚠️ 時間軸防重複計價提醒：上述美股報價為美東 {us_as_of_date} 收盤（美東 {tw_d} 尚未收盤），"
             f"該日漲跌已於今日（{tw_d}）台股盤勢中消化反映，判讀總體倉位與進場節奏時請勿對前一日美股利空／利多重複計價。"
         )
-    if headlines:
-        prompt_lines.append("- 近 48 小時國際財經與產業要聞：")
-        for idx, h in enumerate(headlines, start=1):
-            src = f" [{h['source']}]" if h.get("source") else ""
-            tm = f" ({h['pub_time']})" if h.get("pub_time") else ""
-            prompt_lines.append(f"  {idx}. {h['title']}{src}{tm}")
-    else:
-        prompt_lines.append("- 近 48 小時國際財經與產業要聞：無重大異常標題")
+    if macro_news_block:
+        prompt_lines.append(macro_news_block)
+    elif include_news:
+        prompt_lines.append("- 近 48 小時國際財經與產業事實摘要：無重大異常新聞")
 
     return {
         "risk_tone": risk_tone,
@@ -500,6 +376,7 @@ def fetch_global_macro_context(
         "us_as_of_date": us_as_of_date,
         "quotes": quotes,
         "headlines": headlines,
+        "macro_intel": macro_intel_card.to_dict() if macro_intel_card is not None else None,
         "compact_line": compact_line,
         "trajectory_lines": trajectory_lines,
         "prompt_block": "\n".join(prompt_lines),

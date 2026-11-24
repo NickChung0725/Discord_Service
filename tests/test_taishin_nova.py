@@ -1231,6 +1231,7 @@ class TestTaishinNova(unittest.TestCase):
             patch("quant.fundamental_cache.FundamentalCacheManager", return_value=_FakeCache()),
             patch("quant.fundamental_analyzer.FundamentalAnalyzer", _FakeAnalyzer),
             patch("quant.taxonomy_service.TaxonomyService", _FakeTaxSvc),
+            patch("services.news_intel_service.get_stock_intel", side_effect=RuntimeError("skip_net_in_test")),
         ):
             deep = svc.load_public_deep_fundamental_context(
                 {"3034", "9999"},
@@ -1266,29 +1267,26 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(d9999["chip"]["margin_chg_5d_lots"], "N/A")
         self.assertEqual(d9999["chip"]["est_margin_maint_pct"], "N/A")
 
-    def test_fetch_macro_news_headlines_whitelists_institutional_and_blocks_clickbait(self) -> None:
+    def test_fetch_macro_news_headlines_delegates_to_news_intel_service(self) -> None:
         from datetime import datetime, timezone
         from macro_context import fetch_macro_news_headlines
+        from services.news_intel_service import MacroIntelCard
 
-        xml_payload = """<?xml version="1.0" encoding="UTF-8"?>
-        <rss version="2.0"><channel>
-          <item><title>專家喊買美股後悔沒買 - 三立新聞網</title><source>三立新聞網</source><pubDate>Mon, 16 Nov 2026 01:00:00 GMT</pubDate></item>
-          <item><title>費半勁揚2% 輝達領漲 - 鉅亨網</title><source>鉅亨網</source><pubDate>Mon, 16 Nov 2026 01:00:00 GMT</pubDate></item>
-          <item><title>台積電ADR創高 - Reuters</title><source>Reuters</source><pubDate>Mon, 16 Nov 2026 00:30:00 GMT</pubDate></item>
-          <item><title>美股盤後觀察 - 某小部落格</title><source>某小部落格</source><pubDate>Mon, 16 Nov 2026 00:00:00 GMT</pubDate></item>
-        </channel></rss>"""
-
-        fake_resp = MagicMock()
-        fake_resp.text = xml_payload
-        fake_session = MagicMock()
-        fake_session.get.return_value = fake_resp
-
-        headlines = fetch_macro_news_headlines(
-            max_items=2,
-            session=fake_session,
-            now_utc=datetime(2026, 11, 16, 2, 0, tzinfo=timezone.utc),
+        fake_card = MacroIntelCard(
+            as_of="2026-11-16T10:00:00+08:00",
+            mode="ai",
+            core_drivers=["費半勁揚2% 輝達領漲 [11-16｜鉅亨網美股]"],
+            raw_articles=[
+                {"title": "費半勁揚2% 輝達領漲", "source": "鉅亨網美股", "pub_date": "2026-11-16 09:00"},
+                {"title": "台積電ADR創高", "source": "鉅亨網國際", "pub_date": "2026-11-16 08:30"},
+            ],
         )
-        self.assertEqual([h["source"] for h in headlines], ["鉅亨網", "Reuters"])
+        with patch("services.news_intel_service.get_macro_intel", return_value=fake_card):
+            headlines = fetch_macro_news_headlines(
+                max_items=2,
+                now_utc=datetime(2026, 11, 16, 2, 0, tzinfo=timezone.utc),
+            )
+        self.assertEqual([h["source"] for h in headlines], ["鉅亨網美股", "鉅亨網國際"])
 
     def test_build_fresh_top_picks_block_filters_ai_selected_rebound_and_sorts_by_weight_and_grade(self) -> None:
         picks_bundle = {

@@ -53,6 +53,7 @@ TAIPEI_TZ = timezone(timedelta(hours=8))
 # --------------------------------------------------------------------------- #
 CNYES_US_STOCK_URL = "https://api.cnyes.com/media/api/v1/newslist/category/us_stock"
 CNYES_WD_MACRO_URL = "https://api.cnyes.com/media/api/v1/newslist/category/wd_macro"
+CNYES_FOREX_URL = "https://api.cnyes.com/media/api/v1/newslist/category/forex"
 CNYES_STOCK_NEWS_URL_TMPL = "https://api.cnyes.com/media/api/v1/newslist/TWS:{stock_id}:STOCK/news"
 CNYES_ARTICLE_URL_TMPL = "https://news.cnyes.com/news/id/{news_id}"
 YAHOO_STOCK_RSS_URL = "https://tw.stock.yahoo.com/rss"
@@ -129,6 +130,10 @@ _MACRO_CLICKBAIT_PATTERNS = (
     "存股族",
     "高股息ETF",
     "盤中速報",
+    "老幹部夾克",
+    "皮衣",
+    "穿搭",
+    "八卦",
 )
 
 _CALENDAR_TITLE_RE = re.compile(
@@ -367,8 +372,10 @@ def clean_yahoo_and_cnyes_chrome(text: str) -> str:
     )
     # cnyes leading byline "鉅亨網新聞中心 2026-11-19 17:34"
     s = re.sub(r"^鉅亨網[^\s]{0,12}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s*", "", s)
-    # cnyes trailing tag / nav junk
-    s = re.sub(r"\s*#\s*[^\n]{1,30}\s+[\d.]+\s*%\s*上一篇\s*下一篇.*$", "", s)
+    # cnyes / Uanalyze disclaimers & trailing sentiment tags ("# 高檔出貨 79.17 %", "# 投信認養股")
+    s = re.sub(r"\s*※\s*本文經「優分析」授權轉載.*?審慎評估風險。?", "", s)
+    s = re.sub(r"\s*資料來源：Factset，數據僅供參考，不作為投資建議。?", "", s)
+    s = re.sub(r"\s*#\s*[^\s#]{2,20}(?:\s+[\d.]+\s*%)?(?:\s*上一篇\s*下一篇.*)?$", "", s)
     s = re.sub(r"\s*上一篇\s*下一篇.*$", "", s)
     s = re.sub(
         r"\s*完整財務業務資訊請至公開資訊觀測站之法人說明會一覽表或法說會項目下查閱。?",
@@ -448,9 +455,17 @@ def classify_mops_or_notice(title: str, category: str = "") -> str:
     return "editorial"
 
 
-def _norm_title_key(title: str) -> str:
+_CN_DIGIT_MAP = str.maketrans("〇零一二三四五六七八九", "00123456789")
+
+
+def _norm_title_key(title: str, stock_name: str = "") -> str:
+    """Normalize Yahoo & cnyes MOPS titles aggressively so identical filings deduplicate 100%."""
     s = re.sub(r"^【[^】]+】\s*", "", title or "")
-    s = re.sub(r"^[^\s:：]{2,8}\s*[:：]\s*(?:公告本公司|本公司|公告)?", "", s)
+    s = re.sub(r"^[^\s:：]{2,10}\s*[:：]\s*", "", s)
+    if stock_name:
+        s = s.replace(stock_name, "")
+    s = re.sub(r"(?:股份有限公司|科技|電子|工業|企業|公告本公司|本公司|公告|前於民國|民國)", "", s)
+    s = s.translate(_CN_DIGIT_MAP)
     s = re.sub(r"[\W_]+", "", s).lower()
     return s[:30]
 
@@ -517,50 +532,60 @@ def fetch_article_body_html(
     """Extract clean paragraph body from a cnyes or Yahoo Stock article page (stdlib only)."""
     if not url:
         return ""
-    try:
-        resp = _http_get_with_retry(url, session=session, timeout=timeout, max_attempts=2)
-        if getattr(resp, "status_code", 0) != 200:
+    for attempt in range(2):
+        try:
+            resp = _http_get_with_retry(url, session=session, timeout=timeout, max_attempts=2)
+            if getattr(resp, "status_code", 0) != 200:
+                if attempt == 0:
+                    time.sleep(1.0)
+                    continue
+                return ""
+            raw_html = resp.text
+        except Exception as err:  # noqa: BLE001
+            logger.debug("Article body fetch failed (%s): %s", url, err)
             return ""
-        raw_html = resp.text
-    except Exception as err:  # noqa: BLE001
-        logger.debug("Article body fetch failed (%s): %s", url, err)
-        return ""
 
-    # Prefer <article> container (works cleanly on both news.cnyes.com and tw.stock.yahoo.com)
-    m_art = re.search(r"(?is)<article[^>]*>(.*?)</article>", raw_html)
-    scope = m_art.group(1) if m_art else raw_html
-    paragraphs = [
-        strip_html_to_text(p)
-        for p in re.findall(r"(?is)<p[^>]*>(.*?)</p>", scope)
-    ]
-    paragraphs = [p for p in paragraphs if len(p) >= 6]
-    joined = " ".join(paragraphs) if paragraphs else strip_html_to_text(scope)
-    cleaned = clean_yahoo_and_cnyes_chrome(joined)
-    return cleaned[:max_chars]
+        # Prefer <article> container (works cleanly on both news.cnyes.com and tw.stock.yahoo.com)
+        m_art = re.search(r"(?is)<article[^>]*>(.*?)</article>", raw_html)
+        scope = m_art.group(1) if m_art else raw_html
+        paragraphs = [
+            strip_html_to_text(p)
+            for p in re.findall(r"(?is)<p[^>]*>(.*?)</p>", scope)
+        ]
+        paragraphs = [p for p in paragraphs if len(p) >= 6]
+        joined = " ".join(paragraphs) if paragraphs else strip_html_to_text(scope)
+        cleaned = clean_yahoo_and_cnyes_chrome(joined)
+        if cleaned:
+            return cleaned[:max_chars]
+        if attempt == 0:
+            time.sleep(1.0)
+    return ""
 
 
 def fetch_macro_articles(
     *,
-    max_items: int = 8,
+    max_items: int = 12,
     max_age_hours: int = 48,
     session: Any | None = None,
     timeout: int = DEFAULT_HTTP_TIMEOUT_SEC,
     now_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch recent US stock & global macro articles WITH full body text from cnyes JSON API."""
+    """Fetch balanced US stocks + global macro + Forex/rates articles WITH full body from cnyes JSON API."""
     ref_now = (now_utc or datetime.now(timezone.utc)).astimezone(TAIPEI_TZ)
     cutoff = ref_now - timedelta(hours=max_age_hours)
 
+    # Category quotas focus strictly on US equities, Fed/macro/geopolitics & USD/rates (prevents 1 viral story from flooding)
     sources = (
-        (CNYES_US_STOCK_URL, {"limit": 15}, "鉅亨網美股"),
-        (CNYES_WD_MACRO_URL, {"limit": 10}, "鉅亨網國際"),
+        (CNYES_US_STOCK_URL, {"limit": 15}, "鉅亨網美股", 6),
+        (CNYES_WD_MACRO_URL, {"limit": 10}, "鉅亨網國際", 4),
+        (CNYES_FOREX_URL, {"limit": 8}, "鉅亨網外匯", 2),
     )
 
     seen_ids: set[str] = set()
     seen_keys: set[str] = set()
     collected: list[dict[str, Any]] = []
 
-    for url, params, default_src in sources:
+    for url, params, default_src, quota in sources:
         try:
             resp = _http_get_with_retry(url, params=params, session=session, timeout=timeout, max_attempts=2)
             resp.raise_for_status()
@@ -570,7 +595,10 @@ def fetch_macro_articles(
             continue
 
         data = ((payload.get("items") or {}).get("data") or []) if isinstance(payload, dict) else []
+        bucket_count = 0
         for item in data:
+            if bucket_count >= quota:
+                break
             if not isinstance(item, dict):
                 continue
             nid = str(item.get("newsId") or "").strip()
@@ -596,6 +624,7 @@ def fetch_macro_articles(
             if nid:
                 seen_ids.add(nid)
             seen_keys.add(key)
+            bucket_count += 1
 
             collected.append(
                 {
@@ -757,7 +786,7 @@ def fetch_stock_news_bundle(
         cat = it["category"]
         if is_spam_or_noise_title(title, cat, is_macro=False):
             continue
-        key = _norm_title_key(title)
+        key = _norm_title_key(title, stock_name=stock_name)
         if not key or key in seen_keys:
             continue
 
@@ -824,6 +853,8 @@ def fetch_stock_news_bundle(
     def _hydrate(item: dict[str, Any], bucket: str) -> dict[str, Any]:
         u = item["url"]
         if u not in body_cache:
+            if body_cache and "cnyes.com" in u:
+                time.sleep(0.35)
             raw_body = fetch_article_body_html(u, session=session, max_chars=1200)
             if not raw_body:
                 raw_body = item.get("rss_desc") or ""
@@ -897,13 +928,22 @@ def _build_stock_distill_prompt(
     bundle: Mapping[str, Any],
 ) -> str:
     label = f"{stock_id} {stock_name}".strip()
-    lines = [f"目標個股：【{label}】", "請僅針對此標的萃取純事實重點 JSON（若內文提及他股請忽略）：", ""]
+    lines = [
+        f"目標個股：【{label}】",
+        "請僅針對此標的萃取純事實重點 JSON（若內文提及他股請忽略；B 區近 30 天文章若含法說／財測展望亦可同時納入 outlook_claims）：",
+        "",
+    ]
 
-    def _append_section(header: str, arts: list[dict[str, Any]]) -> None:
-        if not arts:
+    printed_urls: set[str] = set()
+
+    def _append_section(header: str, arts: list[dict[str, Any]], *, skip_printed: bool = False) -> None:
+        filtered = [a for a in arts if not (skip_printed and a.get("url") and a.get("url") in printed_urls)]
+        if not filtered:
             return
         lines.append(f"=== {header} ===")
-        for idx, art in enumerate(arts, start=1):
+        for idx, art in enumerate(filtered, start=1):
+            if art.get("url"):
+                printed_urls.add(str(art["url"]))
             date_tag = art.get("ymd") or art.get("mm_dd") or "近期"
             lines.append(
                 f"[{idx}] ({date_tag}｜{art.get('source')}) 標題：{art.get('title')}\n"
@@ -912,8 +952,8 @@ def _build_stock_distill_prompt(
         lines.append("")
 
     _append_section("A. FactSet / 機構預估調查", list(bundle.get("factset_articles") or []))
-    _append_section("B. 近 30 天即時新聞與實質重訊", list(bundle.get("recent_articles") or []))
-    _append_section("C. 近 180 天深度報導與法說展望", list(bundle.get("outlook_articles") or []))
+    _append_section("B. 近 30 天即時新聞與實質重訊", list(bundle.get("recent_articles") or []), skip_printed=True)
+    _append_section("C. 近 180 天深度報導與法說展望", list(bundle.get("outlook_articles") or []), skip_printed=True)
     return "\n".join(lines)
 
 
@@ -1201,6 +1241,27 @@ def get_stock_intel(
     return card
 
 
+def stock_card_to_alignable_items(card: StockIntelCard, *, max_items: int = 5) -> list[dict[str, str]]:
+    """Convert cached StockIntelCard recent articles into align_news_with_price_action() items (0 extra HTTP)."""
+    out: list[dict[str, str]] = []
+    for art in list(card.raw_recent_articles or [])[:max_items]:
+        pub = str(art.get("ymd") or art.get("pub_date") or "").strip()
+        if not pub:
+            continue
+        out.append(
+            {
+                "title": str(art.get("title") or "").strip(),
+                "pub_date": pub,
+                "pubDate": pub,
+                "url": str(art.get("url") or "").strip(),
+                "link": str(art.get("url") or "").strip(),
+                "source": str(art.get("source") or "財經媒體").strip(),
+                "summary": str(art.get("body") or "").strip()[:220],
+            }
+        )
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # View Adapters (4 Consumer-Specific Prompt Renderers)
 # --------------------------------------------------------------------------- #
@@ -1300,13 +1361,16 @@ def render_morning_brief_stock_block(
         lines.append(f"📊 機構預估：{item}")
     for item in card.recent_catalysts[:2]:
         lines.append(f"⚡ 近期催化：{item}")
+    if card.outlook_has_substance:
+        for item in card.outlook_claims[:2]:
+            lines.append(f"🎙️ 法說財測：{item}")
     for item in card.risk_flags[:2]:
         lines.append(f"⚠️ 風險紅旗：{item}")
     if aligned_reactions:
         for r in aligned_reactions[:2]:
             tag = str(r.get("reaction_tag") or "")
             # Only append reaction line if non-neutral or no distilled catalysts exist
-            if ("中性" not in tag) or not (card.recent_catalysts or card.factset_consensus):
+            if ("中性" not in tag) or not (card.recent_catalysts or card.factset_consensus or card.outlook_claims):
                 lines.append(f"[{str(r.get('pub_date', ''))[:10]}] {r.get('title', '')} ➔ {tag}")
     if not lines:
         lines.append("近期無實質基本面新聞催化劑（僅例行公告，已自動減噪）")

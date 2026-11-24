@@ -1688,7 +1688,6 @@ async def run_audit_stage(
         evaluate_disposition_risk,
         evaluate_weekly_tdcc_anchor,
         extract_ex_dividend_dates,
-        fetch_news_excerpt,
         fetch_or_cache_tdcc_holding,
         compute_deterministic_trade_setup,
         is_mandatory_margin_covering_window,
@@ -1985,17 +1984,14 @@ async def run_audit_stage(
             )
             exposures[sid] = exposure
         news: list[dict[str, object]] = []
-        if analyzer is not None and has_prices:
+        if has_prices:
             try:
-                from fundamental_analyzer import filter_and_clean_rss
-                raw_news = await asyncio.to_thread(analyzer._fetch_yahoo_stock_rss, sid)  # noqa: SLF001
-                cleaned_news = filter_and_clean_rss(raw_news, is_guidance=False, max_age_days=14, sort_by_date=True)
-                if not cleaned_news:
-                    q_str = f"{sid} {row.get('stock_name', '')} (MoneyDJ OR 鉅亨網 OR 中央社 OR 經濟日報 OR 工商時報) when:14d"
-                    raw_gnews = await asyncio.to_thread(analyzer._fetch_google_news_rss, q_str)  # noqa: SLF001
-                    cleaned_news = filter_and_clean_rss(raw_gnews, is_guidance=False, max_age_days=14, sort_by_date=True)
+                from services.news_intel_service import get_stock_intel, stock_card_to_alignable_items
+
+                card = await asyncio.to_thread(get_stock_intel, sid, str(row.get("stock_name", "")))
+                align_items = stock_card_to_alignable_items(card, max_items=AUDIT_NEWS_MAX_ITEMS)
                 recent_news = _filter_recent_rss_news(
-                    cleaned_news,
+                    align_items,
                     raw_stock_prices,
                     trading_days=5,
                     target_date=target_date,
@@ -2004,7 +2000,7 @@ async def run_audit_stage(
                     align_news_with_price_action,
                     recent_news[:AUDIT_NEWS_MAX_ITEMS],
                     raw_stock_prices,
-                    excerpt_fetcher=lambda url: fetch_news_excerpt(url, timeout=3.0),
+                    excerpt_fetcher=None,
                 )
             except Exception as error:  # noqa: BLE001
                 print(f"[warn] {sid} 新聞量價對齊失敗（略過）：{error}")
@@ -2552,7 +2548,11 @@ async def execute_v61_quality_and_strategic_pipeline(
         build_market_daily_trend_block,
         build_strategic_tech_and_chip_package,
         compensate_ex_dividend_gaps,
-        fetch_news_excerpt,
+    )
+    from services.news_intel_service import (
+        get_stock_intel,
+        render_cross_stock_block,
+        stock_card_to_alignable_items,
     )
     from taishin.macro_context import fetch_global_macro_context
     from taxonomy_service import build_sector_metrics_from_prices
@@ -2578,36 +2578,44 @@ async def execute_v61_quality_and_strategic_pipeline(
         except Exception:  # noqa: BLE001
             sector_pe_lookup = {}
 
-    # Step 1: 組裝 AI #2 績優股選拔資料卡（去重、附加近期新聞反應）
+    # Step 1: 組裝 AI #2 績優股選拔資料卡（去重、附加共用新聞情報與量價反應）
     quality_dossiers: list[str] = []
+    stock_intel_by_sid: dict[str, tuple[Any, list[dict[str, object]]]] = {}
     for idx, row in enumerate(analyzed.to_dict("records"), start=1):
         sid = str(row["stock_id"])
+        sname = str(row.get("stock_name") or "")
         raw_stock_prices = (
             prices.loc[prices["stock_id"] == sid] if prices is not None and not prices.empty else pd.DataFrame()
         )
         news_list: list[dict[str, object]] = []
-        if not raw_stock_prices.empty:
-            try:
-                from fundamental_analyzer import filter_and_clean_rss
-
-                raw_news = await asyncio.to_thread(analyzer._fetch_yahoo_stock_rss, sid)  # noqa: SLF001
-                cleaned_news = filter_and_clean_rss(raw_news, is_guidance=False, max_age_days=14, sort_by_date=True)
+        intel_card = None
+        try:
+            intel_card = await asyncio.to_thread(get_stock_intel, sid, sname)
+            if not raw_stock_prices.empty:
+                align_items = stock_card_to_alignable_items(intel_card, max_items=AUDIT_NEWS_MAX_ITEMS)
                 recent_news = _filter_recent_rss_news(
-                    cleaned_news, raw_stock_prices, trading_days=5, target_date=target_date
+                    align_items, raw_stock_prices, trading_days=5, target_date=target_date
                 )
                 news_list = await asyncio.to_thread(
                     align_news_with_price_action,
                     recent_news[:AUDIT_NEWS_MAX_ITEMS],
                     raw_stock_prices,
-                    excerpt_fetcher=lambda url: fetch_news_excerpt(url, timeout=3.0),
+                    excerpt_fetcher=None,
                 )
-            except Exception:  # noqa: BLE001
-                news_list = []
+        except Exception:  # noqa: BLE001
+            intel_card = None
+            news_list = []
+
+        if intel_card is not None:
+            stock_intel_by_sid[sid] = (intel_card, news_list)
 
         snap_txt = str(stage1_results.get(sid, {}).get("snapshot") or "").strip()
         sum_txt = str(stage1_results.get(sid, {}).get("summary") or "").strip()
         dossier = build_dossier(idx, row, snap_txt, sum_txt)
-        if news_list:
+        if intel_card is not None:
+            news_block = render_cross_stock_block(intel_card, aligned_reactions=news_list)
+            dossier += "\n- [D. 近期重大新聞、機構共識與市場量價真實反應]\n" + news_block
+        elif news_list:
             n_lines = [
                 f"  - [{n.get('pub_date', '')[:16]}] {n.get('title', '')} ➔ {n.get('reaction_tag', '')}"
                 for n in news_list
@@ -2826,6 +2834,12 @@ async def execute_v61_quality_and_strategic_pipeline(
         ]
         if q_item.get("bear_case_and_rebuttal"):
             block_lines.append(f"- **AI #2 反方風險與豁免辯證**：{q_item['bear_case_and_rebuttal']}")
+        if sid in stock_intel_by_sid:
+            s_card, s_reactions = stock_intel_by_sid[sid]
+            block_lines.append(
+                "- **近期新聞催化劑、機構共識與事件日曆**：\n"
+                + render_cross_stock_block(s_card, aligned_reactions=s_reactions)
+            )
         block_lines.extend(
             [
                 f"- **台新帳戶庫存共伴曝險**：{exp_status}（同產業持股：{list(_exposure_field(exposure, 'same_sector_holdings', []) or [])}｜最高相關持股：{_exposure_field(exposure, 'max_corr_holding_id')} 相關係數 {_exposure_field(exposure, 'max_corr_value', 0.0)}）",

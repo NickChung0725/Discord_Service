@@ -1459,18 +1459,24 @@ def load_public_deep_fundamental_context(
                             pass
             result[sid]["chip"] = chip_entry
 
-            # 6. Recent Stock News + Price Action Reaction (Filtered by Institutional Media Whitelist)
+            # 6. Unified Stock News Intel (Calendar, FactSet, Catalysts, Guidance & Price-Action Reaction)
             try:
-                from fundamental_analyzer import filter_and_clean_rss
-                raw_rss = analyzer._fetch_yahoo_stock_rss(sid)  # noqa: SLF001
-                clean_rss = filter_and_clean_rss(raw_rss, is_guidance=False, max_age_days=30, sort_by_date=True)
-                if prices_df is not None and not prices_df.empty and clean_rss:
+                from services.news_intel_service import (
+                    get_stock_intel,
+                    render_morning_brief_stock_block,
+                    stock_card_to_alignable_items,
+                )
+
+                intel_card = get_stock_intel(sid, sname)
+                aligned_news: list[dict[str, object]] = []
+                if prices_df is not None and not prices_df.empty:
                     sub_p = prices_df.loc[prices_df["stock_id"] == sid]
-                    aligned_news = align_news_with_price_action(clean_rss[:3], sub_p, excerpt_fetcher=None)
-                    result[sid]["recent_news"] = [
-                        f"[{n.get('pub_date', '')[:16]}] {n.get('title', '')} ({n.get('source', '機構新聞')}) ➔ {n.get('reaction_tag', '')}（摘要：{str(n.get('summary', ''))[:90]}）"
-                        for n in aligned_news[:3]
-                    ]
+                    align_items = stock_card_to_alignable_items(intel_card, max_items=3)
+                    if not sub_p.empty and align_items:
+                        aligned_news = align_news_with_price_action(align_items, sub_p, excerpt_fetcher=None)
+                result[sid]["recent_news"] = render_morning_brief_stock_block(
+                    intel_card, aligned_reactions=aligned_news
+                )
             except Exception:  # noqa: BLE001
                 pass
 

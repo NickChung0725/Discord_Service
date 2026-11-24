@@ -45,43 +45,33 @@ class RssFilterTests(unittest.TestCase):
         cleaned = filter_and_clean_rss(items, now=self.NOW, sort_by_date=True)
         self.assertEqual([c["title"] for c in cleaned], ["最新公告", "舊聞"])
 
-    def test_fetch_news_prefers_yahoo_rss_with_summary_and_falls_back_to_google(self) -> None:
+    def test_fetch_news_delegates_to_unified_news_intel_service(self) -> None:
         from pathlib import Path
         from tempfile import TemporaryDirectory
         from unittest.mock import Mock, patch
+        from services.news_intel_service import StockIntelCard
 
         with TemporaryDirectory() as tmpdir:
             analyzer = FundamentalAnalyzer(cache=Mock(), reports_dir=Path(tmpdir))
-            yahoo_items = [
-                {
-                    "title": "【公告】達運光電董事長辭任",
-                    "link": "https://tw.stock.yahoo.com/news/1",
-                    "pubDate": "Thu, 22 Oct 2026 10:00:00 GMT",
-                    "source": "Yahoo股市",
-                    "description": "日 期：2026年10月22日公司名稱：達運光電(8045)主 旨：達運光電董事長辭任",
-                }
-            ]
-            with patch.object(analyzer, "_fetch_yahoo_stock_rss", return_value=yahoo_items):
+            fake_card = StockIntelCard(
+                stock_id="8045",
+                stock_name="達運光電",
+                as_of="2026-10-22T10:00:00+08:00",
+                mode="ai",
+                calendar_events=[{"date": "2026-10-25", "event": "參與法人說明會", "source": "Yahoo"}],
+                recent_catalysts=["公司公告新廠擴建進度 [10-22｜鉅亨網]"],
+                outlook_claims=["管理層預期明年出貨量年增 20% [2026-10-20｜鉅亨網]"],
+                outlook_has_substance=True,
+            )
+            with patch("services.news_intel_service.get_stock_intel", return_value=fake_card):
                 out = analyzer.fetch_free_stock_news_and_search("8045", "達運光電")
-            self.assertIn("Yahoo股市個股 RSS", out)
-            self.assertIn("摘要：日 期：2026年10月22日", out)
+            self.assertIn("近期法說展望、機構預估與實質新聞事實卡", out)
+            self.assertIn("2026-10-25 參與法人說明會", out)
+            self.assertIn("管理層預期明年出貨量年增 20%", out)
 
-            google_items = [
-                {
-                    "title": "低軌衛星概念股",
-                    "link": "https://news.google.com/rss/articles/abc",
-                    "pubDate": "Mon, 26 Oct 2026 00:00:00 GMT",
-                    "source": "某媒體",
-                    "description": "低軌衛星概念股 某媒體",
-                }
-            ]
-            with (
-                patch.object(analyzer, "_fetch_yahoo_stock_rss", side_effect=RuntimeError("boom")),
-                patch.object(analyzer, "_fetch_google_news_rss", return_value=google_items),
-            ):
-                out_fb = analyzer.fetch_free_stock_news_and_search("8045", "達運光電")
-            self.assertIn("Google News RSS", out_fb)
-            self.assertIn("僅標題，無內文摘要", out_fb)
+            with patch("services.news_intel_service.get_stock_intel", side_effect=RuntimeError("network down")):
+                out_err = analyzer.fetch_free_stock_news_and_search("8045", "達運光電")
+            self.assertIn("本次新聞情報取得失敗", out_err)
 
 
 class SanitizerTests(unittest.TestCase):

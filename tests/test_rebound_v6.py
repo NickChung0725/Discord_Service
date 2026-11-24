@@ -515,6 +515,7 @@ class ReboundV6Tests(unittest.TestCase):
                 ) as mock_macro,
                 patch("taishin_portfolio_service.load_portfolio_exposure_inputs", return_value=([], {})),
                 patch("finmind_stock_scanner.fetch_or_cache_tdcc_holding", return_value=None),
+                patch("services.news_intel_service.get_stock_intel", side_effect=RuntimeError("skip_net_in_test")),
             ):
                 decision, audit_records, _raw, model_ver = asyncio.run(
                     execute_v61_quality_and_strategic_pipeline(
@@ -618,12 +619,17 @@ class ReboundV6Tests(unittest.TestCase):
             "^IXIC": {"symbol": "^IXIC", "price": 18000.0, "prev_close": 18414.0, "change": -414.0, "change_pct": -2.25, "as_of_date": "2026-11-19"},
             "^VIX": {"symbol": "^VIX", "price": 30.15, "prev_close": 28.44, "change": 1.71, "change_pct": 6.01, "as_of_date": "2026-11-19"},
         }
+        from services.news_intel_service import MacroIntelCard
+
         with (
             patch(
                 "taishin.macro_context.fetch_yahoo_quote_snapshot",
                 side_effect=lambda sym, session=None: fake_quotes.get(sym),
             ),
-            patch("taishin.macro_context.fetch_macro_news_headlines", return_value=[]),
+            patch(
+                "services.news_intel_service.get_macro_intel",
+                return_value=MacroIntelCard(as_of="2026-11-20T00:00:00+08:00", mode="empty"),
+            ),
         ):
             ctx = fetch_global_macro_context(
                 context_mode="post_market",
@@ -794,6 +800,7 @@ class ReboundV6Tests(unittest.TestCase):
                 patch("taishin.macro_context.fetch_global_macro_context", return_value={"prompt_block": ""}),
                 patch("taishin_portfolio_service.load_portfolio_exposure_inputs", return_value=([], {})),
                 patch("finmind_stock_scanner.fetch_or_cache_tdcc_holding", return_value=None),
+                patch("services.news_intel_service.get_stock_intel", side_effect=RuntimeError("skip_net_in_test")),
             ):
                 _dec, audit_records, _raw, _mv = asyncio.run(
                     execute_v61_quality_and_strategic_pipeline(
@@ -1112,6 +1119,7 @@ class ReboundV6Tests(unittest.TestCase):
                 patch("taishin.macro_context.fetch_global_macro_context", return_value={"prompt_block": ""}),
                 patch("taishin_portfolio_service.load_portfolio_exposure_inputs", return_value=([], {})),
                 patch("finmind_stock_scanner.fetch_or_cache_tdcc_holding", return_value=None),
+                patch("services.news_intel_service.get_stock_intel", side_effect=RuntimeError("skip_net_in_test")),
             ):
                 dec, audit_records, _raw, _mv = asyncio.run(
                     execute_v61_quality_and_strategic_pipeline(

@@ -1539,166 +1539,15 @@ class FundamentalAnalyzer:
             df_full = df_full.sort_values("raw_date")
         return df_full.tail(window_size).reset_index(drop=True)
 
-    def _fetch_google_news_rss(self, query: str) -> list[dict[str, str]]:
-        url = "https://news.google.com/rss/search"
-        params = {
-            "q": query,
-            "hl": "zh-TW",
-            "gl": "TW",
-            "ceid": "TW:zh-Hant",
-        }
-        response = requests.get(url, params=params, timeout=self.news_timeout_seconds)
-        response.raise_for_status()
-
-        root = ET.fromstring(response.text)
-        items = []
-        for item in root.findall("./channel/item"):
-            title = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            pub_date = (item.findtext("pubDate") or "").strip()
-            source = (item.findtext("source") or "").strip()
-            description = html.unescape(re.sub(r"<[^>]+>", " ", item.findtext("description") or ""))
-            description = re.sub(r"\s+", " ", description).strip()
-            if not title or not link:
-                continue
-            items.append(
-                {
-                    "title": title,
-                    "link": link,
-                    "pubDate": pub_date,
-                    "source": source,
-                    "description": description,
-                }
-            )
-            if len(items) >= self.news_max_items:
-                break
-        return items
-
-    def _fetch_yahoo_stock_rss(self, stock_id: str) -> list[dict[str, str]]:
-        """從 Yahoo 奇摩股市個股 RSS 取得最新新聞與 MOPS 重大訊息公告（含內文摘要）。"""
-        url = "https://tw.stock.yahoo.com/rss"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(
-            url,
-            params={"s": stock_id},
-            headers=headers,
-            timeout=self.news_timeout_seconds,
-        )
-        response.raise_for_status()
-
-        root = ET.fromstring(response.text)
-        items: list[dict[str, str]] = []
-        for item in root.findall("./channel/item"):
-            title = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            pub_date = (item.findtext("pubDate") or "").strip()
-            description = html.unescape(re.sub(r"<[^>]+>", " ", item.findtext("description") or ""))
-            description = re.sub(r"\s+", " ", description).strip()
-            if not title or not link:
-                continue
-            items.append(
-                {
-                    "title": title,
-                    "link": link,
-                    "pubDate": pub_date,
-                    "source": "Yahoo股市",
-                    "description": description,
-                }
-            )
-            if len(items) >= self.news_max_items:
-                break
-        return items
-
     def fetch_free_stock_news_and_search(self, stock_id: str, stock_name: str) -> str:
-        raw_items: list[dict[str, str]] = []
-        source_label = "Yahoo股市個股 RSS"
+        """Delegate Stage 1 stock news, FactSet consensus & 180d outlook card to `services.news_intel_service`."""
         try:
-            raw_items = self._fetch_yahoo_stock_rss(stock_id)
-        except Exception:
-            raw_items = []
+            from services.news_intel_service import get_stock_intel, render_stage1_stock_block
 
-        items = (
-            filter_and_clean_rss(raw_items, is_guidance=True, max_age_days=30, sort_by_date=True)
-            if raw_items
-            else []
-        )
-        if not items and raw_items:
-            items = filter_and_clean_rss(raw_items, is_guidance=True, sort_by_date=True)
-
-        if not items:
-            source_label = "Google News RSS"
-            trusted_media_filter = "(MoneyDJ OR 鉅亨網 OR 中央社 OR 經濟日報 OR 工商時報 OR 財經M平方 OR 公開資訊觀測站)"
-            query_recent = f"{stock_id} {stock_name} {trusted_media_filter} when:30d".strip()
-            try:
-                raw_items = self._fetch_google_news_rss(query_recent)
-            except Exception:
-                raw_items = []
-            items = filter_and_clean_rss(raw_items, is_guidance=True, sort_by_date=True) if raw_items else []
-            if not items:
-                query_fallback = f"{stock_id} {stock_name} 台股".strip()
-                try:
-                    raw_items = self._fetch_google_news_rss(query_fallback)
-                except Exception:
-                    return "（本次新聞抓取失敗）"
-                items = filter_and_clean_rss(raw_items, is_guidance=True, sort_by_date=True)
-
-        if not items:
-            return "（本次沒有抓到相關新聞）"
-
-        lines = [f"\n■ 即時新聞與重大訊息 ({source_label})"]
-        for it in items:
-            age_str = _format_rss_age(it.get("pubDate", ""))
-            meta_parts = [p for p in (it.get("source", "").strip(), it.get("pubDate", "").strip()) if p]
-            if age_str:
-                meta_parts.append(f"({age_str})")
-            meta = f" — {' '.join(meta_parts)}" if meta_parts else ""
-            lines.append(f"- [{it['title']}]({it['link']}){meta}")
-            desc = (it.get("description") or "").strip()
-            if desc and desc != RSS_NO_CONTENT_NOTE and desc != it["title"]:
-                lines.append(f"  摘要：{desc[:200]}")
-            else:
-                lines.append("  摘要：（僅標題，無內文摘要，嚴禁單憑標題推論因果）")
-        return "\n".join(lines)
-
-    _OUTLOOK_KEYWORDS = ("法說", "展望", "訂單", "產能", "資本支出", "毛利率", "營運", "財測", "指引", "能見度")
-
-    def fetch_earnings_call_and_outlook(self, stock_id: str, stock_name: str) -> str:
-        """定向檢索近期法說會/管理層展望報導（純 Python、不耗 AI 額度）。"""
-        title_block = "\n■ 近期法說會與管理層未來展望檢索 (Google News RSS，近 180 天)"
-        query = (
-            f"{stock_name} {stock_id} (法說 OR 展望 OR 訂單 OR 產能 OR 資本支出 OR 毛利率 OR 財測 OR 營收) "
-            f"(MoneyDJ OR 鉅亨網 OR 中央社 OR 經濟日報 OR 工商時報 OR 公開資訊觀測站) when:180d"
-        ).strip()
-        try:
-            items = self._fetch_google_news_rss(query)
-        except Exception:
-            return title_block + "\n（近期無公開法說展望：檢索失敗）"
-
-        relevant = [
-            it
-            for it in items
-            if any(k in f"{it.get('title', '')}{it.get('description', '')}" for k in self._OUTLOOK_KEYWORDS)
-        ]
-        relevant = filter_and_clean_rss(relevant, is_guidance=True)
-        if not relevant:
-            return title_block + "\n（近期無公開法說展望：沒有找到相關報導）"
-
-        has_substantive_summary = any(
-            str(it.get("description") or it.get("summary") or "").strip() not in ("", RSS_NO_CONTENT_NOTE, str(it.get("title", "")).strip())
-            for it in relevant
-        )
-        lines = [title_block, "以下為媒體對管理層說法的報導摘要；請只引用本區內容，不得自行補充展望。"]
-        if not has_substantive_summary:
-            lines.append(
-                "⚠️ 系統檢核：以下檢索結果均僅有媒體空殼標題、無實質內文數據；請嚴守零腦補原則，於 SUMMARY_JSON 將 guidance.claims 填寫為「無」、verdict 填寫為「無資料」。"
-            )
-        for it in relevant:
-            meta = f" — {it.get('source', '').strip()} {it.get('pubDate', '').strip()}".rstrip()
-            lines.append(f"- {it['title']}{meta}")
-            description = it.get("description", "").strip()
-            if description and description != it["title"]:
-                lines.append(f"  摘要：{description[:200]}")
-        return "\n".join(lines)
+            card = get_stock_intel(stock_id, stock_name)
+            return render_stage1_stock_block(card)
+        except Exception as err:  # noqa: BLE001
+            return f"\n■ 近期法說展望、機構預估與實質新聞事實卡\n（本次新聞情報取得失敗：{err}）"
 
     @staticmethod
     def _scale_cols_to_yi(
@@ -2033,9 +1882,8 @@ class FundamentalAnalyzer:
             parts.append(ma_context)
 
         if stock_name:
+            # Unified Stage 1 News Fact Card (includes Event Calendar, FactSet, 180d Outlook & 30d Catalysts)
             parts.append(self.fetch_free_stock_news_and_search(stock_id, stock_name))
-            if include_outlook:
-                parts.append(self.fetch_earnings_call_and_outlook(stock_id, stock_name))
 
         return "\n".join(parts)
 

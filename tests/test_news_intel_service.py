@@ -339,6 +339,57 @@ class ViewAdapterAndPromptLoggingTests(unittest.TestCase):
             mock_log.assert_called_once()
             mock_bq.assert_called_once()
 
+    def test_mops_cross_source_dedup_and_macro_10_indicators(self) -> None:
+        from services.news_intel_service import (
+            _build_stock_distill_prompt,
+            _norm_title_key,
+            clean_yahoo_and_cnyes_chrome,
+        )
+        from taishin.macro_context import MACRO_SYMBOLS, fetch_global_macro_context
+
+        # Yahoo vs cnyes Chinese-numeral & stock-name MOPS dedup
+        k_yahoo = _norm_title_key("【公告】聯詠科技115年第3季合併財務報告及第4季業績展望", stock_name="聯詠")
+        k_cnyes = _norm_title_key("聯詠:聯詠科技一一五年第三季合併財務報告及第四季業績展望", stock_name="聯詠")
+        self.assertEqual(k_yahoo, k_cnyes)
+
+        k_y2 = _norm_title_key("【公告】聯詠取消前於民國115年11月3日董事會通過購置建物案", stock_name="聯詠")
+        k_c2 = _norm_title_key("聯詠:公告本公司取消前於民國115年11月3日董事會通過購置建物案", stock_name="聯詠")
+        self.assertEqual(k_y2, k_c2)
+
+        # Strip cnyes trailing sentiment tag without prev/next links
+        self.assertEqual(clean_yahoo_and_cnyes_chrome("重要事實內容。 # 高檔出貨 79.17 %"), "重要事實內容。")
+        self.assertEqual(clean_yahoo_and_cnyes_chrome("重要事實內容。 # 投信認養股"), "重要事實內容。")
+
+        # Prompt dedup between Section B and Section C
+        shared_art = {"url": "https://news.cnyes.com/news/id/99", "ymd": "2026-11-04", "source": "鉅亨網", "title": "800G", "body": "放量"}
+        prompt_txt = _build_stock_distill_prompt(
+            "6526", "達發", {"factset_articles": [], "recent_articles": [shared_art], "outlook_articles": [shared_art]}
+        )
+        self.assertEqual(prompt_txt.count("標題：800G"), 1)
+
+        # Verify macro_context includes EWT, TNX, DXY (total 10 indicators)
+        keys = [k for _, k, _ in MACRO_SYMBOLS]
+        self.assertIn("EWT", keys)
+        self.assertIn("TNX", keys)
+        self.assertIn("DXY", keys)
+        self.assertEqual(len(keys), 10)
+
+        fake_q = {
+            "^SOX": {"symbol": "^SOX", "price": 9500.0, "prev_close": 9400.0, "change": 100.0, "change_pct": 1.06, "as_of_date": "2026-11-23", "trend_3d_str": "11-23 +1.06%"},
+            "^TNX": {"symbol": "^TNX", "price": 4.35, "prev_close": 4.30, "change": 0.05, "change_pct": 1.16, "as_of_date": "2026-11-23", "trend_3d_str": "11-23 4.35 (+1.16%)"},
+            "DX-Y.NYB": {"symbol": "DX-Y.NYB", "price": 104.2, "prev_close": 103.8, "change": 0.4, "change_pct": 0.39, "as_of_date": "2026-11-23", "trend_3d_str": "11-23 104.20 (+0.39%)"},
+            "EWT": {"symbol": "EWT", "price": 56.5, "prev_close": 55.0, "change": 1.5, "change_pct": 2.73, "as_of_date": "2026-11-23", "trend_3d_str": "11-23 +2.73%"},
+        }
+        with (
+            patch("taishin.macro_context.fetch_yahoo_quote_snapshot", side_effect=lambda s, session=None: fake_q.get(s)),
+            patch("services.news_intel_service.get_macro_intel", return_value=MacroIntelCard(as_of="2026-11-24", mode="ai", core_drivers=["輝達復職 [11-24｜鉅亨網美股]"])),
+        ):
+            ctx = fetch_global_macro_context(include_news=True)
+        self.assertIn("台灣ETF +2.73%", ctx["compact_line"])
+        self.assertIn("美債10年殖利率 4.35 (+1.16%)", ctx["compact_line"])
+        self.assertIn("美元指數 104.2 (+0.39%)", ctx["compact_line"])
+        self.assertIn("輝達復職 [11-24｜鉅亨網美股]", ctx["prompt_block"])
+
 
 if __name__ == "__main__":
     unittest.main()

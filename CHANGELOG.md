@@ -4,15 +4,20 @@
 
 ---
 
-## [v6.3.3-mvp] - 2026-11-24
-### ✨ 新增功能 — 共用新聞情報服務 MVP（高內聚低耦合爬蟲 ＋ 免費輕量 AI 事實整理 ＋ 差異化 TTL 快取）
-* **新建獨立共用新聞情報模組（[`services/news_intel_service.py`](/services/news_intel_service.py)）**：
-  * **高含金量資料來源與正文清洗（純 `requests` ＋ Python 標準庫，零 `bs4`/無頭瀏覽器依賴）**：以鉅亨網公開 JSON API（`us_stock` / `wd_macro` 國際頭條完整正文、`TWS:{sid}:STOCK/news` 180 天個股媒體報導與 `台股預估` FactSet 共識目標價）為主力，輔以 Yahoo 股市個股 RSS 抓取 MOPS 重訊完整正文；自動過濾盤中速報／老師喊盤／權證發行／例行月營收機器人雜訊，剝離 Yahoo 橫幅與 MOPS 公版表頭（`日期／公司名稱／發言人／條款`），並將「法說會／機構投資人說明會／Corporate Day／除息」自動轉譯民國年抽離為獨立 `calendar_events` 事件日曆（含跨來源去重與瞬斷 SSL EOF 自動重試）。
-  * **嚴格零費用免費輕量 AI 事實整理員**：1 次呼叫整合全部國際總經頭條、1 次呼叫整合單一檔個股之 FactSet／近 30 日催化劑／近 180 日法說報導（徹底避免跨股張冠李戴）；內建 `<= 12 RPM` 節流（`NEWS_INTEL_MIN_INTERVAL_SEC`，預設 `5.0s`）、`temperature=0.1` 與 Pydantic `response_schema` 強制附 `[MM-DD｜來源]` / `[YYYY-MM-DD｜來源]` 溯源；撞限流或關閉 `ENABLE_NEWS_INTEL_AI=false` 時自動降級為「Python 清洗原文摘錄」，**絕不偷切付費 Vertex AI**。
-  * **跨排程本地差異化 TTL 快取（`finmind_reports/.state/news_intel_cache/`）**：國際總經 2h TTL（21:30 與 22:00 共用、隔早 08:15 刷新）、個股即時新聞 6h TTL、個股 180 日法說展望 7d TTL（若近期新聞偵測到新法說／財測關鍵字自動提早失效刷新），不消耗 Google Sheets 配額。
-  * **4 套場景專屬 View Adapter ＋ 獨立驗證 CLI**：內建 `render_macro_prompt_block()`、`render_stage1_stock_block()`、`render_cross_stock_block()`、`render_morning_brief_stock_block()`，並提供 `uv run python -m services.news_intel_service --macro --stocks ...` 供 GCP VM 實測驗收（待驗收通過後於 Phase 2 統一接管四大消費端並移除舊有散落之新聞爬蟲邏輯）。
-* **擴充免費版結構化呼叫與獨立日誌開關（[`services/ai_service.py`](/services/ai_service.py)）**：新增 `call_google_ai_structured()`、`get_news_intel_model()`（`NEWS_INTEL_MODEL` ➔ `AI_MODEL_BASE`）與 `is_news_intel_prompt_logging_enabled()`（`NEWS_INTEL_LOG_PROMPTS`，預設 `true` 寫入本地日誌與 BigQuery `ai_prompt_logs` 便於初期以 `parser_ai_prompt.py` 驗收，穩定後可設 `false` 關閉）。
-* **新增單元測試（[`tests/test_news_intel_service.py`](/tests/test_news_intel_service.py)）**：涵蓋 MOPS 去表頭、民國年事件日解析、雜訊/重訊分類路由、2h/6h/7d 差異化快取與新法說提早失效、零付費降級不呼叫 Vertex AI、4 套 View Adapter 與 `NEWS_INTEL_LOG_PROMPTS` 開關驗證。
+## [v6.3.3] - 2026-11-24
+### ✨ 新增功能 & 🧹 債務清理 — 共用新聞情報服務全排程落地（高內聚低耦合）＋ 國際盤十大硬指標升級 ＋ 全面移除舊爬蟲髒碼
+* **新建並優化統一共用新聞情報服務（[`services/news_intel_service.py`](/services/news_intel_service.py)）**：
+  * **高含金量美股／總經／外匯資料源與去重清洗（純 `requests` ＋ Python 標準庫）**：國際總經採分區配額防單一事件洗版（鉅亨網 `us_stock` 6 篇 ＋ `wd_macro` 4 篇 ＋ `forex` 2 篇，上限 12 篇含完整正文，專注美股、Fed／利率匯率與國際政經）；個股以鉅亨網 `TWS:{sid}:STOCK/news`（180 天深度報導＋`台股預估` FactSet 共識目標價）＋ Yahoo 股市 RSS（抓取 MOPS 完整頁並剝離公版表頭、將法說／說明會／除息轉譯民國年抽離為 `calendar_events`）；升級 `_norm_title_key()` 支援中文數字／股名／本公司正規化，100% 合併 Yahoo 與鉅亨網重複重訊，並清除 `# 高檔出貨 79.17 %`／優分析頁尾、節流避免 cnyes 空正文與 Prompt B/C 區去重。
+  * **嚴格零費用免費輕量 AI 事實整理員**：1 次呼叫整合全部國際頭條、1 次呼叫整合單一檔個股（零跨股張冠李戴）；內建 `<= 12 RPM` 節流（`NEWS_INTEL_MIN_INTERVAL_SEC=5.0`）、`temperature=0.1` 與 Pydantic `response_schema` 強制 `[MM-DD｜來源]` / `[YYYY-MM-DD｜來源]` 溯源；撞限流或 `ENABLE_NEWS_INTEL_AI=false` 時降級為 Python 清洗原文摘錄，**絕不偷切付費 Vertex AI**；提供 `stock_card_to_alignable_items()` 零重複爬取對接量價反應。
+  * **跨排程本地差異化 TTL 快取（`finmind_reports/.state/news_intel_cache/`）**：國際總經 2h TTL（21:30 與 22:00 共用、隔早 08:15 刷新）、個股即時新聞 6h TTL、個股 180 日法說展望 7d TTL（偵測新法說／財測自動提早失效刷新），不消耗 Google Sheets 配額。
+  * **4 套場景專屬 View Adapter ＋ 獨立 CLI**：`render_macro_prompt_block()`、`render_stage1_stock_block()`、`render_cross_stock_block()`、`render_morning_brief_stock_block()`（含 `🎙️ 法說財測` 讓 08:15 晨報即時掌握官方財測下修／展望）。
+* **擴充免費版結構化呼叫與獨立日誌開關（[`services/ai_service.py`](/services/ai_service.py)）**：新增 `call_google_ai_structured()`、`get_news_intel_model()`（`NEWS_INTEL_MODEL` ➔ `AI_MODEL_BASE`）與 `is_news_intel_prompt_logging_enabled()`（`NEWS_INTEL_LOG_PROMPTS`，預設 `true` 寫入本地日誌與 BigQuery `ai_prompt_logs`，穩定後可設 `false` 關閉）。
+* **Phase 2 全排程無縫接線、國際盤十大指標升級與舊爬蟲髒碼清除**：
+  * **[`taishin/macro_context.py`](/taishin/macro_context.py)**：新增 3 項免費國際硬指標——**台灣 ETF (`EWT`)**、**美債 10 年殖利率 (`^TNX`)**、**美元指數 (`DX-Y.NYB`)**（升格為十大國際指標）；全面刪除舊 Google News RSS XML 爬蟲與黑名單髒碼（淨減 124 行），新聞區塊統一委派 `services.news_intel_service`。
+  * **[`quant/fundamental_analyzer.py`](/quant/fundamental_analyzer.py)**：刪除 `_fetch_google_news_rss()`、`_fetch_yahoo_stock_rss()` 與 `fetch_earnings_call_and_outlook()`（淨減 152 行），Stage 1（`ai-pick` / `rebound` / `/stock_ai`）全面改用 `render_stage1_stock_block()`，實測成功萃取如聯詠 Q4 官方毛利率財測、鈊象法說原話與達發 100G 放量進度，徹底終結 Step 3A「無資料」盲區。
+  * **[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)** & **[`quant/fundamental_config.py`](/quant/fundamental_config.py)**：Pass 1 紅藍軍審計、AI #2 跨股選拔與 AI #3 戰略布局全數改讀同晚 6h 快取零重複爬取，並於 AI #3 補齊入選標的之機構共識／催化劑／法說日曆提示與十大國際指標說明。
+  * **[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)** & **[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)**：`08:15 morning-brief` 持股區全面改接 `render_morning_brief_stock_block()`（分離事件日曆、機構共識、法說財測與量價反應，例行公告自動減噪），並刪除 `finmind_stock_scanner.py` 已無呼叫之粗糙 HTML 截斷函式 `fetch_news_excerpt()`。
+* **測試全數通過（[`tests/test_news_intel_service.py`](/tests/test_news_intel_service.py)、[`tests/test_stage_guards.py`](/tests/test_stage_guards.py)、[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)、[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**：新增 MOPS 跨來源去重、B/C 區 Prompt 去重、十大國際指標、差異化快取與零付費降級等測試，全專案 258 項測試 100% 通過。
 
 ---
 
