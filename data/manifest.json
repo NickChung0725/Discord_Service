@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-24 21:57:51",
+  "updated_at": "2026-11-24 22:50:26",
   "available_dates": [
     "2026-11-24",
     "2026-11-23",
@@ -96,10 +96,17 @@
     },
     "1326": {
       "stock_name": "台化",
-      "sector": "塑膠工業",
+      "sector": "石化塑膠-基礎化學品與塑膠原料",
       "wantgoo_url": "https://www.wantgoo.com/stock/1326/technical-chart",
       "war_room_url": "charts/1326_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-17",
           "strategy_id": "alignment_2130",
@@ -283,6 +290,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/2006/technical-chart",
       "war_room_url": "charts/2006_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-23",
           "strategy_id": "rebound_2200",
@@ -1158,6 +1172,21 @@
         }
       ]
     },
+    "2851": {
+      "stock_name": "中再保",
+      "sector": "再保險業",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2851/technical-chart",
+      "war_room_url": "charts/2851_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
     "2855": {
       "stock_name": "統一證",
       "sector": "證券商與綜合金融",
@@ -1256,6 +1285,21 @@
           "date": "2026-11-02",
           "strategy_id": "alignment_2130",
           "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "2891": {
+      "stock_name": "中信金",
+      "sector": "綜合商業銀行與金控",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2891/technical-chart",
+      "war_room_url": "charts/2891_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
           "rank": null,
           "score": null
         }
@@ -1421,6 +1465,13 @@
       "war_room_url": "charts/3055_fund.html",
       "appearances": [
         {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-16",
           "strategy_id": "rebound_2200",
           "category": "AVOID",
@@ -1436,12 +1487,34 @@
         }
       ]
     },
+    "3094": {
+      "stock_name": "聯傑",
+      "sector": "網通與區域網路IC設計",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3094/technical-chart",
+      "war_room_url": "charts/3094_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
     "3105": {
       "stock_name": "穩懋",
       "sector": "砷化鎵晶圓代工",
       "wantgoo_url": "https://www.wantgoo.com/stock/3105/technical-chart",
       "war_room_url": "charts/3105_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 5,
+          "score": 42
+        },
         {
           "date": "2026-11-17",
           "strategy_id": "alignment_2130",
@@ -1462,6 +1535,21 @@
           "category": "AVOID",
           "rank": null,
           "score": null
+        }
+      ]
+    },
+    "3141": {
+      "stock_name": "晶宏",
+      "sector": "平面顯示器驅動IC設計",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3141/technical-chart",
+      "war_room_url": "charts/3141_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 52
         }
       ]
     },
@@ -1515,6 +1603,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/3231/technical-chart",
       "war_room_url": "charts/3231_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 78
+        },
         {
           "date": "2026-11-04",
           "strategy_id": "rebound_2200",
@@ -1674,6 +1769,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/3374/technical-chart",
       "war_room_url": "charts/3374_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-17",
           "strategy_id": "alignment_2130",
@@ -1848,6 +1950,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/3624/technical-chart",
       "war_room_url": "charts/3624_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 58
+        },
         {
           "date": "2026-11-02",
           "strategy_id": "rebound_2200",
@@ -2302,6 +2411,13 @@
       "war_room_url": "charts/6245_fund.html",
       "appearances": [
         {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-16",
           "strategy_id": "rebound_2200",
           "category": "AVOID",
@@ -2397,12 +2513,34 @@
         }
       ]
     },
+    "6491": {
+      "stock_name": "晶碩",
+      "sector": "隱形眼鏡製造與品牌",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6491/technical-chart",
+      "war_room_url": "charts/6491_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 86
+        }
+      ]
+    },
     "6526": {
       "stock_name": "達發",
       "sector": "IC設計-網通與藍牙晶片",
       "wantgoo_url": "https://www.wantgoo.com/stock/6526/technical-chart",
       "war_room_url": "charts/6526_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-18",
           "strategy_id": "rebound_2200",
@@ -2522,6 +2660,13 @@
       "war_room_url": "charts/6756_fund.html",
       "appearances": [
         {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-16",
           "strategy_id": "rebound_2200",
           "category": "AVOID",
@@ -2581,12 +2726,34 @@
         }
       ]
     },
+    "6933": {
+      "stock_name": "AMAX-KY",
+      "sector": "AI伺服器與液冷整機櫃",
+      "wantgoo_url": "https://www.wantgoo.com/stock/6933/technical-chart",
+      "war_room_url": "charts/6933_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
     "7704": {
       "stock_name": "明遠精密",
-      "sector": "半導體業",
+      "sector": "半導體設備次系統與零組件",
       "wantgoo_url": "https://www.wantgoo.com/stock/7704/technical-chart",
       "war_room_url": "charts/7704_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-24",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-10-28",
           "strategy_id": "alignment_2130",
