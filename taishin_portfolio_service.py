@@ -4601,6 +4601,7 @@ async def run_morning_battle_ai_review(
     reports_dir: Path | None = None,
     strategy_out: dict[str, Any] | None = None,
     available_cash_info: Mapping[str, Any] | None = None,
+    dump_prompt_only: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str, str]:
     """Two-Stage Strategic Morning Brief (SASD v6.3.1):
     Stage 1 (`AI_MODEL_HIGH`): Free-form Markdown Strategic Report + Human-Readable Anchor Summary Table.
@@ -4994,6 +4995,17 @@ async def run_morning_battle_ai_review(
         portfolio_capital_summary="\n".join(capital_lines),
         tracked_holdings_dossier="\n\n".join(dossier_blocks),
     )
+
+    if dump_prompt_only:
+        daily_out = Path(reports_dir or (os.getenv("FINMIND_REPORTS_DIR") or "finmind_reports")) / "daily"
+        daily_out.mkdir(parents=True, exist_ok=True)
+        preview_path = (daily_out / f"{eval_date.isoformat()}_preview_morning_prompt.md").resolve()
+        preview_path.write_text(strategy_prompt, encoding="utf-8")
+        if strategy_out is not None:
+            strategy_out["dump_prompt_path"] = str(preview_path)
+            strategy_out["prompt_chars"] = len(strategy_prompt)
+        print(f"[dump-prompt] ✅ 已產出 0-Token 全真預覽 Prompt：{preview_path}（共 {len(strategy_prompt)} 字，未呼叫任何 Vertex AI）")
+        return [dict(m) for m in active_memories], {}, "", "DUMP_PROMPT_ONLY"
 
     ts_tag = datetime.now(TAIPEI_TIMEZONE).strftime("%Y%m%d_%H%M%S")
     stage1_model = get_vertex_stage2_model()
@@ -5556,12 +5568,16 @@ def run_morning_brief(
     run_ai: bool = True,
     post_discord: bool = True,
     dry_run: bool = False,
+    dump_prompt_only: bool = False,
     reports_dir: Path | None = None,
     macro_context_override: Mapping[str, Any] | None = None,
     picks_bundle_override: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute Pre-Market Battle Plan: US/Macro overlay + Style B AI review."""
     today = as_of or _today_in_taipei()
+    if dump_prompt_only:
+        dry_run = True
+        post_discord = False
     print(f"[morning-brief] 正在執行盤前隔夜國際盤與持股記憶作戰晨報 (基準日: {today.isoformat()})...")
 
     core = _sync_taishin_core_accounting(
@@ -5609,8 +5625,11 @@ def run_morning_brief(
     strategy_out: dict[str, Any] = {}
     ai_called = False
 
-    if run_ai and active_memories:
-        print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，啟動兩階段戰略簡報（Stage 1 旗艦長文 ➔ Stage 2 AI_MODEL_MID 結構化萃取）...")
+    if (run_ai or dump_prompt_only) and active_memories:
+        if dump_prompt_only:
+            print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，組裝 0-Token Stage 1 Prompt 預覽...")
+        else:
+            print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，啟動兩階段戰略簡報（Stage 1 旗艦長文 ➔ Stage 2 AI_MODEL_MID 結構化萃取）...")
         try:
             tracked_sids = {clean_leading_zero_code(m.get("stock_no", "")) for m in active_memories} - {""}
             prices_by_sid = {
@@ -5651,15 +5670,28 @@ def run_morning_brief(
                     reports_dir=eff_reports_dir,
                     strategy_out=strategy_out,
                     available_cash_info=available_cash_info,
+                    dump_prompt_only=dump_prompt_only,
                 )
             )
+            if dump_prompt_only:
+                return {
+                    "status": "dump_prompt_only",
+                    "as_of": today.isoformat(),
+                    "dump_prompt_path": strategy_out.get("dump_prompt_path"),
+                    "prompt_chars": strategy_out.get("prompt_chars"),
+                    "tracked_count": len(active_memories),
+                }
             ai_called = True
             updated_memory = [*reviewed_active, *closed_memories]
         except Exception as err:  # noqa: BLE001
+            if dump_prompt_only:
+                raise
             logger.warning("Pre-market battle Vertex Stage2 AI review failed; applying deterministic gatekeeper fallback: %s", err)
             battle_headline = f"AI 暫無法連線，已自動套用建倉目標價與棘輪防守硬規則（{err}）。"
     elif not active_memories:
         print("[morning-brief] 目前無命中嚴選記憶卡之未平倉波段股，啟動 0-Token 純 Python 快報模式。")
+        if dump_prompt_only:
+            return {"status": "dump_prompt_only_empty", "as_of": today.isoformat(), "tracked_count": 0}
 
     final_holdings = sync_holdings_with_memory_cards(holdings_rows, updated_memory)
 
@@ -6113,6 +6145,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_morn.add_argument("--date", default=None, help="指定基準日期 YYYY-MM-DD（預設今日）")
     p_morn.add_argument("--dry-run", action="store_true", help="僅在終端機預覽，不寫入 Sheet 亦不發送 Discord")
     p_morn.add_argument("--no-ai", action="store_true", help="強制跳過 AI 呼叫，僅輸出量化規則與帳務美股快報")
+    p_morn.add_argument(
+        "--dump-prompt-only",
+        action="store_true",
+        help="0-Token 預覽模式：完整組裝 Stage 1 戰略書 Prompt 並寫入 daily/{date}_preview_morning_prompt.md，不呼叫 Vertex AI、不寫 Sheet、不發 Discord",
+    )
     p_morn.add_argument("--no-discord", action="store_true", help="僅寫入 Sheet，不發送 Discord 推播")
 
     # 7. dump-context (Read-only context exporter for Antigravity portfolio-advisor Skill)
@@ -6234,7 +6271,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "morning-brief":
         client = TaishinClient()
-        sheet_mgr = _make_sheet_mgr(bool(args.dry_run))
+        sheet_mgr = _make_sheet_mgr(bool(args.dry_run or args.dump_prompt_only))
         target_dt = parse_flexible_date(args.date) if args.date else None
         run_morning_brief(
             client=client,
@@ -6243,6 +6280,7 @@ def main(argv: list[str] | None = None) -> int:
             run_ai=not bool(args.no_ai),
             post_discord=not bool(args.no_discord),
             dry_run=bool(args.dry_run),
+            dump_prompt_only=bool(args.dump_prompt_only),
         )
         return 0
 

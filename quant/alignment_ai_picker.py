@@ -4891,7 +4891,7 @@ def dump_strategic_layout_prompt_only(
         + "\n\n---\n\n".join(strategic_blocks)
     )
     mode_tag = "rebound" if is_rebound else "trend"
-    out_path = daily_dir / f"{as_of.isoformat()}_preview_{mode_tag}_prompt.md"
+    out_path = (daily_dir / f"{as_of.isoformat()}_preview_{mode_tag}_prompt.md").resolve()
     out_path.write_text(full_prompt, encoding="utf-8")
     print(f"[dump-prompt] ✅ 已產出 0-Token 全真預覽 Prompt：{out_path}（共 {len(full_prompt)} 字，未呼叫任何 AI）")
     return out_path

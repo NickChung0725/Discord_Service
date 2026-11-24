@@ -294,6 +294,7 @@ uv run python taishin_portfolio_service.py sync-memory --no-discord  # 僅寫入
 
 # 5. 【週一至週五 08:15 排程主任務】隔夜美股國際盤 + AI_MODEL_HIGH 嚴選記憶持股開盤作戰晨報
 uv run python taishin_portfolio_service.py morning-brief --dry-run
+uv run python taishin_portfolio_service.py morning-brief --dump-prompt-only  # 0-Token 匯出完整 Stage 1 Prompt (.md)，不呼叫 AI、不寫 Sheet/Discord
 uv run python taishin_portfolio_service.py morning-brief
 uv run python taishin_portfolio_service.py morning-brief --no-ai      # 純 Python 快報（不呼叫 AI）
 uv run python taishin_portfolio_service.py morning-brief --no-discord # 僅寫入 Sheet，不推播 Discord

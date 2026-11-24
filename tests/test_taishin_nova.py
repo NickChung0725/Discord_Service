@@ -1992,6 +1992,78 @@ class TestTaishinNova(unittest.TestCase):
         )
         self.assertIn("同業中位30.0x PE合理價=978.00元", pre)
 
+    def test_morning_brief_dump_prompt_only_writes_md_without_calling_ai(self) -> None:
+        import asyncio
+        from datetime import date
+        from pathlib import Path
+        import tempfile
+        import taishin_portfolio_service as svc
+
+        parser = svc.build_arg_parser()
+        parsed = parser.parse_args(["morning-brief", "--dump-prompt-only"])
+        self.assertTrue(parsed.dump_prompt_only)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rdir = Path(tmp)
+            active_mem = [
+                {
+                    "position_id": "2026-11-19_3293",
+                    "stock_no": "3293",
+                    "stock_name": "鈊象",
+                    "status": "OPEN",
+                    "qty": 50,
+                    "peak_qty": 50,
+                    "avg_cost": 789.12,
+                    "initial_tp1": 820.0,
+                    "initial_tp2": 885.6,
+                    "initial_sl": 720.0,
+                    "trailing_stop": 720.0,
+                    "entry_source": "AI_DAILY_TOP_PICK",
+                    "source_scan_date": "2026-11-19",
+                    "source_rank": "1",
+                    "tactical_type": "🎯 強勢股拉回三階低接",
+                    "entry_thesis": "授權毛利率97.6%",
+                    "invalidation_rule": "跌破725",
+                }
+            ]
+            agg_holdings = {
+                "3293": {
+                    "stock_no": "3293",
+                    "stock_name": "鈊象",
+                    "qty": 50,
+                    "avg_cost": 789.12,
+                    "current_price": 785.0,
+                    "market_value": 39250.0,
+                    "unrealized_pnl": -206.0,
+                    "return_pct": -0.52,
+                }
+            }
+            strategy_out: dict[str, Any] = {}
+            with patch("taishin_portfolio_service.ask_vertex_ai_with_meta") as mock_ai:
+                reviewed, decisions, headline, mver = asyncio.run(
+                    svc.run_morning_battle_ai_review(
+                        active_mem,
+                        agg_holdings=agg_holdings,
+                        public_cache={},
+                        market_regime={"light": "🔴紅燈", "summary": "🔴紅燈"},
+                        macro_context={"prompt_block": "- 國際盤氣候：🟢 強彈"},
+                        eval_date=date(2026, 11, 24),
+                        reports_dir=rdir,
+                        strategy_out=strategy_out,
+                        dump_prompt_only=True,
+                    )
+                )
+            mock_ai.assert_not_called()
+            self.assertEqual(mver, "DUMP_PROMPT_ONLY")
+            self.assertEqual(decisions, {})
+            self.assertEqual(headline, "")
+            self.assertEqual(len(reviewed), 1)
+            out_path = rdir / "daily" / "2026-11-24_preview_morning_prompt.md"
+            self.assertTrue(out_path.is_file())
+            txt = out_path.read_text(encoding="utf-8")
+            self.assertIn("3293 鈊象", txt)
+            self.assertIn("國際盤氣候", txt)
+
 
 if __name__ == "__main__":
     unittest.main()
