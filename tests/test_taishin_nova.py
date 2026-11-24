@@ -1745,6 +1745,200 @@ class TestTaishinNova(unittest.TestCase):
         self.assertEqual(len(snap["recent_3d"]), 3)
         self.assertIn("➔", snap["trend_3d_str"])
 
+    # ----------------------------------------------------------------------- #
+    # 11. SASD v6.3.1: Data-Layer Bug Fixes, High-Sell/Low-Buy & Two-Stage Strategic Brief
+    # ----------------------------------------------------------------------- #
+    def test_v631_macro_vix_collapse_rebound_not_mislabeled_bearish(self) -> None:
+        tone, note = classify_macro_risk_tone(
+            {
+                "SOX": {"change_pct": 14.03},
+                "TSM": {"change_pct": 14.08},
+                "IXIC": {"change_pct": 6.51},
+                "VIX": {"price": 26.62, "change_pct": -25.83},
+            }
+        )
+        self.assertIn("🟢", tone)
+        self.assertIn("恐慌急退強彈", tone)
+        self.assertNotIn("逆風警戒", tone)
+        self.assertIn("切忌" if "切忌" in note else "嚴禁", note)
+
+    def test_v631_wave_realized_log_net_breakeven_and_reloaded_after_trim_lifecycle(self) -> None:
+        from taishin_portfolio_service import compute_holding_waves_from_statements
+
+        stmts = [
+            {"trade_date": "2026-11-19", "order_no": "1", "stock_no": "6526", "action": "BUY", "filled_qty": 50, "filled_price": 650.0},
+            {"trade_date": "2026-11-24", "order_no": "2", "stock_no": "6526", "action": "SELL", "filled_qty": 25, "filled_price": 712.0},
+            {"trade_date": "2026-11-26", "order_no": "3", "stock_no": "6526", "action": "BUY", "filled_qty": 25, "filled_price": 650.0},
+        ]
+        waves = compute_holding_waves_from_statements(stmts)
+        w = waves["6526"]
+        self.assertEqual(w["wave_trim_count"], 1)
+        self.assertGreater(w["wave_realized_pnl"], 1300)
+        self.assertLess(w["wave_net_breakeven_price"], 630.0)
+        self.assertIn("本波段已減碼 1 批", w["wave_realized_log"])
+
+        # State machine: TP1_PARTIAL_TAKEN (25 shares) -> reload to 50 shares -> RELOADED_AFTER_TRIM
+        existing_mem = [
+            {
+                "position_id": "2026-11-19_6526",
+                "stock_no": "6526",
+                "stock_name": "達發",
+                "status": "TP1_PARTIAL_TAKEN",
+                "entry_source": "AI_DAILY_TOP_PICK",
+                "source_scan_date": "2026-11-18",
+                "source_rank": "1",
+                "opened_date": "2026-11-19",
+                "initial_qty": 50,
+                "peak_qty": 50,
+                "current_qty": 25,
+                "avg_cost_price": 650.0,
+                "initial_tp1": 712.0,
+                "initial_tp2": 760.0,
+                "initial_sl": 590.0,
+                "trailing_stop": 654.0,
+            }
+        ]
+        holdings_reloaded = build_portfolio_holdings_rows(
+            [{"stock_no": "6526", "stock_name": "達發", "qty": 50, "avg_cost_price": 650.0, "current_price": 655.0}],
+            statement_records=stmts,
+            tech_map={"6526": {"close": 655.0, "ma17": 660.0, "ma45": 680.0, "ma117": 640.0, "ma189": 620.0}},
+            public_cache={},
+            snapshot_date=date(2026, 11, 26),
+        )
+        mem_out, _, evs = reconcile_position_memory(
+            existing_memory_rows=existing_mem,
+            holdings_rows=holdings_reloaded,
+            statement_records=stmts,
+            settlement_records=[],
+            picks_bundle={"ai_daily_picks": [], "rebound_watchlist": [], "watchlist_master": {}},
+            as_of=date(2026, 11, 26),
+        )
+        self.assertEqual(mem_out[0]["status"], "RELOADED_AFTER_TRIM")
+        self.assertTrue(any(e["type"] == "RELOADED_AFTER_TRIM" for e in evs))
+
+    def test_v631_two_stage_morning_strategy_and_structured_extract_pipeline(self) -> None:
+        import asyncio
+        from types import SimpleNamespace
+        import taishin_portfolio_service as svc
+
+        # Verify Taiwan ±10% tick-rounded price limits
+        up_px, dn_px = svc.compute_tw_daily_price_limits(607.0, "6526")
+        self.assertEqual(up_px, 667.0)
+        self.assertEqual(dn_px, 547.0)
+
+        active_memories = [
+            {
+                "position_id": "2026-11-19_6526",
+                "stock_no": "6526",
+                "stock_name": "達發",
+                "status": "OPEN",
+                "entry_source": "AI_DAILY_TOP_PICK",
+                "source_scan_date": "2026-11-18",
+                "source_rank": "1",
+                "tactical_type": "波段",
+                "opened_date": "2026-11-19",
+                "initial_qty": 50,
+                "peak_qty": 50,
+                "current_qty": 50,
+                "avg_cost_price": 650.92,
+                "initial_tp1": 712.0,
+                "initial_tp2": 760.0,
+                "initial_sl": 590.0,
+                "trailing_stop": 590.0,
+                "entry_thesis": "10月營收創高",
+                "invalidation_rule": "破590停損",
+            }
+        ]
+        agg_holdings = {
+            "6526": {
+                "stock_no": "6526",
+                "stock_name": "達發",
+                "qty": 50,
+                "avg_cost_price": 650.92,
+                "current_price": 607.0,
+                "return_pct": -6.75,
+                "unrealized_pnl": -2196,
+                "weight_pct": 1.4,
+            }
+        }
+
+        calls: list[dict[str, Any]] = []
+        stage1_md = (
+            "## 🧭 今日大盤與國際氣候作戰總綱\n隔夜費半大漲且VIX急挫，今日早盤防追高。\n\n"
+            "## 🎯 逐檔持股深度戰略與盤中多情境劇本\n### 6526 達發\n漲停價 667 元正好貼近均線反壓。\n\n"
+            "## 📋 決策錨點總表\n**今日晨會總評**：費半強彈不追高。\n"
+            "### 2026-11-19_6526 | 6526 達發\n- **最終行動標籤**：🛡️ 破線轉價值防守\n- **最終防守底線**：590.0\n"
+        )
+        stage2_json = json.dumps(
+            {
+                "morning_battle_headline": "費半強彈且VIX急挫，今日早盤嚴禁追高，逢拉回檢視支撐與換股效率。",
+                "positions": [
+                    {
+                        "position_id": "2026-11-19_6526",
+                        "stock_no": "6526",
+                        "ai_action_tag": "🛡️ 破線轉價值防守",
+                        "recommended_trailing_stop": 590.0,
+                        "thesis_intact": True,
+                        "order_instruction": "早盤勿追高，觀察漲停 667 元反壓與法說會反應，守 590 元。",
+                        "intraday_playbook": {
+                            "bull_scenario": "若跳空直攻 667 元漲停鎖死則續抱；若開板爆量逾 2,600 張留長上影則先減碼鎖利。",
+                            "pullback_scenario": "若遇壓拉回 595~605 元量縮止穩且外資轉買，可評估第 2 批低接。",
+                            "next_day_watch": "檢視今日法說會展望與外資是否由賣轉買。",
+                        },
+                        "capital_efficiency_verdict": "續抱觀察法說會，暫優於換股至 2006 東和鋼鐵。",
+                        "tp_upgrade_proposal": "",
+                        "next_day_memory_digest": "續守590防線，盤後必驗今日法說展望及667反壓量價與外資是否轉買。",
+                        "pm_rationale": "昨鎖漲停收復590防線，輕倉續守觀察法說與外資動向。",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+        async def _fake_two_stage(prompt: str, **kwargs: Any) -> Any:
+            calls.append({"prompt": prompt, "kwargs": kwargs})
+            if len(calls) == 1:
+                return SimpleNamespace(text=stage1_md, model_version="gemini-4-neon")
+            return SimpleNamespace(text=stage2_json, model_version="gemini-3.8-flash")
+
+        strat_out: dict[str, Any] = {}
+        with patch.object(svc, "ask_vertex_ai_with_meta", side_effect=_fake_two_stage):
+            enriched, decisions, headline, model_ver = asyncio.run(
+                svc.run_morning_battle_ai_review(
+                    active_memories,
+                    agg_holdings=agg_holdings,
+                    public_cache={},
+                    market_regime={"light": "🔴紅燈", "summary": "大盤紅燈"},
+                    macro_context={"prompt_block": "費半 +14%"},
+                    eval_date=date(2026, 11, 24),
+                    tech_map={},  # Missing tech_map -> must trigger tech_missing warning!
+                    strategy_out=strat_out,
+                )
+            )
+
+        self.assertEqual(len(calls), 2)
+        # Stage 1 checks
+        self.assertEqual(calls[0]["kwargs"]["task_type"], "MORNING_BRIEF_STRATEGY")
+        self.assertTrue(str(calls[0]["kwargs"]["custom_id"]).endswith("_S1"))
+        self.assertIn("今日漲停 `667.0` / 跌停 `547.0`", calls[0]["prompt"])
+        self.assertIn("技術面日線快取缺失", calls[0]["prompt"])
+        self.assertIn("今日關鍵價位階梯", calls[0]["prompt"])
+        # Stage 2 checks
+        self.assertEqual(calls[1]["kwargs"]["task_type"], "MORNING_BRIEF_EXTRACT")
+        self.assertTrue(str(calls[1]["kwargs"]["custom_id"]).endswith("_S2"))
+        self.assertEqual(calls[1]["kwargs"]["temperature"], 0.0)
+        self.assertIsNotNone(calls[1]["kwargs"]["response_schema"])
+        # Outputs
+        self.assertEqual(strat_out["markdown"], stage1_md.strip())
+        self.assertEqual(strat_out["stage2_model"], "gemini-3.8-flash")
+        self.assertEqual(model_ver, "gemini-4-neon")
+        self.assertIn("續守590防線，盤後必驗今日法說展望", enriched[0]["recent_battle_log"])
+        self.assertEqual(
+            decisions["6526"]["intraday_playbook"]["bull_scenario"],
+            "若跳空直攻 667 元漲停鎖死則續抱；若開板爆量逾 2,600 張留長上影則先減碼鎖利。",
+        )
+        self.assertIn("2006 東和鋼鐵", decisions["6526"]["capital_efficiency_verdict"])
+
 
 if __name__ == "__main__":
     unittest.main()

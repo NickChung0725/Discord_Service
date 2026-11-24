@@ -4,6 +4,23 @@
 
 ---
 
+## [v6.3.1] - 2026-11-24
+### ✨ 新增功能 & 🔧 優化與修正 — 兩階段《盤前實戰戰略簡報》、高出低進波段狀態機與 3 大資料層 Bug 修復
+* **修復 3 大晨報資料層 Bug（[`taishin/macro_context.py`](/taishin/macro_context.py)、[`quant/fundamental_cache.py`](/quant/fundamental_cache.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * **修復國際盤氣候燈號 VIX 誤判**：`classify_macro_risk_tone()` 改採「VIX 水位＋單日變動方向」聯合判斷，當美股費半／ADR 強彈且 VIX 單日重挫（`<= -8%`）時正確判為 `🟢 國際恐慌急退強彈`，不再因絕對值 `>= 26` 誤標為 `🔴 國際逆風警戒`。
+  * **修復追蹤持股日線缺漏扁平化與公用財報 `N/A`**：`FundamentalCacheManager._read_stock_rows()` 正規化 `stock_id`（移除前導 `'` 與 `.0`）；`load_public_deep_fundamental_context()` 遇追蹤股 `05_AI_Metrics_Wide` / `01_Monthly_Revenue` 為空時自動觸發單股自癒同步，並回溯最近 5 個 `*_prices.csv` 補齊缺漏日線；若仍無日線則標註 `⚠️ 技術面日線快取缺失`，嚴禁餵給 AI 扁平假均線。
+  * **統一大盤 189MA 摘要**：`load_local_technical_context()` 自動以 `prices.csv` 算妥之大盤 `MA189` 補齊 `market_regime["summary"]` 中 `189MA 資料不足` 矛盾文字。
+* **升級 `08:15 morning-brief` 為兩階段《盤前實戰戰略簡報》與高出低進閉環（[`taishin/taishin_config.py`](/taishin/taishin_config.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：
+  * **Stage 1（`AI_MODEL_HIGH`，`MORNING_BRIEF_STRATEGY` / `_S1`）**：改採原則導向《投資人授權書＋第一性原理》憲法 Prompt（`TAISHIN_MORNING_STRATEGY_PROMPT`），解除純 JSON 格式稅，產出完整深度 Markdown《盤前實戰戰略書》（含盤中多情境劇本、高出低進與換股 PK），文末固定附純人類可讀之 `## 📋 決策錨點總表`，並落盤至 `finmind_reports/daily/{date}_morning_strategy.md`。
+  * **Stage 2（`AI_MODEL_MID` + Vertex AI 原生 `response_schema`，`MORNING_BRIEF_EXTRACT` / `_S2`）**：以 `temperature=0.0` 精準萃取結構化 JSON，涵蓋 `intraday_playbook`（強彈／拉回／盤後檢驗）、`capital_efficiency_verdict`、`tp_upgrade_proposal`（僅供建議不覆寫鎖死錨點）與完整不截斷之 `next_day_memory_digest`（寫入 `recent_battle_log` 供隔日對答案）。
+  * **高出低進安全墊與價位階梯**：由 `01_Account_Statement` 即時計算 `wave_realized_log`、`wave_realized_pnl` 與 `wave_net_breakeven_price`（含已實現利潤之真實波段淨損益兩平價），新增台股 ±10% 合法 Tick 漲跌停（`compute_tw_daily_price_limits`）與由高至低排序之 `價位階梯`；狀態機新增 `RELOADED_AFTER_TRIM`（減碼後逢低回補），不新增 Google Sheet 欄位。
+* **整合 `MY_STOCK (private/)` 雙層閱讀體驗（[`services/my_stock_publisher.py`](/services/my_stock_publisher.py)、[`web/private/index.html`](/web/private/index.html)）**：
+  * `my_stock_publisher.py` 完整封裝 Stage 1 戰略書全文（`full_markdown`）與 Stage 2 多情境劇本／資金效率裁決／波段淨成本安全墊，並全面支援 `RELOADED_AFTER_TRIM`。
+  * `web/private/index.html` 內建零外部依賴、全走 `document.createTextNode()` 之純 DOM 安全 Markdown 渲染器，主頁提供 `📜 閱讀完整盤前戰略書` 專屬閱讀視窗，各股 Drilldown Tab 1 同步呈現 `🎭 盤中多情境應對劇本`、`⚖️ 資金效率與換股裁決` 與 `💰 波段已實現戰果與淨成本安全墊`。
+* **補充單元測試（[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)）**：新增 VIX 急挫反彈燈號、高出低進 `RELOADED_AFTER_TRIM` 與 `wave_net_breakeven_price`、台股漲跌停 Tick、以及兩階段 `MORNING_BRIEF_STRATEGY` ➔ `MORNING_BRIEF_EXTRACT` 端到端測試。
+
+---
+
 ## [v6.3.0] - 2026-11-23
 ### ✨ 新增功能 — MY_STOCK 私人持股總覽與早晨戰情指揮中心（Phase 1 ~ Phase 3 全階段落地）
 * **模式 B 端到端認證加密與雙向路徑隔離管線（[`services/my_stock_publisher.py`](/services/my_stock_publisher.py)、[`services/github_uploader.py`](/services/github_uploader.py)、[`services/portal_publisher.py`](/services/portal_publisher.py)、[`pyproject.toml`](/pyproject.toml)）**：

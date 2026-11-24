@@ -36,6 +36,7 @@ from ai_service import (
     ask_gemini_diagnosis_with_meta,
     ask_vertex_ai_with_meta,
     flush_bq_archives,
+    get_stage1_model,
     get_vertex_stage2_model,
 )
 from macro_context import fetch_global_macro_context
@@ -50,6 +51,7 @@ from taishin_client import (
     parse_flexible_date,
 )
 from taishin_config import (
+    ACTIVE_POSITION_STATUSES,
     BACKFILL_CHUNK_SLEEP_SECONDS,
     BREAKEVEN_BUFFER_MULTIPLIER,
     DCA_0050_SHEET_NAME,
@@ -77,6 +79,8 @@ from taishin_config import (
     STANDARD_STOCK_TAX_RATE,
     STATEMENT_SHEET_NAME,
     TAISHIN_MORNING_BATTLE_PROMPT,
+    TAISHIN_MORNING_EXTRACT_PROMPT,
+    TAISHIN_MORNING_STRATEGY_PROMPT,
     TAISHIN_PORTFOLIO_AI_PROMPT,
     TAISHIN_SHEET_SCHEMAS,
     UNTRACKED_HOLDING_TAG,
@@ -997,6 +1001,13 @@ def load_local_technical_context(
                     bench_id = str(market_regime.get("benchmark") or "TAIEX").strip()
                     if bench_id in ("", "加權指數"):
                         bench_id = "TAIEX"
+                    bench_tech = tech_map.get(bench_id) or {}
+                    bench_ma189 = _to_float(bench_tech.get("ma189"), 0.0)
+                    if bench_ma189 > 0 and market_regime.get("MA189") is None:
+                        market_regime["MA189"] = round(bench_ma189, 2)
+                        cur_sum = str(market_regime.get("summary") or "")
+                        if "189MA 資料不足" in cur_sum:
+                            market_regime["summary"] = cur_sum.replace("189MA 資料不足", f"189MA {bench_ma189:,.2f}")
                     trend_5d = build_market_daily_trend_block(
                         df,
                         benchmark_id=bench_id,
@@ -1160,6 +1171,27 @@ def load_public_deep_fundamental_context(
                 try:
                     prices_df = pd.read_csv(p_files[-1], dtype={"stock_id": str})
                     prices_df["stock_id"] = prices_df["stock_id"].astype(str).str.strip()
+                    # Backfill any tracked stock missing from latest prices.csv (e.g. OTC skipped in Stage 1)
+                    present_sids = set(prices_df["stock_id"].unique())
+                    missing_for_pkg = clean_ids - present_sids
+                    if missing_for_pkg and len(p_files) > 1:
+                        extra_frames: list[pd.DataFrame] = []
+                        for older_p in reversed(p_files[:-1][-5:]):
+                            if not missing_for_pkg:
+                                break
+                            try:
+                                odf = pd.read_csv(older_p, dtype={"stock_id": str})
+                                if "stock_id" not in odf.columns:
+                                    continue
+                                odf["stock_id"] = odf["stock_id"].astype(str).str.strip()
+                                hit = odf.loc[odf["stock_id"].isin(missing_for_pkg)].copy()
+                                if not hit.empty:
+                                    extra_frames.append(hit)
+                                    missing_for_pkg -= set(hit["stock_id"].unique())
+                            except Exception:  # noqa: BLE001
+                                continue
+                        if extra_frames:
+                            prices_df = pd.concat([prices_df, *extra_frames], ignore_index=True)
                     for b_cand in ("TAIEX", "0050"):
                         b_sub = prices_df.loc[prices_df["stock_id"] == b_cand].copy()
                         if not b_sub.empty:
@@ -1178,6 +1210,19 @@ def load_public_deep_fundamental_context(
             rev_df = cache._read_stock_rows(cache._get_worksheet("01_Monthly_Revenue"), sid)  # noqa: SLF001
             div_df = cache._read_stock_rows(cache._get_worksheet("06_Dividend_Policy"), sid)  # noqa: SLF001
             chip_df = cache._read_stock_rows(cache._get_worksheet("07_Chip_Summary"), sid)  # noqa: SLF001
+
+            # Self-healing sync if a tracked holding is missing quarterly wide metrics or monthly revenue in public cache
+            if (wide_df.empty or rev_df.empty) and hasattr(cache, "check_and_sync_stock"):
+                try:
+                    cache.check_and_sync_stock(sid)
+                    wide_df = cache._read_stock_rows(cache._get_worksheet("05_AI_Metrics_Wide"), sid)  # noqa: SLF001
+                    is_df = cache._read_stock_rows(cache._get_worksheet("02_Income_Statement"), sid)  # noqa: SLF001
+                    bs_df = cache._read_stock_rows(cache._get_worksheet("03_Balance_Sheet"), sid)  # noqa: SLF001
+                    rev_df = cache._read_stock_rows(cache._get_worksheet("01_Monthly_Revenue"), sid)  # noqa: SLF001
+                    div_df = cache._read_stock_rows(cache._get_worksheet("06_Dividend_Policy"), sid)  # noqa: SLF001
+                    chip_df = cache._read_stock_rows(cache._get_worksheet("07_Chip_Summary"), sid)  # noqa: SLF001
+                except Exception as heal_err:  # noqa: BLE001
+                    logger.warning("Self-healing public fundamental sync skipped for %s: %s", sid, heal_err)
 
             for df_tmp in (wide_df, is_df, bs_df, rev_df, div_df, chip_df):
                 if not df_tmp.empty and "raw_date" in df_tmp.columns:
@@ -2769,6 +2814,10 @@ def compute_holding_waves_from_statements(
                 "buy_batches": [],
                 "buy_batch_count": 0,
                 "wave_buy_log": "",
+                "wave_realized_pnl": 0,
+                "wave_trim_count": 0,
+                "wave_realized_log": "",
+                "wave_net_breakeven_price": 0.0,
             },
         )
         if action == "BUY":
@@ -2780,6 +2829,8 @@ def compute_holding_waves_from_statements(
                 state["running_cost"] = qty * price if price > 0 else 0.0
                 state["buys_by_date"] = {}
                 state["sells_by_date"] = {}
+                state["wave_realized_pnl"] = 0
+                state["wave_trim_count"] = 0
             else:
                 if t_date == state["opened_date"]:
                     state["initial_qty"] += qty
@@ -2797,6 +2848,7 @@ def compute_holding_waves_from_statements(
             cur_q = state["running_qty"]
             if cur_q > 0:
                 avg_p = (state["running_cost"] / cur_q) if cur_q > 0 else 0.0
+                sold_q = min(cur_q, qty)
                 rem_q = max(0, cur_q - qty)
                 state["running_qty"] = rem_q
                 state["running_cost"] = rem_q * avg_p
@@ -2806,11 +2858,20 @@ def compute_holding_waves_from_statements(
                     state["peak_qty"] = 0
                     state["buys_by_date"] = {}
                     state["sells_by_date"] = {}
+                    state["wave_realized_pnl"] = 0
+                    state["wave_trim_count"] = 0
                 elif t_date:
-                    s_slot = state["sells_by_date"].setdefault(t_date, {"qty": 0, "proceeds": 0.0})
-                    s_slot["qty"] += qty
+                    s_slot = state["sells_by_date"].setdefault(t_date, {"qty": 0, "proceeds": 0.0, "est_pnl": 0.0})
+                    s_slot["qty"] += sold_q
                     if price > 0:
-                        s_slot["proceeds"] += qty * price
+                        gross_s = sold_q * price
+                        s_slot["proceeds"] += gross_s
+                        if avg_p > 0:
+                            tax_rate = STANDARD_ETF_TAX_RATE if stock_no.startswith("00") else STANDARD_STOCK_TAX_RATE
+                            est_fee_tax = gross_s * (STANDARD_FEE_RATE + tax_rate) + (sold_q * avg_p) * STANDARD_FEE_RATE
+                            est_pnl = gross_s - (sold_q * avg_p) - est_fee_tax
+                            s_slot["est_pnl"] = float(s_slot.get("est_pnl", 0.0)) + est_pnl
+                            state["wave_realized_pnl"] = int(round(state["wave_realized_pnl"] + est_pnl))
             state["last_sell_date"] = t_date
 
     for state in waves.values():
@@ -2826,14 +2887,33 @@ def compute_holding_waves_from_statements(
             batch_parts.append(f"第{idx}批({b_date}) 買 {b_qty:,} 股 @ {b_avg} 元")
 
         sell_parts: list[str] = []
+        realized_parts: list[str] = []
         for s_date, s_info in sorted(sells_map.items()):
             s_qty = int(s_info.get("qty", 0))
             s_proc = float(s_info.get("proceeds", 0.0))
             s_avg = round(s_proc / s_qty, 2) if (s_qty > 0 and s_proc > 0) else 0.0
+            s_pnl = int(round(float(s_info.get("est_pnl", 0.0))))
             sell_parts.append(f"{s_date} 賣 {s_qty:,} 股 @ {s_avg} 元")
+            realized_parts.append(f"{s_date} 賣 {s_qty:,}股@{s_avg}（估實現 {s_pnl:+,} 元）")
 
         state["buy_batches"] = buy_batches
         state["buy_batch_count"] = len(buy_batches)
+        state["wave_trim_count"] = len(sells_map)
+        run_q = int(state.get("running_qty", 0))
+        run_c = float(state.get("running_cost", 0.0))
+        real_pnl = int(state.get("wave_realized_pnl", 0))
+        if run_q > 0 and run_c > 0:
+            net_be = max(0.01, (run_c - real_pnl) / run_q)
+            state["wave_net_breakeven_price"] = round(net_be, 2)
+        else:
+            state["wave_net_breakeven_price"] = 0.0
+        if realized_parts:
+            state["wave_realized_log"] = (
+                f"本波段已減碼 {len(realized_parts)} 批：" + "、".join(realized_parts)
+                + f"｜累計估實現損益 {real_pnl:+,} 元｜剩餘 {run_q:,} 股之波段淨損益兩平價 {state['wave_net_breakeven_price']:.2f} 元"
+            )
+        else:
+            state["wave_realized_log"] = ""
         if batch_parts:
             log_txt = f"已買 {len(batch_parts)} 批：" + " ➔ ".join(batch_parts)
             if sell_parts:
@@ -3485,7 +3565,7 @@ def sync_holdings_with_memory_cards(
     active_by_stock: dict[str, dict[str, Any]] = {}
     for m in memory_rows:
         st = str(m.get("status", "")).strip().upper()
-        if st in ("OPEN", "TP1_PARTIAL_TAKEN"):
+        if st in ACTIVE_POSITION_STATUSES:
             sno = clean_leading_zero_code(m.get("stock_no", ""))
             if sno:
                 active_by_stock[sno] = m
@@ -3851,8 +3931,9 @@ def reconcile_position_memory(
             )
             continue
 
-        # Active holding still open: update qty, avg_cost_price, ratchet stop, and check partial take-profit
+        # Active holding still open: update qty, avg_cost_price, ratchet stop, and check partial take-profit / reload
         cur_qty = _to_int(hold["qty"])
+        prev_recorded_qty = _to_int(mem.get("current_qty", 0))
         prev_peak = max(_to_int(mem.get("peak_qty", 0)), _to_int(mem.get("initial_qty", 0)), 1)
         new_peak = max(prev_peak, cur_qty)
         avg_cost = _to_float(hold["avg_cost_price"], _to_float(mem.get("avg_cost_price"), 0.0))
@@ -3862,10 +3943,24 @@ def reconcile_position_memory(
         init_sl = _to_float(mem.get("initial_sl"), 0.0)
         prev_stop = _to_float(mem.get("trailing_stop"), init_sl)
 
+        # Detect high-sell / low-buy reload after TP1 partial take-profit
+        if status == "TP1_PARTIAL_TAKEN" and prev_recorded_qty > 0 and cur_qty > prev_recorded_qty:
+            status = "RELOADED_AFTER_TRIM"
+            events.append(
+                {
+                    "type": "RELOADED_AFTER_TRIM",
+                    "stock_no": sno,
+                    "stock_name": mem.get("stock_name") or hold["stock_name"],
+                    "position_id": pid,
+                    "prev_qty": prev_recorded_qty,
+                    "current_qty": cur_qty,
+                }
+            )
+
         # Detect Style B partial take-profit execution (~30%+ trimmed near TP1 or after trim advice)
         last_act = str(mem.get("last_ai_action", ""))
         near_tp1 = (tp1 > 0 and cur_price >= tp1 * 0.96) or ("分批停利" in last_act)
-        if status == "OPEN" and prev_peak >= 2 and 0 < cur_qty <= int(prev_peak * 0.70) and near_tp1:
+        if status in ("OPEN", "RELOADED_AFTER_TRIM") and prev_peak >= 2 and 0 < cur_qty <= int(prev_peak * 0.70) and near_tp1:
             status = "TP1_PARTIAL_TAKEN"
             events.append(
                 {
@@ -4078,7 +4173,7 @@ def reconcile_position_memory(
         )
 
     # Sort OPEN / TP1_PARTIAL_TAKEN first, then CLOSED by opened_date descending
-    status_order = {"OPEN": 0, "TP1_PARTIAL_TAKEN": 1, "CLOSED": 2}
+    status_order = {"OPEN": 0, "RELOADED_AFTER_TRIM": 1, "TP1_PARTIAL_TAKEN": 2, "CLOSED": 3}
     updated_memory.sort(
         key=lambda m: (
             status_order.get(str(m.get("status", "OPEN")).upper(), 9),
@@ -4160,6 +4255,16 @@ def parse_morning_battle_ai_response(raw_text: str) -> dict[str, Any]:
         pid = clean_leading_zero_code(item.get("position_id") or "")
         if not sno and not pid:
             continue
+        raw_pb = item.get("intraday_playbook")
+        pb_dict = (
+            {
+                "bull_scenario": str(raw_pb.get("bull_scenario") or "").strip(),
+                "pullback_scenario": str(raw_pb.get("pullback_scenario") or "").strip(),
+                "next_day_watch": str(raw_pb.get("next_day_watch") or "").strip(),
+            }
+            if isinstance(raw_pb, Mapping)
+            else {}
+        )
         norm_positions.append(
             {
                 "position_id": pid,
@@ -4169,6 +4274,10 @@ def parse_morning_battle_ai_response(raw_text: str) -> dict[str, Any]:
                 "thesis_intact": bool(item.get("thesis_intact", True)),
                 "order_instruction": str(item.get("order_instruction") or "").strip(),
                 "pm_rationale": str(item.get("pm_rationale") or "").strip(),
+                "intraday_playbook": pb_dict,
+                "capital_efficiency_verdict": str(item.get("capital_efficiency_verdict") or "").strip(),
+                "tp_upgrade_proposal": str(item.get("tp_upgrade_proposal") or "").strip(),
+                "next_day_memory_digest": str(item.get("next_day_memory_digest") or "").strip(),
             }
         )
 
@@ -4176,6 +4285,79 @@ def parse_morning_battle_ai_response(raw_text: str) -> dict[str, Any]:
         "morning_battle_headline": str(parsed.get("morning_battle_headline") or "").strip(),
         "positions": norm_positions,
     }
+
+
+def _tw_tick_step(price: float, stock_no: str = "") -> float:
+    p = float(price)
+    if clean_leading_zero_code(stock_no).startswith("00"):
+        return 0.01 if p < 50.0 else 0.05
+    if p < 10.0:
+        return 0.01
+    if p < 50.0:
+        return 0.05
+    if p < 100.0:
+        return 0.1
+    if p < 500.0:
+        return 0.5
+    if p < 1000.0:
+        return 1.0
+    return 5.0
+
+
+def compute_tw_daily_price_limits(prev_close: float, stock_no: str = "") -> tuple[float, float]:
+    """Compute Taiwan ±10% daily limit-up (floor to valid tick) and limit-down (ceil to valid tick)."""
+    px = _to_float(prev_close, 0.0)
+    if px <= 0:
+        return 0.0, 0.0
+    raw_up = px * 1.10
+    step_up = _tw_tick_step(raw_up, stock_no)
+    limit_up = round(math.floor(raw_up / step_up + 1e-9) * step_up, 2)
+
+    raw_dn = px * 0.90
+    step_dn = _tw_tick_step(raw_dn, stock_no)
+    limit_down = round(math.ceil(raw_dn / step_dn - 1e-9) * step_dn, 2)
+    return limit_up, limit_down
+
+
+def build_sorted_price_ladder(anchors: list[tuple[str, float]]) -> str:
+    """Format non-zero key price anchors sorted strictly from highest to lowest for AI spatial accuracy."""
+    valid = [(lbl, round(float(val), 2)) for lbl, val in anchors if val is not None and float(val) > 0]
+    if not valid:
+        return ""
+    valid.sort(key=lambda x: x[1], reverse=True)
+    return " > ".join(f"{lbl} `{val:.2f}`" for lbl, val in valid)
+
+
+def _get_morning_brief_extract_schema() -> Any | None:
+    """Return Pydantic schema for Stage 2 Vertex AI Structured Outputs (`AI_MODEL_MID`)."""
+    try:
+        from pydantic import BaseModel, Field
+
+        class IntradayPlaybookSchema(BaseModel):
+            bull_scenario: str = Field(description="強彈／突破／鎖漲停情境應對（含爆量標準與壓力位）")
+            pullback_scenario: str = Field(description="遇壓拉回／回測支撐情境應對（含低接或高出低進回補條件）")
+            next_day_watch: str = Field(description="今日盤後關鍵檢驗點與下個交易日預告")
+
+        class MorningBriefPositionSchema(BaseModel):
+            position_id: str = Field(description="記憶卡唯一碼（須與清單完全一致）")
+            stock_no: str = Field(description="股票代號")
+            ai_action_tag: str = Field(description="標準行動標籤")
+            recommended_trailing_stop: float = Field(description="最終防守底線純數字")
+            thesis_intact: bool = Field(description="原買進劇本是否依然完好")
+            order_instruction: str = Field(description="今日核心一句話指令（90字內）")
+            intraday_playbook: IntradayPlaybookSchema
+            capital_efficiency_verdict: str = Field(description="資金效率與換股機會成本裁決（80字內）")
+            tp_upgrade_proposal: str = Field(default="", description="僅限基本面實質上修才填寫目標價上修建議，否則空字串")
+            next_day_memory_digest: str = Field(description="明日記憶摘要（110字內完整句，絕不截斷）")
+            pm_rationale: str = Field(description="核心裁決依據摘要（150字內）")
+
+        class MorningBriefExtractSchema(BaseModel):
+            morning_battle_headline: str = Field(description="今日晨會總評（140字內）")
+            positions: list[MorningBriefPositionSchema]
+
+        return MorningBriefExtractSchema
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def build_tracked_position_gatekeeper_signals(
@@ -4243,13 +4425,33 @@ def build_tracked_position_gatekeeper_signals(
     tp1_reached = tp1 > 0 and cur_price >= tp1 * 0.99
     stop_breached = ratchet_floor > 0 and cur_price > 0 and cur_price <= ratchet_floor
 
+    sno = clean_leading_zero_code(mem.get("stock_no", ""))
+    limit_up_price, limit_down_price = compute_tw_daily_price_limits(cur_price, sno)
+    tech_missing = bool(
+        (not tech_info)
+        or (
+            cur_price > 0
+            and ma17 == cur_price
+            and ma45 == cur_price
+            and ma117 == cur_price
+            and ma189 == cur_price
+            and rsi_14 == 50.0
+            and prev_high == cur_price
+            and prev_low == cur_price
+        )
+    )
+
     flags: list[str] = []
+    if tech_missing:
+        flags.append("⚠️【技術面日線快取缺失 — 嚴禁自行腦補均線支撐價】")
     if tp2_reached:
         flags.append(f"🏆【已達建倉第二目標價 TP2 ({tp2})】")
-    elif tp1_reached and status == "OPEN":
-        flags.append(f"🔔【已達或逼近建倉第一目標價 TP1 ({tp1}) — 待執行風格B賣半鎖利】")
+    elif tp1_reached and status in ("OPEN", "RELOADED_AFTER_TRIM"):
+        flags.append(f"🔔【已達或逼近建倉第一目標價 TP1 ({tp1}) — 可評估分批鎖利】")
     elif status == "TP1_PARTIAL_TAKEN":
-        flags.append(f"✅【已完成 TP1 賣半鎖利，目前剩餘部位主攻 TP2 ({tp2})】")
+        flags.append(f"✅【已完成 TP1 賣半鎖利，目前剩餘部位主攻 TP2 ({tp2})，回檔亦可評估高出低進回補】")
+    elif status == "RELOADED_AFTER_TRIM":
+        flags.append(f"🔄【本波段曾減碼鎖利後已逢低回補，可再次依 TP1 ({tp1}) / TP2 ({tp2}) 規劃波段操作】")
     if stop_breached:
         flags.append(
             f"⚡【收盤價 {cur_price} 低於右側防守參考價 {ratchet_floor} "
@@ -4264,6 +4466,9 @@ def build_tracked_position_gatekeeper_signals(
         "qty": qty,
         "avg_cost_price": avg_cost,
         "current_price": cur_price,
+        "limit_up_price": limit_up_price,
+        "limit_down_price": limit_down_price,
+        "tech_missing": tech_missing,
         "return_pct": _to_float(hold_agg.get("return_pct"), 0.0),
         "unrealized_pnl": _to_int(hold_agg.get("unrealized_pnl"), 0),
         "weight_pct": _to_float(hold_agg.get("weight_pct"), 0.0),
@@ -4304,14 +4509,22 @@ async def run_morning_battle_ai_review(
     deep_fund_map: Mapping[str, Mapping[str, Any]] | None = None,
     fresh_top_picks_block: str = "",
     picks_bundle: Mapping[str, Any] | None = None,
+    waves_by_sno: Mapping[str, Mapping[str, Any]] | None = None,
+    reports_dir: Path | None = None,
+    strategy_out: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str, str]:
-    """Call `AI_MODEL_HIGH` once across all active tracked memory cards with deep fundamental & chip dossier."""
+    """Two-Stage Strategic Morning Brief (SASD v6.3.1):
+    Stage 1 (`AI_MODEL_HIGH`): Free-form Markdown Strategic Report + Human-Readable Anchor Summary Table.
+    Stage 2 (`AI_MODEL_MID` + Native `response_schema`): Structured JSON extraction for DB, Discord, MY_STOCK & next-day memory.
+    """
     if not active_memories:
         return active_memories, {}, "", ""
 
     dossier_blocks: list[str] = []
     gatekeeper_by_pid: dict[str, dict[str, Any]] = {}
     reselection_by_sno: dict[str, dict[str, Any] | None] = {}
+    wave_meta_by_sno: dict[str, dict[str, Any]] = {}
+    expected_positions_lines: list[str] = []
 
     for idx, mem in enumerate(active_memories, start=1):
         sno = clean_leading_zero_code(mem.get("stock_no", ""))
@@ -4320,6 +4533,15 @@ async def run_morning_battle_ai_review(
         t_info = (tech_map or {}).get(sno, {})
         gk = build_tracked_position_gatekeeper_signals(mem, hold, tech_info=t_info)
         gatekeeper_by_pid[pid] = gk
+        expected_positions_lines.append(f"- position_id=`{pid}` ｜ stock_no=`{sno}` ｜ 股名=`{mem.get('stock_name', sno)}`")
+
+        w_info = (waves_by_sno or {}).get(sno) or {}
+        wave_meta_by_sno[sno] = {
+            "wave_realized_log": str(w_info.get("wave_realized_log") or "").strip(),
+            "wave_realized_pnl": _to_int(w_info.get("wave_realized_pnl"), 0),
+            "wave_trim_count": _to_int(w_info.get("wave_trim_count"), 0),
+            "wave_net_breakeven_price": _to_float(w_info.get("wave_net_breakeven_price"), 0.0),
+        }
 
         reselection = find_latest_pick_reselection(
             sno,
@@ -4535,13 +4757,64 @@ async def run_morning_battle_ai_review(
 
         weight_hint = "（輕倉具加碼彈性）" if gk["weight_pct"] < 10.0 else ("（重倉需控管風險）" if gk["weight_pct"] >= 25.0 else "")
 
+        w_meta = wave_meta_by_sno.get(sno) or {}
+        realized_line = ""
+        if w_meta.get("wave_realized_log"):
+            realized_line = f"\n   - 💰 本波段已實現戰果與淨成本安全墊 (`wave_realized_log`)：{w_meta['wave_realized_log']}"
+
+        ladder_anchors: list[tuple[str, float]] = [
+            ("初始TP2", _to_float(mem.get("initial_tp2"), 0.0)),
+            ("初始TP1", _to_float(mem.get("initial_tp1"), 0.0)),
+            ("今日漲停", gk["limit_up_price"]),
+            ("券商買入均價", gk["avg_cost_price"]),
+            ("波段淨損益兩平價", _to_float(w_meta.get("wave_net_breakeven_price"), 0.0)),
+            ("昨收", gk["current_price"]),
+            ("右側棘輪防線", gk["ratchet_stop_floor"]),
+            ("初始停損SL", _to_float(mem.get("initial_sl"), 0.0)),
+            ("左側結構防線", gk["left_side_structural_floor"]),
+            ("今日跌停", gk["limit_down_price"]),
+        ]
+        if not gk["tech_missing"]:
+            ladder_anchors.extend(
+                [
+                    ("17MA", gk["ma17"]),
+                    ("45MA", gk["ma45"]),
+                    ("117MA", gk["ma117"]),
+                    ("189MA", gk["ma189"]),
+                    ("60日POC", gk["vol_poc_60d"]),
+                    ("投信60dVWAP", _to_float(strat_pkg.get("trust_vwap_60d"), 0.0)),
+                    ("外資60dVWAP", _to_float(strat_pkg.get("foreign_vwap_60d"), 0.0)),
+                ]
+            )
+        price_ladder_str = build_sorted_price_ladder(ladder_anchors)
+        ladder_line = (
+            f"\n   - 🪜 今日關鍵價位階梯（由高至低排序｜漲停 `{gk['limit_up_price']}` / 跌停 `{gk['limit_down_price']}`）：{price_ladder_str}"
+            if price_ladder_str
+            else ""
+        )
+
+        if gk["tech_missing"]:
+            tech_line = (
+                f"   - 最新技術與微結構快取：⚠️ 技術面日線快取缺失（嚴禁自行腦補均線支撐價；僅以昨收 `{gk['current_price']}`、"
+                f"漲跌停 `{gk['limit_up_price']}/{gk['limit_down_price']}` 與原建倉錨點為準）｜ 財報結論：{fund_line}"
+            )
+        else:
+            tech_line = (
+                f"   - 最新技術與微結構快取：17MA=`{gk['ma17']}` (乖離 `{gk['bias_ma17_pct']:+.1f}%`) / 45MA=`{gk['ma45']}` / "
+                f"117MA=`{gk['ma117']}` / 189MA=`{gk['ma189']}` (乖離 `{gk['bias_ma189_pct']:+.1f}%`) ｜ "
+                f"RSI(14)=`{gk['rsi_14']}` ｜ 昨高=`{gk['prev_high']}` / 昨低=`{gk['prev_low']}` ｜ "
+                f"ATR(14)=`{gk['atr14']}` ｜ 60日大量POC=`{gk['vol_poc_60d']}` ｜ 財報結論：{fund_line}"
+            )
+
         dossier_blocks.append(
             f"### {idx}. `{sno} {mem.get('stock_name', '')}`（position_id: `{pid}`｜狀態：`{mem.get('status')}`）\n"
             f"   - 系統狀態觀測旗標：{flag_str}\n"
             f"   - 持倉成本與部位：現有 `{gk['qty']:,}` 股（峰值 `{mem.get('peak_qty')}` 股）｜"
-            f"買入均價 `{gk['avg_cost_price']}` 元｜昨收 `{gk['current_price']}` 元｜"
+            f"買入均價 `{gk['avg_cost_price']}` 元｜昨收 `{gk['current_price']}` 元（今日漲停 `{gk['limit_up_price']}` / 跌停 `{gk['limit_down_price']}`）｜"
             f"未實現 `{gk['unrealized_pnl']:+,}` 元 (`{gk['return_pct']:+.2f}%`)｜**佔總持倉權重 `{gk['weight_pct']:.1f}%`{weight_hint}**\n"
             f"   - 📦 本波段實際買進批次明細 (`wave_buy_log`)：{wave_buy_txt}"
+            f"{realized_line}"
+            f"{ladder_line}"
             f"{tier_blueprint_block}"
             f"{reselection_line}"
             f"{battle_log_block}"
@@ -4556,10 +4829,7 @@ async def run_morning_battle_ai_review(
             f"   - 當時買進劇本：{mem.get('entry_thesis')}\n"
             f"   - 當時設定失效紅線：{mem.get('invalidation_rule')}"
             f"{entry_audit_line}\n"
-            f"   - 最新技術與微結構快取：17MA=`{gk['ma17']}` (乖離 `{gk['bias_ma17_pct']:+.1f}%`) / 45MA=`{gk['ma45']}` / "
-            f"117MA=`{gk['ma117']}` / 189MA=`{gk['ma189']}` (乖離 `{gk['bias_ma189_pct']:+.1f}%`) ｜ "
-            f"RSI(14)=`{gk['rsi_14']}` ｜ 昨高=`{gk['prev_high']}` / 昨低=`{gk['prev_low']}` ｜ "
-            f"ATR(14)=`{gk['atr14']}` ｜ 60日大量POC=`{gk['vol_poc_60d']}` ｜ 財報結論：{fund_line}"
+            f"{tech_line}"
             f"{deep_block_str}"
             f"{strat_block_str}"
             f"{note_line}"
@@ -4576,24 +4846,72 @@ async def run_morning_battle_ai_review(
     if trend_5d_txt and trend_5d_txt not in regime_summary_block:
         regime_summary_block = f"{regime_summary_block}\n\n{trend_5d_txt}"
 
-    prompt = TAISHIN_MORNING_BATTLE_PROMPT.format(
+    strategy_prompt = TAISHIN_MORNING_STRATEGY_PROMPT.format(
         market_regime_summary=regime_summary_block,
         macro_context_block=str(macro_context.get("prompt_block") or "無國際盤快取"),
         fresh_top_picks_block=resolved_picks_block,
         tracked_holdings_dossier="\n\n".join(dossier_blocks),
     )
 
-    stage2_model = get_vertex_stage2_model()
-    ai_resp = await ask_vertex_ai_with_meta(
-        prompt,
-        model=stage2_model,
-        tag="taishin_morning_brief",
-        task_type="MORNING_BRIEF",
+    ts_tag = datetime.now(TAIPEI_TIMEZONE).strftime("%Y%m%d_%H%M%S")
+    stage1_model = get_vertex_stage2_model()
+    stage1_resp = await ask_vertex_ai_with_meta(
+        strategy_prompt,
+        model=stage1_model,
+        tag="taishin_morning_strategy",
+        task_type="MORNING_BRIEF_STRATEGY",
         stock_id="PORTFOLIO",
-        custom_id=f"MORNING_BRIEF_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        custom_id=f"MORNING_BRIEF_{ts_tag}_S1",
         blocking_bq_log=True,
     )
-    parsed = parse_morning_battle_ai_response(ai_resp.text)
+    strategy_markdown = (stage1_resp.text or "").strip()
+
+    # Persist Stage 1 full strategic Markdown locally when reports_dir is available
+    if strategy_markdown and reports_dir is not None:
+        try:
+            daily_out = Path(reports_dir) / "daily"
+            daily_out.mkdir(parents=True, exist_ok=True)
+            (daily_out / f"{eval_date.isoformat()}_morning_strategy.md").write_text(
+                strategy_markdown, encoding="utf-8"
+            )
+        except Exception as save_err:  # noqa: BLE001
+            logger.debug("Failed to save morning strategy markdown: %s", save_err)
+
+    # Check if Stage 1 already returned legacy single-shot JSON (e.g. backward-compatible unit test mocks)
+    direct_parsed = parse_morning_battle_ai_response(strategy_markdown)
+    stage2_model_ver = ""
+    if direct_parsed.get("positions"):
+        parsed = direct_parsed
+    else:
+        # Stage 2 (`AI_MODEL_MID` + Native `response_schema`): Structured extraction from Stage 1 Markdown
+        extract_prompt = TAISHIN_MORNING_EXTRACT_PROMPT.format(
+            expected_positions_list="\n".join(expected_positions_lines),
+            strategy_markdown=strategy_markdown,
+        )
+        extract_model = get_stage1_model()
+        extract_schema = _get_morning_brief_extract_schema()
+        try:
+            stage2_resp = await ask_vertex_ai_with_meta(
+                extract_prompt,
+                model=extract_model,
+                tag="taishin_morning_extract",
+                task_type="MORNING_BRIEF_EXTRACT",
+                stock_id="PORTFOLIO",
+                custom_id=f"MORNING_BRIEF_{ts_tag}_S2",
+                response_schema=extract_schema,
+                temperature=0.0,
+                blocking_bq_log=True,
+            )
+            stage2_model_ver = stage2_resp.model_version
+            parsed = parse_morning_battle_ai_response(stage2_resp.text)
+        except Exception as s2_err:  # noqa: BLE001
+            logger.warning("Morning brief Stage 2 structured extraction failed; falling back to gatekeeper rules: %s", s2_err)
+            parsed = {"morning_battle_headline": "", "positions": []}
+
+    if strategy_out is not None:
+        strategy_out["markdown"] = strategy_markdown
+        strategy_out["stage1_model"] = stage1_resp.model_version
+        strategy_out["stage2_model"] = stage2_model_ver
 
     by_pid: dict[str, dict[str, Any]] = {}
     by_sno: dict[str, dict[str, Any]] = {}
@@ -4614,6 +4932,7 @@ async def run_morning_battle_ai_review(
         sno = clean_leading_zero_code(m.get("stock_no", ""))
         pid = str(m.get("position_id", f"{m.get('opened_date')}_{sno}"))
         gk = gatekeeper_by_pid[pid]
+        w_meta = wave_meta_by_sno.get(sno) or {}
         floor = gk["ratchet_stop_floor"]
         left_floor = gk["left_side_structural_floor"]
         cur_px = gk["current_price"]
@@ -4622,22 +4941,19 @@ async def run_morning_battle_ai_review(
         if matched_ai:
             tag = normalize_ai_action_tag(matched_ai.get("ai_action_tag"))
             thesis_intact = bool(matched_ai.get("thesis_intact", True))
-            # Guardrail: if already took TP1 partial profit, do not repeat "分批停利" unless TP2 reached
+            # Guardrail: if already took TP1 partial profit (and not reloaded), do not repeat "分批停利" unless TP2 reached
             if m.get("status") == "TP1_PARTIAL_TAKEN" and tag == "💰 分批停利":
                 tag = "🏆 達標收割" if gk["tp2_reached"] else "🟢 順勢續抱"
 
             rec_stop = _to_float(matched_ai.get("recommended_trailing_stop"), 0.0)
 
             # Dual-Track Stop Anchoring:
-            # Track 1 (Left-Side Value / Dip-Buying on breakdown when thesis is intact):
-            # Allow re-anchoring stop to left_side_structural_floor or AI's reasonable left-side support below current_price
             if gk["stop_breached"] and thesis_intact and tag in left_side_tags:
                 if cur_px > 0 and (cur_px * 0.85) <= rec_stop <= (cur_px * 0.998):
                     final_stop = round(rec_stop, 2)
                 else:
                     final_stop = left_floor if left_floor > 0 else floor
             else:
-                # Track 2 (Standard Right-Side Ratchet Clamp: never allow below ratchet_stop_floor)
                 if rec_stop < floor:
                     final_stop = floor
                 elif cur_px > 0 and rec_stop >= cur_px and not gk["stop_breached"]:
@@ -4647,16 +4963,19 @@ async def run_morning_battle_ai_review(
 
             order_inst = matched_ai.get("order_instruction") or ""
             rationale = matched_ai.get("pm_rationale") or ""
+            intraday_pb = matched_ai.get("intraday_playbook") or {}
+            cap_verdict = matched_ai.get("capital_efficiency_verdict") or ""
+            tp_upgrade = matched_ai.get("tp_upgrade_proposal") or ""
+            next_digest = matched_ai.get("next_day_memory_digest") or ""
             combined_summary = f"{order_inst}｜{rationale}".strip("｜")
         else:
-            # Deterministic fallback if AI omitted this position
             if gk["stop_breached"]:
                 tag = "🚨 觸及停損"
                 order_inst = f"現價跌破防守線 {floor} 元，建議嚴格執行停損出場。"
             elif gk["tp2_reached"]:
                 tag = "🏆 達標收割"
                 order_inst = f"達成原定第二目標價 TP2 ({m.get('initial_tp2')} 元)，建議獲利收割。"
-            elif gk["tp1_reached"] and m.get("status") == "OPEN":
+            elif gk["tp1_reached"] and m.get("status") in ("OPEN", "RELOADED_AFTER_TRIM"):
                 tag = "💰 分批停利"
                 order_inst = gk["trim_plan"]["instruction_hint"]
             else:
@@ -4664,16 +4983,23 @@ async def run_morning_battle_ai_review(
                 order_inst = f"劇本完好續抱，嚴守棘輪防守價 {floor} 元。"
             final_stop = floor
             rationale = "依建倉原定目標與棘輪防線規則執行。"
+            intraday_pb = {}
+            cap_verdict = ""
+            tp_upgrade = ""
+            next_digest = ""
             combined_summary = f"{order_inst}｜{rationale}"
 
         m["trailing_stop"] = final_stop
         m["last_eval_date"] = eval_date.isoformat()
         m["last_ai_action"] = tag
         m["last_ai_summary"] = combined_summary[:220]
-        morning_entry_line = (
-            f"[{eval_date.isoformat()} 盤前晨報] {tag}（防守價 {final_stop:.2f}）"
-            f"｜指令：{order_inst[:95]}｜檢核：{rationale[:110]}"
-        )
+        if next_digest:
+            morning_entry_line = f"[{eval_date.isoformat()} 盤前晨報] {tag}（防守價 {final_stop:.2f}）｜{next_digest}"
+        else:
+            morning_entry_line = (
+                f"[{eval_date.isoformat()} 盤前晨報] {tag}（防守價 {final_stop:.2f}）"
+                f"｜指令：{order_inst[:95]}｜檢核：{rationale[:110]}"
+            )
         m["recent_battle_log"] = _upsert_battle_log_entries(
             m.get("recent_battle_log"),
             [morning_entry_line],
@@ -4687,12 +5013,20 @@ async def run_morning_battle_ai_review(
             "trailing_stop": final_stop,
             "order_instruction": order_inst,
             "pm_rationale": rationale,
+            "intraday_playbook": intraday_pb,
+            "capital_efficiency_verdict": cap_verdict,
+            "tp_upgrade_proposal": tp_upgrade,
+            "next_day_memory_digest": next_digest,
+            "wave_realized_log": w_meta.get("wave_realized_log", ""),
+            "wave_net_breakeven_price": w_meta.get("wave_net_breakeven_price", 0.0),
+            "limit_up_price": gk["limit_up_price"],
+            "limit_down_price": gk["limit_down_price"],
             "gatekeeper": gk,
             "reselection": reselection_by_sno.get(sno),
         }
 
     headline = parsed.get("morning_battle_headline") or "已完成建倉劇本、棘輪防線與隔夜國際盤交叉檢核。"
-    return enriched_memories, decisions_by_sno, headline, ai_resp.model_version
+    return enriched_memories, decisions_by_sno, headline, stage1_resp.model_version
 
 
 def format_morning_brief_discord_report(
@@ -4732,7 +5066,7 @@ def format_morning_brief_discord_report(
 
     agg = _aggregate_holdings_by_stock(holdings_rows)
     active_memories = [
-        m for m in memory_rows if str(m.get("status", "")).upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+        m for m in memory_rows if str(m.get("status", "")).upper() in ACTIVE_POSITION_STATUSES
     ]
     tracked_snos = {clean_leading_zero_code(m.get("stock_no", "")) for m in active_memories}
 
@@ -4757,7 +5091,12 @@ def format_morning_brief_discord_report(
             gk = dec.get("gatekeeper") or build_tracked_position_gatekeeper_signals(mem, hold)
             tag = dec.get("ai_action_tag") or mem.get("last_ai_action") or "🟢 順勢續抱"
             war_link = f" ｜ [戰情室]({mem['war_room_url']})" if mem.get("war_room_url") else ""
-            stage_badge = "已賣半鎖利" if mem.get("status") == "TP1_PARTIAL_TAKEN" else "建倉持有中"
+            st_str = str(mem.get("status") or "").upper()
+            stage_badge = (
+                "已賣半鎖利"
+                if st_str == "TP1_PARTIAL_TAKEN"
+                else ("減碼後已回補" if st_str == "RELOADED_AFTER_TRIM" else "建倉持有中")
+            )
 
             lines.append(
                 f"🔹 **{sno} {mem.get('stock_name', '')}**（{stage_badge}｜來源 {mem.get('source_scan_date')} #{mem.get('source_rank')}）"
@@ -4988,7 +5327,7 @@ def sync_memory(
         {
             clean_leading_zero_code(m.get("stock_no", ""))
             for m in updated_memory
-            if str(m.get("status", "")).strip().upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+            if str(m.get("status", "")).strip().upper() in ACTIVE_POSITION_STATUSES
         }
         - {""}
     )
@@ -5036,7 +5375,7 @@ def sync_memory(
     messages = format_memory_sync_discord_report(as_of=today, events=events)
     if force_discord and not messages:
         active_cnt = sum(
-            1 for m in updated_memory if str(m.get("status", "")).upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+            1 for m in updated_memory if str(m.get("status", "")).upper() in ACTIVE_POSITION_STATUSES
         )
         messages = [
             f"🌙 【台新 盤後持股記憶歸因同步完成】({today.isoformat()})\n"
@@ -5114,10 +5453,10 @@ def run_morning_brief(
     )
 
     active_memories = [
-        m for m in updated_memory if str(m.get("status", "")).upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+        m for m in updated_memory if str(m.get("status", "")).upper() in ACTIVE_POSITION_STATUSES
     ]
     closed_memories = [
-        m for m in updated_memory if str(m.get("status", "")).upper() not in ("OPEN", "TP1_PARTIAL_TAKEN")
+        m for m in updated_memory if str(m.get("status", "")).upper() not in ACTIVE_POSITION_STATUSES
     ]
     agg_holdings = _aggregate_holdings_by_stock(holdings_rows)
 
@@ -5125,10 +5464,11 @@ def run_morning_brief(
     deep_fund_map: dict[str, dict[str, Any]] = {}
     battle_headline = ""
     model_version = ""
+    strategy_out: dict[str, Any] = {}
     ai_called = False
 
     if run_ai and active_memories:
-        print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，載入深度財報/籌碼微結構並呼叫 AI_MODEL_HIGH...")
+        print(f"[morning-brief] 偵測到 {len(active_memories)} 檔嚴選記憶追蹤股，啟動兩階段戰略簡報（Stage 1 旗艦長文 ➔ Stage 2 AI_MODEL_MID 結構化萃取）...")
         try:
             tracked_sids = {clean_leading_zero_code(m.get("stock_no", "")) for m in active_memories} - {""}
             prices_by_sid = {
@@ -5147,6 +5487,8 @@ def run_morning_brief(
                 picks_bundle,
                 tracked_stock_ids=tracked_sids,
             )
+            waves_by_sno = compute_holding_waves_from_statements(core["combined_statements"])
+            eff_reports_dir = reports_dir or Path(os.getenv("FINMIND_REPORTS_DIR") or "finmind_reports")
             reviewed_active, decisions_by_sno, battle_headline, model_version = asyncio.run(
                 run_morning_battle_ai_review(
                     active_memories,
@@ -5159,6 +5501,9 @@ def run_morning_brief(
                     deep_fund_map=deep_fund_map,
                     fresh_top_picks_block=fresh_top_picks_block,
                     picks_bundle=picks_bundle,
+                    waves_by_sno=waves_by_sno,
+                    reports_dir=eff_reports_dir,
+                    strategy_out=strategy_out,
                 )
             )
             ai_called = True
@@ -5185,7 +5530,12 @@ def run_morning_brief(
         battle_headline=battle_headline,
         model_version=model_version,
     )
-    full_brief_markdown = "\n\n".join(messages)
+    stage1_md = str(strategy_out.get("markdown") or "").strip()
+    full_brief_markdown = (
+        stage1_md
+        if (stage1_md and not stage1_md.lstrip().startswith("{") and not stage1_md.lstrip().startswith("```json"))
+        else "\n\n".join(messages)
+    )
 
     # SASD v6.3.0 §7.3~7.4：先落地本地晨報狀態快取並加密發布 MY_STOCK，再推播 Discord（非阻塞降級）
     if not dry_run:
@@ -5295,7 +5645,7 @@ def dump_portfolio_context(
 
     active_cards: list[dict[str, Any]] = []
     for raw_mem in memory_rows:
-        if str(raw_mem.get("status", "")).upper() not in ("OPEN", "TP1_PARTIAL_TAKEN"):
+        if str(raw_mem.get("status", "")).upper() not in ACTIVE_POSITION_STATUSES:
             continue
         mem = dict(raw_mem)
         sno = clean_leading_zero_code(mem.get("stock_no", ""))

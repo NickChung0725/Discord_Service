@@ -332,11 +332,19 @@ def save_morning_brief_state(
         if not code or not isinstance(dec, Mapping):
             continue
         resel = dec.get("reselection")
+        pb = dec.get("intraday_playbook")
         slim_decisions[code] = {
             "ai_action_tag": str(dec.get("ai_action_tag") or ""),
             "trailing_stop": _safe_float_opt(dec.get("trailing_stop")),
             "order_instruction": str(dec.get("order_instruction") or ""),
             "pm_rationale": str(dec.get("pm_rationale") or ""),
+            "intraday_playbook": dict(pb) if isinstance(pb, Mapping) else {},
+            "capital_efficiency_verdict": str(dec.get("capital_efficiency_verdict") or ""),
+            "tp_upgrade_proposal": str(dec.get("tp_upgrade_proposal") or ""),
+            "wave_realized_log": str(dec.get("wave_realized_log") or ""),
+            "wave_net_breakeven_price": _safe_float_opt(dec.get("wave_net_breakeven_price")),
+            "limit_up_price": _safe_float_opt(dec.get("limit_up_price")),
+            "limit_down_price": _safe_float_opt(dec.get("limit_down_price")),
             "reselection": dict(resel) if isinstance(resel, Mapping) else None,
         }
     payload = {
@@ -1564,7 +1572,7 @@ def build_my_stock_bundles(
     # 1. 整理未平倉記憶卡與對帳單波段
     active_mem_by_sno: dict[str, Mapping[str, Any]] = {}
     for m in memory_rows:
-        if str(m.get("status") or "").upper() in ("OPEN", "TP1_PARTIAL_TAKEN"):
+        if str(m.get("status") or "").upper() in ("OPEN", "TP1_PARTIAL_TAKEN", "RELOADED_AFTER_TRIM"):
             sno = _clean_code(m.get("stock_no"))
             if sno:
                 active_mem_by_sno[sno] = m
@@ -1817,6 +1825,7 @@ def build_my_stock_bundles(
             (mem.get("last_ai_summary") if mem else "") or hold.get("ai_advice_summary") or ""
         )
 
+        dec_pb = dec.get("intraday_playbook") if isinstance(dec.get("intraday_playbook"), Mapping) else {}
         holdings_out.append(
             {
                 "stock_id": sno,
@@ -1828,6 +1837,8 @@ def build_my_stock_bundles(
                 "qty": qty,
                 "avg_cost": avg_cost,
                 "latest_close": latest_close,
+                "limit_up_price": _safe_float_opt(dec.get("limit_up_price")),
+                "limit_down_price": _safe_float_opt(dec.get("limit_down_price")),
                 "beta_60d": round(beta_60d, 2),
                 "weight_pct": wt,
                 "market_value": mv,
@@ -1845,6 +1856,11 @@ def build_my_stock_bundles(
                 "memory": mem_payload,
                 "microstructure": microstructure,
                 "ai_morning_note": ai_morning_note,
+                "intraday_playbook": dict(dec_pb),
+                "capital_efficiency_verdict": str(dec.get("capital_efficiency_verdict") or ""),
+                "tp_upgrade_proposal": str(dec.get("tp_upgrade_proposal") or ""),
+                "wave_realized_log": str(dec.get("wave_realized_log") or ""),
+                "wave_net_breakeven_price": _safe_float_opt(dec.get("wave_net_breakeven_price")),
                 "wave_transactions": wave_txs[:30],
                 "links": {
                     "war_room": f"../charts/{sno}_fund.html",
@@ -2075,7 +2091,7 @@ def publish_my_stock_portal(
                 tracked_sids = {
                     _clean_code(m.get("stock_no"))
                     for m in resolved_memories
-                    if str(m.get("status") or "").upper() in ("OPEN", "TP1_PARTIAL_TAKEN")
+                    if str(m.get("status") or "").upper() in ("OPEN", "TP1_PARTIAL_TAKEN", "RELOADED_AFTER_TRIM")
                 } - {""}
                 if tracked_sids:
                     prices_by_sid = {

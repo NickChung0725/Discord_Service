@@ -1457,7 +1457,9 @@ class FundamentalCacheManager:
 
         df = pd.DataFrame.from_records(records)
         if "stock_id" in df.columns:
-            df = df[df["stock_id"].astype(str).str.strip() == stock_id].copy()
+            norm_target = str(stock_id).strip().lstrip("'").removesuffix(".0")
+            norm_col = df["stock_id"].astype(str).str.strip().str.lstrip("'").str.replace(r"\.0$", "", regex=True)
+            df = df[norm_col == norm_target].copy()
         return df
 
     def _fetch_monthly_revenue(self, stock_id: str, df_sheet: pd.DataFrame) -> pd.DataFrame:

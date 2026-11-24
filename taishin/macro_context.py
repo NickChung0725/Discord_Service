@@ -383,7 +383,20 @@ def classify_macro_risk_tone(
     vix_chg = _safe_float((quotes.get("VIX") or {}).get("change_pct")) or 0.0
     is_post_market = str(context_mode or "").strip().lower() == "post_market"
 
-    if sox_chg <= -2.5 or tsm_chg <= -3.0 or ixic_chg <= -2.2 or vix_price >= 26.0 or vix_chg >= 15.0:
+    # Panic-relief / sharp VIX collapse + strong semiconductor/equity rebound MUST NOT be mislabeled as 🔴 逆風
+    if (sox_chg >= 2.0 or tsm_chg >= 2.5) and ixic_chg >= 1.0 and vix_chg <= -8.0:
+        if is_post_market:
+            return (
+                "🟢 國際恐慌急退強彈",
+                "最近一次美股費半與科技股強勁反彈且VIX恐慌顯著急挫，有助緩解賣壓；惟波動率水準仍偏高，布局宜守拉回支撐分批低接、切忌追高。",
+            )
+        return (
+            "🟢 國際恐慌急退強彈",
+            "隔夜美股費半／台積電ADR強勁反彈且VIX恐慌顯著急挫，有利台股早盤迎報復性反彈；惟VIX絕對水位仍偏高、震盪難免，嚴禁早盤盲目追高，宜藉彈檢視弱勢股或待盤中拉回支撐低接。",
+        )
+
+    vix_elevated_and_not_cooling = vix_price >= 26.0 and vix_chg > -5.0
+    if sox_chg <= -2.5 or tsm_chg <= -3.0 or ixic_chg <= -2.2 or vix_elevated_and_not_cooling or vix_chg >= 15.0:
         if is_post_market:
             return (
                 "🔴 國際逆風警戒",
