@@ -1316,11 +1316,23 @@ def load_public_deep_fundamental_context(
                         if bps > 0:
                             pb_str = f"{close_px / bps:.2f}"
                 dy_str = "N/A"
+                cash_div_val: float | None = None
                 if close_px and not div_df.empty:
                     c_div = _to_float(div_df.iloc[-1].get("cash_dividend"), -1.0)
                     if c_div >= 0:
                         dy_str = f"{c_div / close_px * 100.0:.2f}"
-                result[sid]["valuation"] = {"pe": pe_str, "pb": pb_str, "dividend_yield": dy_str}
+                    if c_div > 0:
+                        cash_div_val = round(c_div, 4)
+                elif not div_df.empty:
+                    c_div = _to_float(div_df.iloc[-1].get("cash_dividend"), -1.0)
+                    if c_div > 0:
+                        cash_div_val = round(c_div, 4)
+                result[sid]["valuation"] = {
+                    "pe": pe_str,
+                    "pb": pb_str,
+                    "dividend_yield": dy_str,
+                    "cash_dividend": cash_div_val,
+                }
 
             # 3. Monthly Revenue (with fresh MoM calculation from raw revenue to avoid 100x formatting bug)
             if not rev_df.empty:
@@ -4327,6 +4339,53 @@ def _tw_tick_step(price: float, stock_no: str = "") -> float:
     return 5.0
 
 
+def _round_tw_tick_nearest(price: float, stock_no: str = "") -> float:
+    px = _to_float(price, 0.0)
+    if px <= 0:
+        return 0.0
+    step = _tw_tick_step(px, stock_no)
+    return round(round(px / step) * step, 2)
+
+
+def _format_morning_valuation_anchors(
+    p2: Mapping[str, Any] | None,
+    val: Mapping[str, Any] | None,
+    strat_pkg: Mapping[str, Any] | None = None,
+    stock_no: str = "",
+) -> str:
+    """產出 Python 明算的前瞻 PE 合理價、保守估值底與 4% 殖利率保護價（防晨報 AI 心算誤差）。"""
+    if isinstance(strat_pkg, Mapping):
+        pre = str(strat_pkg.get("val_floors_line") or "").strip()
+        if pre:
+            return pre
+
+    parts: list[str] = []
+    p2_map = p2 if isinstance(p2, Mapping) else {}
+    val_map = val if isinstance(val, Mapping) else {}
+
+    fwd_eps = _to_float(p2_map.get("implied_forward_eps"), 0.0)
+    peer_pe = _to_float(p2_map.get("sector_benchmark_pe"), 0.0)
+    if fwd_eps > 0:
+        conservative_pe = max(10.0, (peer_pe if peer_pe > 0 else 16.0) * 0.78)
+        pe_floor = _round_tw_tick_nearest(fwd_eps * conservative_pe, stock_no)
+        if peer_pe > 0:
+            fair_pe_val = _round_tw_tick_nearest(fwd_eps * peer_pe, stock_no)
+            parts.append(
+                f"本業前瞻EPS={fwd_eps:.2f}元（同業中位{peer_pe:.1f}x PE合理價={fair_pe_val:.2f}元／保守底{conservative_pe:.1f}x PE={pe_floor:.2f}元）"
+            )
+        else:
+            parts.append(
+                f"本業前瞻EPS={fwd_eps:.2f}元（保守估值底{conservative_pe:.1f}x PE={pe_floor:.2f}元）"
+            )
+
+    cash_div = _to_float(val_map.get("cash_dividend"), 0.0)
+    if cash_div > 0:
+        div_4pct_floor = _round_tw_tick_nearest(cash_div / 0.04, stock_no)
+        parts.append(f"4%殖利率保護價={div_4pct_floor:.2f}元")
+
+    return " ｜ ".join(parts)
+
+
 def compute_tw_daily_price_limits(prev_close: float, stock_no: str = "") -> tuple[float, float]:
     """Compute Taiwan ±10% daily limit-up (floor to valid tick) and limit-down (ceil to valid tick)."""
     px = _to_float(prev_close, 0.0)
@@ -4706,10 +4765,17 @@ async def run_morning_battle_ai_review(
         if p2:
             if p2.get("forward_val_line"):
                 deep_lines.append(f"🔮 Phase 2 本業前瞻估值：{p2['forward_val_line']}（隱含前瞻EPS=`{p2.get('implied_forward_eps')}元`）")
+            val_anchors_line = _format_morning_valuation_anchors(p2, val, strat_pkg, stock_no=sno)
+            if val_anchors_line:
+                deep_lines.append(f"🛡️ Python 明算估值錨點（防心算誤差）：{val_anchors_line}")
             if p2.get("margin_trend_line"):
                 deep_lines.append(f"🧬 三率獲利品質語意：{p2['margin_trend_line']}")
             if p2.get("rev_momentum_line") or p2.get("qtd_line"):
                 deep_lines.append(f"🚀 右側營收動能與本季達成率：{p2.get('rev_momentum_line', '')}｜{p2.get('qtd_line', '')}")
+        else:
+            val_anchors_line = _format_morning_valuation_anchors(p2, val, strat_pkg, stock_no=sno)
+            if val_anchors_line:
+                deep_lines.append(f"🛡️ Python 明算估值錨點（防心算誤差）：{val_anchors_line}")
 
         if chip:
             maint_val = str(chip.get("est_margin_maint_pct") or "N/A")

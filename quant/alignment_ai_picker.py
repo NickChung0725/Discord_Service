@@ -2758,7 +2758,15 @@ async def execute_v61_quality_and_strategic_pipeline(
                 feat_obj = None
         fwd_val = getattr(feat_obj, "forward_valuation", {}) if feat_obj is not None else {}
         fwd_eps = _parse_optional_num(fwd_val.get("implied_core_forward_eps")) if isinstance(fwd_val, Mapping) else None
-        peer_pe = _parse_optional_num(fwd_val.get("sector_median_pe")) if isinstance(fwd_val, Mapping) else None
+        peer_pe = (
+            _parse_optional_num(
+                fwd_val.get("sector_benchmark_pe")
+                if fwd_val.get("sector_benchmark_pe") is not None
+                else fwd_val.get("sector_median_pe")
+            )
+            if isinstance(fwd_val, Mapping)
+            else None
+        )
         cap_twd: float | None = None
         if feat_obj is not None:
             cs_val = getattr(feat_obj, "capital_stock", None)
@@ -4786,7 +4794,15 @@ def dump_strategic_layout_prompt_only(
 
         fwd_val = getattr(feat_obj, "forward_valuation", {}) if feat_obj is not None else {}
         fwd_eps = _parse_optional_num(fwd_val.get("implied_core_forward_eps")) if isinstance(fwd_val, Mapping) else None
-        peer_pe = _parse_optional_num(fwd_val.get("sector_median_pe")) if isinstance(fwd_val, Mapping) else None
+        peer_pe = (
+            _parse_optional_num(
+                fwd_val.get("sector_benchmark_pe")
+                if fwd_val.get("sector_benchmark_pe") is not None
+                else fwd_val.get("sector_median_pe")
+            )
+            if isinstance(fwd_val, Mapping)
+            else None
+        )
         cap_twd: float | None = None
         if feat_obj is not None:
             cs_val = getattr(feat_obj, "capital_stock", None)

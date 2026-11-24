@@ -17,6 +17,9 @@
   * `_upsert_delta()` 呼叫 `worksheet.append_rows()` 時明確傳入 `insert_data_option="INSERT_ROWS"` 與 `table_range="A1"`，防止預設 `OVERWRITE` 搭配篩選器造成新增列寫入錯位或截斷。
   * `ensure_workbook_schema()` 新增 `_clear_basic_filters_on_managed_tabs()`，若受管財報快取分頁被手動開啟 Google Sheets 基本篩選器 (`basicFilter`)，於寫入前自動發送 `clearBasicFilter` 清除以保護寫入完整性。
   * `load_public_deep_fundamental_context()` 晨報自癒保險絲擴充「期別過期檢核」（`should_bypass_quarterly_cache` / `should_bypass_revenue_cache`）：22:45 保鮮已更新時為 0 次 API 呼叫，僅於快取空白或落後應公告季報／月營收水位時才觸發單股補抓。
+* **修復 AI #3 與 `--dump-prompt-only` 漏取同業中位 PE (`sector_benchmark_pe`) 並同步於 `MORNING-BRIEF` 補齊 Python 明算估值錨點（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)、[`finmind_stock_scanner.py`](/finmind_stock_scanner.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)、[`tests/test_taishin_nova.py`](/tests/test_taishin_nova.py)）**：
+  * `execute_v61_quality_and_strategic_pipeline()` 與 `dump_strategic_layout_prompt_only()` 改優先讀取 `forward_valuation["sector_benchmark_pe"]`（向後相容 `sector_median_pe`），確保 AI #3 戰術 Prompt 完整印出「同業中位 PE 合理價」與「保守估值底」。
+  * `build_strategic_tech_and_chip_package()` 回傳新增 `val_floors_line`；`taishin_portfolio_service.py` 於 `MORNING-BRIEF` Stage 1 緊接 `🔮 Phase 2 本業前瞻估值` 下方新增 `🛡️ Python 明算估值錨點（防心算誤差）`（同業中位 PE 合理價／保守估值底／4% 殖利率保護價），即使個股日線快取缺失仍可由 Phase 2 特徵直接換算輸出。
 * **優化 `MY_STOCK` 手機版頂部固定列排版與 Stage 1 戰略書入口（[`web/private/index.html`](/web/private/index.html)）**：將「早盤跳空壓力測試滑桿」、「國際盤／台股燈號條」與警示橫幅移出 `position: sticky` 頂部列改為自然捲動區，手機版頂部固定列瘦身為單行約 `48px`（次要工具收納至 `☰` 展開列），徹底解決手機畫面被佔用三分之二的問題；並於頂部導覽列新增 `📜 戰略書` 快捷鈕，同時將 `#brief-card` 內的 `📜 閱讀完整盤前戰略書` / `原地展開` 按鈕移至卡片頂端，一眼可見。
 
 ---

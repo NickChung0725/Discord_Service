@@ -1970,6 +1970,30 @@ class TestTaishinNova(unittest.TestCase):
         self.assertIsNone(res_none["cash_twd"])
         self.assertEqual(res_none["source"], "UNAVAILABLE")
 
+    def test_morning_brief_injects_python_valuation_price_anchors(self) -> None:
+        import taishin_portfolio_service as svc
+
+        # 1. Direct helper: computes fair PE price, conservative floor, and 4% dividend floor even without strat_pkg
+        line = svc._format_morning_valuation_anchors(
+            p2={"implied_forward_eps": 46.30, "sector_benchmark_pe": 20.0},
+            val={"cash_dividend": 36.0},
+            strat_pkg=None,
+            stock_no="3293",
+        )
+        self.assertIn("本業前瞻EPS=46.30元", line)
+        self.assertIn("同業中位20.0x PE合理價=926.00元", line)
+        self.assertIn("保守底15.6x PE=722.00元", line)
+        self.assertIn("4%殖利率保護價=900.00元", line)
+
+        # 2. Prefers pre-computed strat_pkg["val_floors_line"] when present
+        pre = svc._format_morning_valuation_anchors(
+            p2={"implied_forward_eps": 10.0, "sector_benchmark_pe": 15.0},
+            val={},
+            strat_pkg={"val_floors_line": "本業前瞻EPS=32.59元（同業中位30.0x PE合理價=978.00元／保守底23.4x PE=763.00元）"},
+            stock_no="3034",
+        )
+        self.assertIn("同業中位30.0x PE合理價=978.00元", pre)
+
 
 if __name__ == "__main__":
     unittest.main()

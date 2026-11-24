@@ -1343,6 +1343,7 @@ def build_strategic_tech_and_chip_package(
         "chase_limit_price": chase_lim,
         "hard_stop_loss": hard_sl,
         "tp1_price": tp1_def,
+        "val_floors_line": " ｜ ".join(val_floors),
         "rs_beta": rs_beta_info,
         "tdcc_summary": tdcc_summary_info,
         "daily_table_markdown": "\n".join(table_lines),
