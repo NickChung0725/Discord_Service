@@ -4,6 +4,18 @@
 
 ---
 
+## [v6.3.2] - 2026-11-24
+### 🔧 優化與修正 — AI #2 / AI #3 防偏誤自回歸欄位改序（陣列外統一排名配資）、反方辯證與風報比驗算、Parser 逃生閥 Bug 修復
+* **維持單階段 Vertex AI Batch 架構並徹底消除「先行承諾偏誤」（[`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：
+  * **AI #2 (`quality_selection`)**：頂層最先輸出 `cross_stock_pk_reasoning`（250~300 字跨股橫向比較）再寫 `selection_summary`；`quality_picks[]` 強制先輸出 `bear_case_and_rebuttal`（正面回應 `[D]` 區新聞利多出貨、OCF/NI 異常或估值風險與豁免理由），最後才打獨立 `quality_score` / `quality_grade`，並**移除各股內 `rank`（改由 Python 依分數自動排序）**，同時將理由欄位字數上限放寬約 1.5 倍（150 ➔ 200 字、90 ➔ 130 字、80 ➔ 120 字）。
+  * **AI #3 (`strategic_layout_trend` / `strategic_layout_rebound`)**：頂層先輸出 `market_comment`（放寬至 200 字）再決定 `market_light` 與 `recommended_total_exposure_pct`；`strategic_picks[]` 逐檔獨立完成 `current_tech_and_chip_diagnosis`（180 字）、三階掛單（各 110 字）、加權成本、TP1/TP2/停損價、強制風報比驗算欄 `rr_math_and_sizing_rationale`、`action` 與獨立 `score`（**不填 `rank` 與 `allocation_weight_pct`**）；待全部候選股皆算妥後，於 JSON 最尾端新增 **`final_ranking_and_allocation[]`** 一次橫向拍板所有標的之最終 `rank`、`allocation_weight_pct` 與 `sizing_note`。
+* **修復 AI #3 Parser 兩大逃生閥 Bug、支援陣列外配資合併與最終確定性重排（[`quant/alignment_ai_picker.py`](/quant/alignment_ai_picker.py)）**：
+  * 修復 `parse_strategic_layout_json()` 漏解析 `action` 欄位（導致下游 `ai_action` 恆為空字串）與 `allocation_weight_pct: 0` 被 Python `or` 誤覆寫為均分權重之 Bug，確保 AI #3 主動喊出 `WAIT_OBSERVE` + `0%`（如大盤熔斷）時 100% 生效。
+  * `parse_quality_selection_json()` 無顯式 `rank` 時自動依 `quality_score` 降冪排序；`parse_strategic_layout_json()` 自動將尾端 `final_ranking_and_allocation` 合併至各股（完全向後相容舊版內嵌欄位）；`execute_v61_quality_and_strategic_pipeline()` 將 AI #2 的 `bear_case_and_rebuttal` 傳遞至 AI #3 Prompt 並寫入 `audit_rec["Bear_Case_Warning"]` / `RR_Math_Rationale` / `Sizing_Note`，並於最終輸出做確定性重排（**可執行買進優先於 `WAIT_OBSERVE` ➔ 權重降冪 ➔ AI #3 尾端名次 ➔ 分數降冪**），避免 `0%` 觀望股佔據 `#1`。
+* **補充單元測試（[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**：新增 AI #2 / AI #3 陣列外統一排名配資 Schema 斷言、無 `rank` 自動依分排序、`action=WAIT_OBSERVE` 與 `0%` 權重保留、反方辯證端到端接線及多股最終確定性重排回歸測試。
+
+---
+
 ## [v6.3.1] - 2026-11-24
 ### ✨ 新增功能 & 🔧 優化與修正 — 兩階段《盤前實戰戰略簡報》、高出低進波段狀態機與 3 大資料層 Bug 修復
 * **修復 3 大晨報資料層 Bug（[`taishin/macro_context.py`](/taishin/macro_context.py)、[`quant/fundamental_cache.py`](/quant/fundamental_cache.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)）**：

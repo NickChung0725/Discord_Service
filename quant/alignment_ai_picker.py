@@ -2215,38 +2215,57 @@ def parse_quality_selection_json(raw: str, valid_ids: set[str], max_top: int) ->
         return None
 
     seen: set[str] = set()
-    qp_out: list[dict] = []
+    qp_candidates: list[tuple[float | None, float, int, dict]] = []
     raw_qp = data.get("quality_picks") if isinstance(data.get("quality_picks"), list) else data.get("top_picks", [])
     if isinstance(raw_qp, list):
-        for item in raw_qp:
+        for orig_idx, item in enumerate(raw_qp):
             if not isinstance(item, dict):
                 continue
             sid = str(item.get("stock_id", "")).strip()
             if not sid or sid not in valid_ids or sid in seen:
                 continue
             seen.add(sid)
-            qp_out.append(
-                {
-                    "rank": len(qp_out) + 1,
-                    "stock_id": sid,
-                    "stock_name": str(item.get("stock_name", "")).strip(),
-                    "sector": str(item.get("sector", "")).strip(),
-                    "quality_score": _parse_optional_num(item.get("quality_score") or item.get("score")) or 80,
-                    "quality_grade": str(item.get("quality_grade") or "S_TIER_CORE").strip(),
-                    "outlook_verdict": str(item.get("outlook_verdict") or "高度可信").strip(),
-                    "fundamental_moat_and_catalysts": str(
-                        item.get("fundamental_moat_and_catalysts") or item.get("bull_thesis") or ""
-                    ).strip(),
-                    "chip_and_institutional_backing": str(
-                        item.get("chip_and_institutional_backing") or ""
-                    ).strip(),
-                    "fundamental_invalidation": str(
-                        item.get("fundamental_invalidation") or item.get("bear_case_and_invalidation") or ""
-                    ).strip(),
-                }
+            ai_rank = _parse_optional_num(item.get("rank"))
+            explicit_rank = float(ai_rank) if (ai_rank is not None and ai_rank > 0) else None
+            raw_qscore = _parse_optional_num(item.get("quality_score"))
+            if raw_qscore is None:
+                raw_qscore = _parse_optional_num(item.get("score"))
+            qscore_val = float(raw_qscore) if raw_qscore is not None else 80.0
+            qp_candidates.append(
+                (
+                    explicit_rank,
+                    qscore_val,
+                    orig_idx,
+                    {
+                        "rank": orig_idx + 1,
+                        "stock_id": sid,
+                        "stock_name": str(item.get("stock_name", "")).strip(),
+                        "sector": str(item.get("sector", "")).strip(),
+                        "bear_case_and_rebuttal": str(item.get("bear_case_and_rebuttal") or "").strip(),
+                        "quality_score": raw_qscore if raw_qscore is not None else 80,
+                        "quality_grade": str(item.get("quality_grade") or "S_TIER_CORE").strip(),
+                        "outlook_verdict": str(item.get("outlook_verdict") or "高度可信").strip(),
+                        "fundamental_moat_and_catalysts": str(
+                            item.get("fundamental_moat_and_catalysts") or item.get("bull_thesis") or ""
+                        ).strip(),
+                        "chip_and_institutional_backing": str(
+                            item.get("chip_and_institutional_backing") or ""
+                        ).strip(),
+                        "fundamental_invalidation": str(
+                            item.get("fundamental_invalidation") or item.get("bear_case_and_invalidation") or ""
+                        ).strip(),
+                    },
+                )
             )
-            if len(qp_out) >= max_top:
-                break
+    has_explicit_rank = any(t[0] is not None for t in qp_candidates)
+    if has_explicit_rank:
+        qp_candidates.sort(key=lambda t: (t[0] if t[0] is not None else float(10_000 + t[2]), -t[1], t[2]))
+    else:
+        qp_candidates.sort(key=lambda t: (-t[1], t[2]))
+    qp_out: list[dict] = []
+    for _, _, _, entry in qp_candidates[:max_top]:
+        entry["rank"] = len(qp_out) + 1
+        qp_out.append(entry)
 
     def _clean_sub(items_obj: object) -> list[dict]:
         out_list: list[dict] = []
@@ -2269,6 +2288,7 @@ def parse_quality_selection_json(raw: str, valid_ids: set[str], max_top: int) ->
         return out_list
 
     return {
+        "cross_stock_pk_reasoning": str(data.get("cross_stock_pk_reasoning") or "").strip(),
         "selection_summary": str(data.get("selection_summary") or data.get("market_comment") or "").strip(),
         "quality_picks": qp_out,
         "watchlist": _clean_sub(data.get("watchlist")),
@@ -2343,42 +2363,93 @@ def parse_strategic_layout_json(raw: str, valid_ids: set[str], max_top: int) -> 
     if data is None:
         return None
 
+    alloc_by_sid: dict[str, dict] = {}
+    raw_alloc = data.get("final_ranking_and_allocation")
+    if isinstance(raw_alloc, list):
+        for alloc_idx, a_item in enumerate(raw_alloc):
+            if not isinstance(a_item, dict):
+                continue
+            a_sid = str(a_item.get("stock_id", "")).strip()
+            if not a_sid or a_sid not in valid_ids or a_sid in alloc_by_sid:
+                continue
+            alloc_by_sid[a_sid] = {
+                "rank": _parse_optional_num(a_item.get("rank")),
+                "order_idx": alloc_idx,
+                "allocation_weight_pct": _parse_optional_num(a_item.get("allocation_weight_pct")),
+                "sizing_note": str(a_item.get("sizing_note") or "").strip(),
+            }
+
     raw_picks = data.get("strategic_picks") if isinstance(data.get("strategic_picks"), list) else data.get("top_picks", [])
     seen: set[str] = set()
-    picks_out: list[dict] = []
+    picks_candidates: list[tuple[float | None, float, float, int, dict]] = []
     if isinstance(raw_picks, list):
-        for item in raw_picks:
+        for orig_idx, item in enumerate(raw_picks):
             if not isinstance(item, dict):
                 continue
             sid = str(item.get("stock_id", "")).strip()
             if not sid or sid not in valid_ids or sid in seen:
                 continue
             seen.add(sid)
-            picks_out.append(
-                {
-                    "rank": len(picks_out) + 1,
-                    "stock_id": sid,
-                    "stock_name": str(item.get("stock_name", "")).strip(),
-                    "sector": str(item.get("sector", "")).strip(),
-                    "score": _parse_optional_num(item.get("score")) or 85,
-                    "allocation_weight_pct": _parse_optional_num(item.get("allocation_weight_pct")) or round(100.0 / max(1, len(valid_ids)), 0),
-                    "tactical_type": str(item.get("tactical_type") or "🎯 績優股三階回檔低接").strip(),
-                    "current_tech_and_chip_diagnosis": str(
-                        item.get("current_tech_and_chip_diagnosis") or ""
-                    ).strip(),
-                    "tier1_entry": str(item.get("tier1_entry") or "").strip(),
-                    "tier2_entry": str(item.get("tier2_entry") or "").strip(),
-                    "tier3_entry": str(item.get("tier3_entry") or "").strip(),
-                    "weighted_avg_entry_price": str(item.get("weighted_avg_entry_price") or "").strip(),
-                    "chase_limit_price": str(item.get("chase_limit_price") or "").strip(),
-                    "target_price_1": str(item.get("target_price_1") or "").strip(),
-                    "target_price_2": str(item.get("target_price_2") or "").strip(),
-                    "stop_loss_price": str(item.get("stop_loss_price") or "").strip(),
-                    "invalidation_rule": str(item.get("invalidation_rule") or "").strip(),
-                }
+            alloc_entry = alloc_by_sid.get(sid) or {}
+            ai_rank = alloc_entry.get("rank")
+            if ai_rank is None:
+                ai_rank = _parse_optional_num(item.get("rank"))
+            explicit_rank = float(ai_rank) if (ai_rank is not None and ai_rank > 0) else None
+            action_val = str(item.get("action") or "").strip().upper()
+            raw_w = alloc_entry.get("allocation_weight_pct")
+            if raw_w is None:
+                raw_w = _parse_optional_num(item.get("allocation_weight_pct"))
+            if raw_w is None:
+                w_val: float = 0.0 if action_val == "WAIT_OBSERVE" else round(100.0 / max(1, len(valid_ids)), 0)
+            else:
+                w_val = max(0.0, float(raw_w))
+            raw_score = _parse_optional_num(item.get("score"))
+            score_val = float(raw_score) if raw_score is not None else 85.0
+            sizing_note = str(alloc_entry.get("sizing_note") or "").strip()
+            picks_candidates.append(
+                (
+                    explicit_rank,
+                    w_val,
+                    score_val,
+                    orig_idx,
+                    {
+                        "rank": orig_idx + 1,
+                        "stock_id": sid,
+                        "stock_name": str(item.get("stock_name", "")).strip(),
+                        "sector": str(item.get("sector", "")).strip(),
+                        "score": raw_score if raw_score is not None else 85,
+                        "action": action_val,
+                        "allocation_weight_pct": w_val,
+                        "tactical_type": str(item.get("tactical_type") or "🎯 績優股三階回檔低接").strip(),
+                        "current_tech_and_chip_diagnosis": str(
+                            item.get("current_tech_and_chip_diagnosis") or ""
+                        ).strip(),
+                        "tier1_entry": str(item.get("tier1_entry") or "").strip(),
+                        "tier2_entry": str(item.get("tier2_entry") or "").strip(),
+                        "tier3_entry": str(item.get("tier3_entry") or "").strip(),
+                        "weighted_avg_entry_price": str(item.get("weighted_avg_entry_price") or "").strip(),
+                        "chase_limit_price": str(item.get("chase_limit_price") or "").strip(),
+                        "target_price_1": str(item.get("target_price_1") or "").strip(),
+                        "target_price_2": str(item.get("target_price_2") or "").strip(),
+                        "stop_loss_price": str(item.get("stop_loss_price") or "").strip(),
+                        "invalidation_rule": str(item.get("invalidation_rule") or "").strip(),
+                        "rr_math_and_sizing_rationale": str(item.get("rr_math_and_sizing_rationale") or "").strip(),
+                        "sizing_note": sizing_note,
+                    },
+                )
             )
-            if len(picks_out) >= max_top:
-                break
+    picks_candidates.sort(
+        key=lambda t: (
+            t[0] if t[0] is not None else float(10_000 + t[3]),
+            -t[1],
+            -t[2],
+            t[3],
+        )
+    )
+    picks_out: list[dict] = []
+    for _, _, _, _, entry in picks_candidates[:max_top]:
+        entry["rank"] = len(picks_out) + 1
+        picks_out.append(entry)
 
     exp_pct = _parse_optional_num(data.get("recommended_total_exposure_pct"))
     return {
@@ -2744,9 +2815,15 @@ async def execute_v61_quality_and_strategic_pipeline(
             f"### 🏆 【入選績優股 #{q_item['rank']}】{sid} {sname}（{sub_ind}｜AI#2 體質評級：{q_item['quality_grade']}｜體質分：{q_item['quality_score']}｜法說展望：{q_item['outlook_verdict']}）",
             f"- **AI #2 績優選拔核心理由**：{q_item['fundamental_moat_and_catalysts']}",
             f"- **AI #2 法人與大戶底氣**：{q_item['chip_and_institutional_backing']}",
-            f"- **台新帳戶庫存共伴曝險**：{exp_status}（同產業持股：{list(_exposure_field(exposure, 'same_sector_holdings', []) or [])}｜最高相關持股：{_exposure_field(exposure, 'max_corr_holding_id')} 相關係數 {_exposure_field(exposure, 'max_corr_value', 0.0)}）",
-            str(pkg.get("prompt_block") or ""),
         ]
+        if q_item.get("bear_case_and_rebuttal"):
+            block_lines.append(f"- **AI #2 反方風險與豁免辯證**：{q_item['bear_case_and_rebuttal']}")
+        block_lines.extend(
+            [
+                f"- **台新帳戶庫存共伴曝險**：{exp_status}（同產業持股：{list(_exposure_field(exposure, 'same_sector_holdings', []) or [])}｜最高相關持股：{_exposure_field(exposure, 'max_corr_holding_id')} 相關係數 {_exposure_field(exposure, 'max_corr_value', 0.0)}）",
+                str(pkg.get("prompt_block") or ""),
+            ]
+        )
         strategic_blocks.append("\n".join(block_lines))
 
     # Step 3: 呼叫 AI #3 (`run_strategic_entry_planner`) 產出雙層資金權重與三階回檔低接點位
@@ -2786,7 +2863,7 @@ async def execute_v61_quality_and_strategic_pipeline(
         swap = _exposure_field(exposure, "exposure_status") == "SECTOR_OR_CORR_FULL_SWAP_ONLY"
 
         w_pct = s_item.get("allocation_weight_pct")
-        if w_pct in (None, ""):
+        if w_pct is None or w_pct == "":
             w_pct = default_w
         t1_plan = str(s_item.get("tier1_entry") or f"【第1批 30% 試單】{pkg.get('tier1_default', '')}").strip()
         t2_plan = str(s_item.get("tier2_entry") or f"【第2批 40% 核心】{pkg.get('tier2_default', '')}").strip()
@@ -2857,6 +2934,13 @@ async def execute_v61_quality_and_strategic_pipeline(
                 tactic_code = "WAIT_OBSERVE"
             ideal_summary = f"🛡️ 保留現金觀望（權重 0%｜R/R {rr_val if rr_val != '' else 'N/A'}）"
 
+        q_bear = str(q_item.get("bear_case_and_rebuttal") or "").strip()
+        rr_rationale = str(s_item.get("rr_math_and_sizing_rationale") or "").strip()
+        sizing_note = str(s_item.get("sizing_note") or "").strip()
+        if sizing_note and rr_rationale and sizing_note not in rr_rationale:
+            rr_rationale_full = f"{rr_rationale}｜配資裁決：{sizing_note}"
+        else:
+            rr_rationale_full = rr_rationale or sizing_note
         audit_rec = {
             "Audit_Grade": str(q_item.get("quality_grade") or "S_TIER_CORE"),
             "Execution_Tactic": tactic_code,
@@ -2873,7 +2957,9 @@ async def execute_v61_quality_and_strategic_pipeline(
             "TP1_Target_Or_POC": tp1_num if tp1_num is not None else (pkg.get("tp1_price") or tp1_str),
             "TP2_Target_Price": tp2_num,
             "Deterministic_RR": rr_val,
-            "Bear_Case_Warning": tech_diag,
+            "RR_Math_Rationale": rr_rationale_full,
+            "Sizing_Note": sizing_note,
+            "Bear_Case_Warning": q_bear or tech_diag,
             "Invalidation_Triggers": [inv_rule] if inv_rule else [],
             "Exposure_Status": _exposure_field(exposure, "exposure_status", "OPEN"),
             "Swap_Banner": format_swap_banner(exposure) if swap else "",
@@ -2886,6 +2972,7 @@ async def execute_v61_quality_and_strategic_pipeline(
         if tech_diag:
             bull_combined += f"｜技術與支撐定位：{tech_diag}"
 
+        bear_combined = f"{q_bear}｜失效退場：{inv_rule}" if (q_bear and inv_rule) else (q_bear or inv_rule)
         entry_combined = f"資金權重 {w_pct}%｜預估加權成本 {avg_entry}｜嚴禁追高上限 {chase_lim}"
         top_picks_final.append(
             {
@@ -2901,10 +2988,27 @@ async def execute_v61_quality_and_strategic_pipeline(
                 "stop_loss_price": sl_str,
                 "outlook_verdict": str(q_item.get("outlook_verdict") or "高度可信"),
                 "bull_thesis": bull_combined,
-                "bear_case_and_invalidation": inv_rule,
+                "bear_case_and_invalidation": bear_combined,
                 "audit": audit_rec,
             }
         )
+
+    # 最終確定性重排：可執行買進 (非 WAIT_OBSERVE) 優先 ➔ 權重降冪 ➔ AI #3 尾端名次升冪 ➔ 分數降冪
+    def _final_pick_sort_key(pair: tuple[int, dict]) -> tuple[int, float, float, float, int]:
+        orig_i, p = pair
+        sid_k = str(p.get("stock_id") or "")
+        aud_k = p.get("audit") if isinstance(p.get("audit"), Mapping) else {}
+        tactic_k = str(aud_k.get("Execution_Tactic") or "")
+        is_wait_k = 1 if tactic_k == "WAIT_OBSERVE" else 0
+        w_k = float(_parse_optional_num(aud_k.get("Allocation_Weight_Pct")) or 0.0)
+        s_rank_raw = _parse_optional_num((s_by_sid.get(sid_k) or {}).get("rank"))
+        ai3_rank_k = float(s_rank_raw) if (s_rank_raw is not None and s_rank_raw > 0) else float(10_000 + orig_i)
+        score_k = float(_parse_optional_num(p.get("score")) or 0.0)
+        return (is_wait_k, -w_k, ai3_rank_k, -score_k, orig_i)
+
+    top_picks_final = [p for _, p in sorted(enumerate(top_picks_final), key=_final_pick_sort_key)]
+    for final_idx, pick_obj in enumerate(top_picks_final, start=1):
+        pick_obj["rank"] = final_idx
 
     rec_exp_pct = s_parsed.get("recommended_total_exposure_pct") if isinstance(s_parsed, dict) else None
     m_comment = (

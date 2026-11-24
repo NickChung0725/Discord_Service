@@ -885,5 +885,268 @@ class ReboundV6Tests(unittest.TestCase):
             self.assertIn("極端股災熔斷", txt)
             self.assertIn("僅有單週快照", txt)
 
+    def test_ai2_ai3_antibias_prompt_order_and_parser_bugfixes(self) -> None:
+        """驗證解法二：AI #2/#3 陣列外統一排名配資、反方辯證接線、WAIT_OBSERVE+0% 保留與最終確定性重排。"""
+        import asyncio
+        import json
+        import tempfile
+        from datetime import date
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from quant.alignment_ai_picker import (
+            execute_v61_quality_and_strategic_pipeline,
+            parse_quality_selection_json,
+            parse_strategic_layout_json,
+        )
+        from quant.fundamental_config import PROMPT_TEMPLATES
+
+        # 1. 驗證 AI #2 Prompt JSON 範本：先跨股 PK 與反方辯證、最後打獨立分數，且各股不填 rank
+        q_json_spec = PROMPT_TEMPLATES["quality_selection"].split("【輸出規定", 1)[1]
+        self.assertLess(q_json_spec.index('"cross_stock_pk_reasoning"'), q_json_spec.index('"quality_picks"'))
+        self.assertLess(q_json_spec.index('"bear_case_and_rebuttal"'), q_json_spec.index('"quality_score"'))
+        self.assertNotIn('"rank"', q_json_spec)
+
+        # 2. 驗證 AI #3 (順勢 & 反彈) Prompt JSON 範本：strategic_picks 內不放 rank/allocation_weight_pct，統一移至尾端 final_ranking_and_allocation
+        for key in ("strategic_layout_trend", "strategic_layout_rebound"):
+            s_json_spec = PROMPT_TEMPLATES[key].split("【輸出規定", 1)[1]
+            self.assertLess(s_json_spec.index('"market_comment"'), s_json_spec.index('"recommended_total_exposure_pct"'))
+            self.assertLess(s_json_spec.index('"current_tech_and_chip_diagnosis"'), s_json_spec.index('"tier1_entry"'))
+            self.assertLess(s_json_spec.index('"stop_loss_price"'), s_json_spec.index('"rr_math_and_sizing_rationale"'))
+            self.assertLess(s_json_spec.index('"rr_math_and_sizing_rationale"'), s_json_spec.index('"action"'))
+            self.assertLess(s_json_spec.index('"strategic_picks"'), s_json_spec.index('"final_ranking_and_allocation"'))
+            picks_segment = s_json_spec.split('"strategic_picks"', 1)[1].split('"final_ranking_and_allocation"', 1)[0]
+            self.assertNotIn('"rank"', picks_segment)
+            self.assertNotIn('"allocation_weight_pct"', picks_segment)
+            alloc_segment = s_json_spec.split('"final_ranking_and_allocation"', 1)[1]
+            self.assertIn('"rank"', alloc_segment)
+            self.assertIn('"allocation_weight_pct"', alloc_segment)
+
+        # 3. 驗證 parse_quality_selection_json 無 rank 時自動依 quality_score 降冪排序並重編 rank 1..N
+        q_raw = json.dumps(
+            {
+                "cross_stock_pk_reasoning": "3293 獲利純度高於 2207，但兩者皆可入選。",
+                "selection_summary": "兩檔皆為防禦型績優股",
+                "quality_picks": [
+                    {
+                        "stock_id": "2207",
+                        "stock_name": "和泰車",
+                        "sector": "汽車",
+                        "bear_case_and_rebuttal": "11/20 新聞標註疑似出貨實為大盤崩跌拖累且外資反買 196 張，豁免。",
+                        "fundamental_moat_and_catalysts": "穩健高息龍頭",
+                        "chip_and_institutional_backing": "外資買超",
+                        "fundamental_invalidation": "車市銷量連季年減",
+                        "outlook_verdict": "待驗證",
+                        "quality_score": 88,
+                        "quality_grade": "A_TIER_GROWTH",
+                    },
+                    {
+                        "stock_id": "3293",
+                        "stock_name": "鈊象",
+                        "sector": "遊戲",
+                        "bear_case_and_rebuttal": "單季 OCF/NI 降至 23% 屬稅款季節性波動，全年含金量無虞。",
+                        "fundamental_moat_and_catalysts": "高毛利海外授權",
+                        "chip_and_institutional_backing": "外資穩定持有",
+                        "fundamental_invalidation": "毛利率跌破 95%",
+                        "outlook_verdict": "高度可信",
+                        "quality_score": 94,
+                        "quality_grade": "S_TIER_CORE",
+                    },
+                ],
+                "watchlist": [],
+                "avoid": [],
+            },
+            ensure_ascii=False,
+        )
+        parsed_q = parse_quality_selection_json(q_raw, {"2207", "3293"}, 5)
+        self.assertIsNotNone(parsed_q)
+        self.assertIn("3293 獲利純度高於 2207", parsed_q["cross_stock_pk_reasoning"])
+        self.assertEqual([p["stock_id"] for p in parsed_q["quality_picks"]], ["3293", "2207"])
+        self.assertEqual([p["rank"] for p in parsed_q["quality_picks"]], [1, 2])
+        self.assertIn("外資反買 196 張", parsed_q["quality_picks"][1]["bear_case_and_rebuttal"])
+
+        # 4. 驗證 parse_strategic_layout_json 合併陣列尾端 final_ranking_and_allocation，並保留 WAIT_OBSERVE + 0%
+        s_raw = json.dumps(
+            {
+                "market_comment": "大盤震盪偏空，總持倉控管 60%，僅布局風報比達標且籌碼強勢者。",
+                "market_light": "🔴紅燈",
+                "recommended_total_exposure_pct": 60,
+                "strategic_picks": [
+                    {
+                        "stock_id": "3293",
+                        "stock_name": "鈊象",
+                        "sector": "遊戲",
+                        "current_tech_and_chip_diagnosis": "系統性崩跌先觀望",
+                        "tactical_type": "🛡️ 破線防禦／暫緩追價觀望",
+                        "tier1_entry": "740",
+                        "tier2_entry": "730",
+                        "tier3_entry": "720",
+                        "weighted_avg_entry_price": "730",
+                        "chase_limit_price": "745",
+                        "target_price_1": "820",
+                        "target_price_2": "880",
+                        "stop_loss_price": "700",
+                        "invalidation_rule": "帶量跌破 700",
+                        "rr_math_and_sizing_rationale": "(820-730)/(730-700)=3.0 雖達標，但 VIX>30 熔斷先觀望。",
+                        "action": "WAIT_OBSERVE",
+                        "score": 85,
+                    },
+                    {
+                        "stock_id": "2207",
+                        "stock_name": "和泰車",
+                        "sector": "汽車",
+                        "current_tech_and_chip_diagnosis": "低 Beta 抗跌且外資反買",
+                        "tactical_type": "🎯 強勢股拉回三階低接（依附17MA/45MA與大量區）",
+                        "tier1_entry": "512",
+                        "tier2_entry": "502",
+                        "tier3_entry": "492",
+                        "weighted_avg_entry_price": "502",
+                        "chase_limit_price": "518",
+                        "target_price_1": "560",
+                        "target_price_2": "590",
+                        "stop_loss_price": "478",
+                        "invalidation_rule": "帶量跌破 478",
+                        "rr_math_and_sizing_rationale": "(560-502)/(502-478)=2.42 >= 1.5，可分批承接。",
+                        "action": "BUY_3TIER",
+                        "score": 90,
+                    },
+                ],
+                "final_ranking_and_allocation": [
+                    {
+                        "stock_id": "2207",
+                        "rank": 1,
+                        "allocation_weight_pct": 60,
+                        "sizing_note": "R/R 2.42 且低 Beta 抗跌，列為首選配置 60%。",
+                    },
+                    {
+                        "stock_id": "3293",
+                        "rank": 2,
+                        "allocation_weight_pct": 0,
+                        "sizing_note": "WAIT_OBSERVE 保留現金 0%。",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        )
+        parsed_s = parse_strategic_layout_json(s_raw, {"3293", "2207"}, 5)
+        self.assertIsNotNone(parsed_s)
+        self.assertEqual([p["stock_id"] for p in parsed_s["strategic_picks"]], ["2207", "3293"])
+        self.assertEqual(parsed_s["strategic_picks"][0]["allocation_weight_pct"], 60.0)
+        self.assertEqual(parsed_s["strategic_picks"][1]["action"], "WAIT_OBSERVE")
+        self.assertEqual(parsed_s["strategic_picks"][1]["allocation_weight_pct"], 0.0)
+        self.assertIn("低 Beta 抗跌", parsed_s["strategic_picks"][0]["sizing_note"])
+
+        # 5. 端到端驗證：AI #2 原本 3293 排 #1、2207 排 #2；經 AI #3 陣列外配資後，可買且 60% 的 2207 升為 #1，0% 觀望的 3293 降為 #2
+        with tempfile.TemporaryDirectory() as tmpdir:
+            daily_dir = Path(tmpdir) / "daily"
+            daily_dir.mkdir(parents=True, exist_ok=True)
+            dates = pd.date_range("2026-08-01", periods=65, freq="B")
+            df_3293 = pd.DataFrame(
+                {
+                    "stock_id": ["3293"] * 65,
+                    "date": [d.strftime("%Y-%m-%d") for d in dates],
+                    "open": [755.0] * 65,
+                    "max": [765.0] * 65,
+                    "min": [745.0] * 65,
+                    "close": [750.0] * 65,
+                    "Trading_Volume": [2_000_000] * 65,
+                }
+            )
+            df_2207 = pd.DataFrame(
+                {
+                    "stock_id": ["2207"] * 65,
+                    "date": [d.strftime("%Y-%m-%d") for d in dates],
+                    "open": [515.0] * 65,
+                    "max": [525.0] * 65,
+                    "min": [510.0] * 65,
+                    "close": [516.0] * 65,
+                    "Trading_Volume": [1_500_000] * 65,
+                }
+            )
+            pd.concat([df_3293, df_2207], ignore_index=True).to_csv(
+                daily_dir / "2026-11-24_prices.csv", index=False
+            )
+
+            analyzed = pd.DataFrame(
+                [
+                    {
+                        "stock_id": "2207",
+                        "stock_name": "和泰車",
+                        "industry_category": "汽車",
+                        "sub_industry": "汽車",
+                        "close": 516.0,
+                        "MA17": 510.0,
+                        "MA45": 500.0,
+                        "MA117": 490.0,
+                    },
+                    {
+                        "stock_id": "3293",
+                        "stock_name": "鈊象",
+                        "industry_category": "遊戲",
+                        "sub_industry": "遊戲",
+                        "close": 750.0,
+                        "MA17": 778.0,
+                        "MA45": 772.0,
+                        "MA117": 750.0,
+                    },
+                ]
+            )
+            captured_s3_prompts: list[str] = []
+
+            async def fake_batch(requests_map, **kwargs):
+                if "QUALITY_SELECT_STAGE2" in requests_map:
+                    return {"QUALITY_SELECT_STAGE2": SimpleNamespace(text=q_raw, model_version="gemini-4-argon")}
+                captured_s3_prompts.append(requests_map["STRATEGIC_LAYOUT_STAGE3"])
+                return {"STRATEGIC_LAYOUT_STAGE3": SimpleNamespace(text=s_raw, model_version="gemini-4-argon")}
+
+            cache = MagicMock()
+            cache.get_daily_chip_history.return_value = pd.DataFrame()
+            analyzer = MagicMock()
+            analyzer.cache._read_stock_rows.return_value = pd.DataFrame()
+            analyzer.compute_cross_sectional_pe_map.return_value = {}
+            analyzer._fetch_yahoo_stock_rss.return_value = []
+
+            with (
+                patch("quant.alignment_ai_picker.run_vertex_batch_requests", side_effect=fake_batch),
+                patch("taishin.macro_context.fetch_global_macro_context", return_value={"prompt_block": ""}),
+                patch("taishin_portfolio_service.load_portfolio_exposure_inputs", return_value=([], {})),
+                patch("finmind_stock_scanner.fetch_or_cache_tdcc_holding", return_value=None),
+            ):
+                dec, audit_records, _raw, _mv = asyncio.run(
+                    execute_v61_quality_and_strategic_pipeline(
+                        analyzed,
+                        {"market_benchmark_id": "TAIEX", "enable_ex_dividend_compensation": False},
+                        target_date=date(2026, 11, 24),
+                        daily_dir=daily_dir,
+                        cache=cache,
+                        analyzer=analyzer,
+                        stage1_results={"3293": {"score": 90}, "2207": {"score": 88}},
+                        market_regime={"light": "🔴紅燈", "summary": "🔴紅燈"},
+                        max_top=5,
+                        model="gemini-4-argon",
+                        use_vertex_batch=True,
+                        poll_interval=60.0,
+                        timeout_seconds=7200.0,
+                        selection_mode="trend",
+                        dry_run=True,
+                    )
+                )
+
+            self.assertEqual(len(captured_s3_prompts), 1)
+            self.assertIn("AI #2 反方風險與豁免辯證", captured_s3_prompts[0])
+            self.assertIn("OCF/NI 降至 23%", captured_s3_prompts[0])
+            # 最終榜單重排：可買 60% 的 2207 排 #1，0% 觀望的 3293 排 #2
+            self.assertEqual([p["stock_id"] for p in dec["top_picks"]], ["2207", "3293"])
+            self.assertEqual([p["rank"] for p in dec["top_picks"]], [1, 2])
+            self.assertEqual(audit_records["2207"]["Allocation_Weight_Pct"], 60.0)
+            self.assertIn("低 Beta 抗跌", str(audit_records["2207"]["Sizing_Note"]))
+            self.assertEqual(audit_records["3293"]["Execution_Tactic"], "WAIT_OBSERVE")
+            self.assertEqual(audit_records["3293"]["Allocation_Weight_Pct"], 0)
+            self.assertIn("OCF/NI 降至 23%", str(audit_records["3293"]["Bear_Case_Warning"]))
+            self.assertIn("VIX>30", str(audit_records["3293"]["RR_Math_Rationale"]))
+            self.assertIn("OCF/NI 降至 23%", str(dec["top_picks"][1]["bear_case_and_invalidation"]))
+
+
 
 
