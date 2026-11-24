@@ -332,6 +332,23 @@
       .container { padding: 10px 10px 86px; }
       .kpi-val { font-size: 17px; }
     }
+    /* Safe Markdown Strategic Reader (SASD v6.3.1) */
+    .md-body { font-size: 14px; line-height: 1.75; color: var(--text); word-break: break-word; }
+    .md-body h1, .md-body h2 { font-size: 16px; color: var(--blue-text); margin: 18px 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
+    .md-body h3 { font-size: 15px; color: var(--amber-text); margin: 14px 0 6px; }
+    .md-body h4 { font-size: 14px; color: var(--green-text); margin: 10px 0 4px; }
+    .md-body p { margin: 6px 0 10px; }
+    .md-body ul, .md-body ol { margin: 6px 0 10px; padding-left: 20px; }
+    .md-body li { margin: 4px 0; }
+    .md-body blockquote { margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--blue); background: var(--surface-3); color: var(--text-muted); border-radius: 6px; }
+    .md-body code { background: var(--surface-3); color: var(--blue-text); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+    .md-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+    .md-body table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 10px 0; display: block; overflow-x: auto; }
+    .md-body th, .md-body td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; white-space: nowrap; }
+    .md-body th { background: var(--surface-2); color: var(--text-muted); font-weight: 600; }
+    .playbook-box { display: grid; gap: 8px; margin-top: 8px; }
+    .playbook-item { background: var(--surface-3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+    .playbook-lbl { font-weight: 700; font-size: 12px; margin-bottom: 4px; }
   </style>
 </head>
 <body>
@@ -520,6 +537,17 @@
       </div>
       <div class="modal-body" id="ticket-body"></div>
       <div class="modal-ftr" id="ticket-footer"></div>
+    </div>
+  </div>
+
+  <!-- Full Morning Strategy Markdown Modal (SASD v6.3.1) -->
+  <div id="strategy-modal" class="modal-backdrop hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" style="max-width:860px;width:94vw;max-height:88vh;display:flex;flex-direction:column;">
+      <div class="modal-hdr">
+        <h3 style="margin:0;font-size:16px;">📜 今日完整盤前戰略書</h3>
+        <button id="btn-close-strategy" class="btn">✕ 關閉</button>
+      </div>
+      <div class="modal-body" id="strategy-body" style="overflow-y:auto;flex:1;"></div>
     </div>
   </div>
 
@@ -1026,23 +1054,143 @@
       `;
     }
 
+    function appendInlineMd(parent, text) {
+      const tokenRe = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+      let lastIdx = 0;
+      let m;
+      while ((m = tokenRe.exec(text)) !== null) {
+        if (m.index > lastIdx) {
+          parent.appendChild(document.createTextNode(text.slice(lastIdx, m.index)));
+        }
+        const tok = m[0];
+        if (tok.startsWith("**") && tok.endsWith("**")) {
+          const strong = document.createElement("strong");
+          strong.appendChild(document.createTextNode(tok.slice(2, -2)));
+          parent.appendChild(strong);
+        } else if (tok.startsWith("`") && tok.endsWith("`")) {
+          const code = document.createElement("code");
+          code.appendChild(document.createTextNode(tok.slice(1, -1)));
+          parent.appendChild(code);
+        }
+        lastIdx = tokenRe.lastIndex;
+      }
+      if (lastIdx < text.length) {
+        parent.appendChild(document.createTextNode(text.slice(lastIdx)));
+      }
+    }
+
+    function renderSafeMarkdown(container, mdText) {
+      container.textContent = "";
+      const root = document.createElement("div");
+      root.className = "md-body";
+      const lines = String(mdText || "").replace(/\r\n/g, "\n").split("\n");
+      let i = 0;
+      let ul = null;
+      const closeList = () => { if (ul) { root.appendChild(ul); ul = null; } };
+      while (i < lines.length) {
+        const raw = lines[i];
+        const trim = raw.trim();
+        if (!trim) { closeList(); i++; continue; }
+        if (/^---+$/.test(trim)) {
+          closeList();
+          root.appendChild(document.createElement("hr"));
+          i++; continue;
+        }
+        const hMatch = trim.match(/^(#{1,4})\s+(.*)$/);
+        if (hMatch) {
+          closeList();
+          const h = document.createElement("h" + hMatch[1].length);
+          appendInlineMd(h, hMatch[2]);
+          root.appendChild(h);
+          i++; continue;
+        }
+        if (trim.startsWith("|") && i + 1 < lines.length && /^\|[\s:|-]+\|/.test(lines[i + 1].trim())) {
+          closeList();
+          const tbl = document.createElement("table");
+          const thead = document.createElement("thead");
+          const trH = document.createElement("tr");
+          trim.split("|").slice(1, -1).forEach((c) => {
+            const th = document.createElement("th");
+            appendInlineMd(th, c.trim());
+            trH.appendChild(th);
+          });
+          thead.appendChild(trH);
+          tbl.appendChild(thead);
+          const tbody = document.createElement("tbody");
+          i += 2;
+          while (i < lines.length && lines[i].trim().startsWith("|")) {
+            const tr = document.createElement("tr");
+            lines[i].trim().split("|").slice(1, -1).forEach((c) => {
+              const td = document.createElement("td");
+              appendInlineMd(td, c.trim());
+              tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+            i++;
+          }
+          tbl.appendChild(tbody);
+          root.appendChild(tbl);
+          continue;
+        }
+        if (trim.startsWith("> ")) {
+          closeList();
+          const bq = document.createElement("blockquote");
+          appendInlineMd(bq, trim.slice(2));
+          root.appendChild(bq);
+          i++; continue;
+        }
+        const liMatch = trim.match(/^(?:[-*•]|\d+\.)\s+(.*)$/);
+        if (liMatch) {
+          if (!ul) ul = document.createElement("ul");
+          const li = document.createElement("li");
+          appendInlineMd(li, liMatch[1]);
+          ul.appendChild(li);
+          i++; continue;
+        }
+        closeList();
+        const p = document.createElement("p");
+        appendInlineMd(p, trim);
+        root.appendChild(p);
+        i++;
+      }
+      closeList();
+      container.appendChild(root);
+    }
+
+    function openStrategyModal(mdText) {
+      const modal = document.getElementById("strategy-modal");
+      const body = document.getElementById("strategy-body");
+      if (!modal || !body) return;
+      renderSafeMarkdown(body, mdText || "尚無盤前戰略書內容。");
+      modal.classList.remove("hidden");
+    }
+
     function renderBattleQueue() {
       const d = state.latest;
       if (!d) return;
       const ov = d.morning_brief_overview || {};
       const briefEl = document.getElementById("brief-card");
       briefEl.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
-          <div>
-            <div style="font-size:12px;color:var(--blue-text);font-weight:700;margin-bottom:3px;">🧭 AI 盤前總綱摘要</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:220px;">
+            <div style="font-size:12px;color:var(--blue-text);font-weight:700;margin-bottom:3px;">🧭 AI 盤前戰略總綱摘要</div>
             <div>${esc(ov.headline_summary || "尚無晨報摘要")}</div>
           </div>
-          ${ov.full_markdown ? `<button id="btn-toggle-brief" class="btn" style="flex-shrink:0;">${state.briefExpanded ? "收合全文" : "展開完整晨報"}</button>` : ""}
+          ${ov.full_markdown ? `
+            <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;">
+              <button id="btn-open-strategy" class="btn" style="background:var(--blue-soft);color:var(--blue-text);border-color:rgba(59,130,246,0.4);">📜 閱讀完整盤前戰略書</button>
+              <button id="btn-toggle-brief" class="btn">${state.briefExpanded ? "收合全文" : "原地展開"}</button>
+            </div>
+          ` : ""}
         </div>
-        ${state.briefExpanded && ov.full_markdown ? `<div class="brief-full">${esc(ov.full_markdown)}</div>` : ""}
+        ${state.briefExpanded && ov.full_markdown ? `<div id="brief-md-inline" class="brief-full" style="white-space:normal;"></div>` : ""}
       `;
+      const btnOpenStrat = document.getElementById("btn-open-strategy");
+      if (btnOpenStrat) btnOpenStrat.addEventListener("click", () => openStrategyModal(ov.full_markdown));
       const btnBrief = document.getElementById("btn-toggle-brief");
       if (btnBrief) btnBrief.addEventListener("click", () => { state.briefExpanded = !state.briefExpanded; renderBattleQueue(); });
+      const inlineMd = document.getElementById("brief-md-inline");
+      if (inlineMd && ov.full_markdown) renderSafeMarkdown(inlineMd, ov.full_markdown);
 
       const holdings = getFilteredHoldings();
       const checklist = loadChecklist();
@@ -1533,10 +1681,28 @@
         ${rulerHtml}
         ${tierHtml}
         ${styleBHtml}
+        ${h.wave_realized_log ? `
+          <div class="card" style="border-color:rgba(16,185,129,0.35);">
+            <div style="font-weight:700;color:var(--green-text);margin-bottom:4px;">💰 波段已實現戰果與淨成本安全墊</div>
+            <div style="font-size:13px;color:var(--text);">${esc(h.wave_realized_log)}</div>
+          </div>
+        ` : ""}
         <div class="card">
           <div style="font-weight:700;margin-bottom:6px;">📝 今日晨報逐股作戰指令</div>
           <div style="font-size:13px;white-space:pre-wrap;color:var(--text-muted);">${esc(h.ai_morning_note || "無特別指令")}</div>
+          ${h.tp_upgrade_proposal ? `<div class="alert-bar alert-green" style="margin-top:8px;font-size:12.5px;">💡 基本面目標價上修建議：${esc(h.tp_upgrade_proposal)}</div>` : ""}
+          ${h.capital_efficiency_verdict ? `<div style="margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--blue-soft);color:var(--blue-text);font-size:12.5px;">⚖️ <strong>資金效率與換股裁決</strong>：${esc(h.capital_efficiency_verdict)}</div>` : ""}
         </div>
+        ${(h.intraday_playbook && (h.intraday_playbook.bull_scenario || h.intraday_playbook.pullback_scenario || h.intraday_playbook.next_day_watch)) ? `
+          <div class="card">
+            <div style="font-weight:700;margin-bottom:6px;">🎭 盤中多情境應對劇本 (If-Then Playbook)${(h.limit_up_price && h.limit_down_price) ? ` <span class="badge badge-muted num" style="margin-left:6px;">漲停 ${fmtNum(h.limit_up_price, 2)} / 跌停 ${fmtNum(h.limit_down_price, 2)}</span>` : ""}</div>
+            <div class="playbook-box">
+              ${h.intraday_playbook.bull_scenario ? `<div class="playbook-item"><div class="playbook-lbl" style="color:var(--red-text);">🚀 強彈／突破情境</div><div>${esc(h.intraday_playbook.bull_scenario)}</div></div>` : ""}
+              ${h.intraday_playbook.pullback_scenario ? `<div class="playbook-item"><div class="playbook-lbl" style="color:var(--green-text);">🛡️ 遇壓拉回／回補情境</div><div>${esc(h.intraday_playbook.pullback_scenario)}</div></div>` : ""}
+              ${h.intraday_playbook.next_day_watch ? `<div class="playbook-item"><div class="playbook-lbl" style="color:var(--amber-text);">🔭 盤後檢驗點與明日預告</div><div>${esc(h.intraday_playbook.next_day_watch)}</div></div>` : ""}
+            </div>
+          </div>
+        ` : ""}
         ${calcHtml}
       `;
 
@@ -2119,6 +2285,12 @@
     document.getElementById("ticket-modal").addEventListener("click", (e) => {
       if (e.target.id === "ticket-modal") document.getElementById("ticket-modal").classList.add("hidden");
     });
+    document.getElementById("btn-close-strategy").addEventListener("click", () => {
+      document.getElementById("strategy-modal").classList.add("hidden");
+    });
+    document.getElementById("strategy-modal").addEventListener("click", (e) => {
+      if (e.target.id === "strategy-modal") document.getElementById("strategy-modal").classList.add("hidden");
+    });
     document.getElementById("drawer-backdrop").addEventListener("click", (e) => {
       if (e.target.id === "drawer-backdrop") closeDrawer();
     });
@@ -2259,6 +2431,7 @@
       const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
       if (e.key === "Escape") {
         document.getElementById("ticket-modal").classList.add("hidden");
+        document.getElementById("strategy-modal").classList.add("hidden");
         closeDrawer();
         return;
       }
