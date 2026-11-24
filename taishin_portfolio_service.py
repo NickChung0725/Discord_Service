@@ -4512,6 +4512,7 @@ async def run_morning_battle_ai_review(
     waves_by_sno: Mapping[str, Mapping[str, Any]] | None = None,
     reports_dir: Path | None = None,
     strategy_out: dict[str, Any] | None = None,
+    available_cash_info: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], str, str]:
     """Two-Stage Strategic Morning Brief (SASD v6.3.1):
     Stage 1 (`AI_MODEL_HIGH`): Free-form Markdown Strategic Report + Human-Readable Anchor Summary Table.
@@ -4846,10 +4847,56 @@ async def run_morning_battle_ai_review(
     if trend_5d_txt and trend_5d_txt not in regime_summary_block:
         regime_summary_block = f"{regime_summary_block}\n\n{trend_5d_txt}"
 
+    # Build explicit account capital structure summary (prevents AI from mistaking untracked holdings for idle cash!)
+    tracked_snos_set = {clean_leading_zero_code(m.get("stock_no", "")) for m in active_memories} - {""}
+    total_stock_mv = sum(_to_float(h.get("market_value"), 0.0) for h in agg_holdings.values())
+    tracked_stock_mv = sum(
+        _to_float(h.get("market_value"), 0.0)
+        for sno_k, h in agg_holdings.items()
+        if sno_k in tracked_snos_set
+    )
+    untracked_stock_mv = max(0.0, total_stock_mv - tracked_stock_mv)
+    untracked_count = sum(1 for sno_k in agg_holdings if sno_k not in tracked_snos_set)
+    tracked_mv_pct = (tracked_stock_mv / total_stock_mv * 100.0) if total_stock_mv > 0 else 0.0
+    untracked_mv_pct = (untracked_stock_mv / total_stock_mv * 100.0) if total_stock_mv > 0 else 0.0
+
+    cash_twd = (available_cash_info or {}).get("cash_twd")
+    cash_source = str((available_cash_info or {}).get("source") or "UNAVAILABLE")
+    capital_lines: list[str] = [
+        "#### 💰 帳戶真實資金與股票部位結構（必讀，嚴禁誤判現金水位）",
+        f"- **總股票庫存市值**：`NT$ {int(round(total_stock_mv)):,}` 元（共 `{len(agg_holdings)}` 檔）",
+        f"  * 🎯 波段記憶追蹤池：`{len(active_memories)}` 檔，市值 `NT$ {int(round(tracked_stock_mv)):,}` 元（佔總股票市值 **`{tracked_mv_pct:.1f}%`**）",
+        f"  * 📦 長投／其他未追蹤股票庫存：`{untracked_count}` 檔，市值 `NT$ {int(round(untracked_stock_mv)):,}` 元（佔總股票市值 **`{untracked_mv_pct:.1f}%`**）",
+    ]
+    if isinstance(cash_twd, (int, float)) and cash_twd >= 0:
+        cash_int = int(round(cash_twd))
+        total_assets = total_stock_mv + cash_int
+        stock_asset_pct = (total_stock_mv / total_assets * 100.0) if total_assets > 0 else 0.0
+        cash_asset_pct = (cash_int / total_assets * 100.0) if total_assets > 0 else 0.0
+        src_label = "台新 API 實時查詢" if cash_source.startswith("SDK_") else "使用者手動設定 (TAISHIN_AVAILABLE_CASH_TWD)"
+        capital_lines.append(
+            f"- **💵 手頭可用現金餘額**：**`NT$ {cash_int:,}` 元**（來源：{src_label}）｜"
+            f"總資產（股票＋現金）`NT$ {int(round(total_assets)):,}` 元｜"
+            f"**真實股票總水位 `{stock_asset_pct:.1f}%` ／ 可用現金水位 `{cash_asset_pct:.1f}%`**"
+        )
+        capital_lines.append(
+            "- ⚠️ **資金紀律聲明**：下方各檔持股之「佔總持倉權重」係佔【總股票庫存市值】之比例，其餘為長投／自主持股（非現金）；"
+            "評估加碼、開新倉或換股時，請嚴格以實際「手頭可用現金餘額」與「真實股票總水位」做資金調度！"
+        )
+    else:
+        capital_lines.append(
+            "- **💵 手頭可用現金餘額**：`系統未取得銀行交割戶餘額`（台新帳戶非分戶帳或未設定 `TAISHIN_AVAILABLE_CASH_TWD`）"
+        )
+        capital_lines.append(
+            "- ⚠️ **嚴格防幻覺聲明**：下方各檔持股之「佔總持倉權重」係佔【總股票庫存市值】之比例，其餘 "
+            f"`{untracked_mv_pct:.1f}%` 為**長投／其他股票庫存，絕非閒置現金**！嚴禁自行減法推論投資人手握大量閒置現金！"
+        )
+
     strategy_prompt = TAISHIN_MORNING_STRATEGY_PROMPT.format(
         market_regime_summary=regime_summary_block,
         macro_context_block=str(macro_context.get("prompt_block") or "無國際盤快取"),
         fresh_top_picks_block=resolved_picks_block,
+        portfolio_capital_summary="\n".join(capital_lines),
         tracked_holdings_dossier="\n\n".join(dossier_blocks),
     )
 
@@ -5489,6 +5536,10 @@ def run_morning_brief(
             )
             waves_by_sno = compute_holding_waves_from_statements(core["combined_statements"])
             eff_reports_dir = reports_dir or Path(os.getenv("FINMIND_REPORTS_DIR") or "finmind_reports")
+            try:
+                available_cash_info = client.fetch_available_cash_safe()
+            except Exception:  # noqa: BLE001
+                available_cash_info = {"cash_twd": None, "source": "UNAVAILABLE"}
             reviewed_active, decisions_by_sno, battle_headline, model_version = asyncio.run(
                 run_morning_battle_ai_review(
                     active_memories,
@@ -5504,6 +5555,7 @@ def run_morning_brief(
                     waves_by_sno=waves_by_sno,
                     reports_dir=eff_reports_dir,
                     strategy_out=strategy_out,
+                    available_cash_info=available_cash_info,
                 )
             )
             ai_called = True

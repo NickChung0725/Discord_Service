@@ -745,6 +745,63 @@ class TaishinClient:
             raise
         return extract_record_list(raw)
 
+    def fetch_available_cash_safe(self) -> dict[str, Any]:
+        """Non-blocking available cash query for Morning Brief AI context only.
+
+        Probes SDK `bank_balance` (分戶帳) / `skbank_balance` safely (swallowing `OA0022` or any
+        non-sub-account error), then falls back to optional `.env` `TAISHIN_AVAILABLE_CASH_TWD`.
+        Never raises and never writes to Google Sheets or GitHub Pages.
+        """
+        acc = None
+        try:
+            acc = self.ensure_logged_in()
+        except Exception:  # noqa: BLE001
+            acc = None
+
+        if acc is not None:
+            for method_name in ("bank_balance", "skbank_balance", "bank_remain"):
+                fn = resolve_sdk_method(self.sdk, method_name)
+                if fn is None:
+                    continue
+                try:
+                    try:
+                        raw = fn(acc)
+                    except TypeError:
+                        raw = fn()
+                    records = extract_record_list(raw)
+                    for rec in records:
+                        for key in (
+                            "available_balance",
+                            "usable_balance",
+                            "bank_balance",
+                            "balance",
+                            "remain_amt",
+                            "cash",
+                            "amount",
+                        ):
+                            val = rec.get(key)
+                            if val not in (None, ""):
+                                try:
+                                    num = int(round(float(str(val).replace(",", "").strip())))
+                                    if num >= 0:
+                                        return {"cash_twd": num, "source": f"SDK_{method_name.upper()}"}
+                                except ValueError:
+                                    continue
+                except Exception as err:  # noqa: BLE001
+                    logger.debug("Non-blocking %s query skipped (%s)", method_name, err)
+                    continue
+
+        env_raw = (os.getenv("TAISHIN_AVAILABLE_CASH_TWD") or "").strip().replace(",", "")
+        if env_raw:
+            try:
+                num = int(round(float(env_raw)))
+                if num >= 0:
+                    return {"cash_twd": num, "source": "ENV_MANUAL"}
+            except ValueError:
+                pass
+
+        return {"cash_twd": None, "source": "UNAVAILABLE"}
+
     # ----------------------------------------------------------------------- #
     # 0050 Intraday-Odd Order Execution Gate
     # ----------------------------------------------------------------------- #

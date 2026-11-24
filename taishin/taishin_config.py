@@ -473,7 +473,9 @@ TAISHIN_MORNING_STRATEGY_PROMPT = """你是一位掌管實戰部位、風格靈�
 ### 二之二、昨晚最新《AI 嚴選強勢潛力新星》（供機會成本對照、換股 PK 與確認既有持股是否再度蟬聯嚴選榜）
 {fresh_top_picks_block}
 
-### 三、追蹤中波段持股「建倉記憶卡 ＋ 已實現戰果 ＋ 價位階梯 ＋ 滾動戰略日記 ＋ 近 5 日價量籌碼與下檔支撐」
+### 三、帳戶資金結構與追蹤中波段持股「建倉記憶卡 ＋ 已實現戰果 ＋ 價位階梯 ＋ 滾動戰略日記 ＋ 近 5 日價量籌碼與下檔支撐」
+{portfolio_capital_summary}
+
 {tracked_holdings_dossier}
 
 ---

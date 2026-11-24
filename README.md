@@ -204,6 +204,8 @@ TAISHIN_ALERT_CHANNEL_ID=
 # 交易安全開關與 0050 每週不定期定額設定 (預設 false 僅推播訊號不真下單)
 TAISHIN_ENABLE_TRADING=false
 DCA_0050_WEEKLY_BUDGET_TWD=10000
+# 選填：若台新非分戶帳導致 API 無法查交割餘額 (OA0022)，可手動填入目前手頭可用現金（新台幣）供 08:15 晨報 AI 評估資金水位
+TAISHIN_AVAILABLE_CASH_TWD=
 
 # 7. MY_STOCK 私人加密戰情指揮中心設定 (SASD v6.3.0，模式 B 端到端加密)
 MY_STOCK_PUBLISH_ENABLED=true

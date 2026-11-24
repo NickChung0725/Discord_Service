@@ -1938,6 +1938,37 @@ class TestTaishinNova(unittest.TestCase):
             "若跳空直攻 667 元漲停鎖死則續抱；若開板爆量逾 2,600 張留長上影則先減碼鎖利。",
         )
         self.assertIn("2006 東和鋼鐵", decisions["6526"]["capital_efficiency_verdict"])
+        # Verify anti-hallucination capital structure summary when cash is unavailable
+        self.assertIn("帳戶真實資金與股票部位結構", calls[0]["prompt"])
+        self.assertIn("絕非閒置現金", calls[0]["prompt"])
+
+    def test_v631_fetch_available_cash_safe_and_capital_summary_injection(self) -> None:
+        # Case 1: SDK returns bank_balance cleanly
+        fake_sdk_ok = MagicMock()
+        fake_sdk_ok.login.return_value = [{"account": "9876543"}]
+        fake_sdk_ok.bank_balance.return_value = [{"available_balance": "350000"}]
+        creds = TaishinCredentials("A123456789", "pw", "certs/taishin_cert.pfx", "cert_pw", "9876543")
+        client_ok = TaishinClient(sdk=fake_sdk_ok, credentials=creds)
+        res_ok = client_ok.fetch_available_cash_safe()
+        self.assertEqual(res_ok["cash_twd"], 350000)
+        self.assertEqual(res_ok["source"], "SDK_BANK_BALANCE")
+
+        # Case 2: SDK raises OA0022 -> gracefully falls back to env TAISHIN_AVAILABLE_CASH_TWD without raising!
+        fake_sdk_err = MagicMock()
+        fake_sdk_err.login.return_value = [{"account": "9876543"}]
+        fake_sdk_err.bank_balance.side_effect = RuntimeError("OA0022: 查詢作業錯誤")
+        fake_sdk_err.skbank_balance.side_effect = RuntimeError("OA0022: 查詢作業錯誤")
+        fake_sdk_err.bank_remain.side_effect = RuntimeError("OA0022: 查詢作業錯誤")
+        client_err = TaishinClient(sdk=fake_sdk_err, credentials=creds)
+        with patch.dict(os.environ, {"TAISHIN_AVAILABLE_CASH_TWD": "280,000"}):
+            res_env = client_err.fetch_available_cash_safe()
+        self.assertEqual(res_env["cash_twd"], 280000)
+        self.assertEqual(res_env["source"], "ENV_MANUAL")
+
+        with patch.dict(os.environ, {"TAISHIN_AVAILABLE_CASH_TWD": ""}):
+            res_none = client_err.fetch_available_cash_safe()
+        self.assertIsNone(res_none["cash_twd"])
+        self.assertEqual(res_none["source"], "UNAVAILABLE")
 
 
 if __name__ == "__main__":
