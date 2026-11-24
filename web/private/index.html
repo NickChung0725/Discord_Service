@@ -321,6 +321,9 @@
 
     /* Desktop Perf Tab Switcher */
     .main-view-tabs { display: inline-flex; gap: 6px; }
+    .mobile-only { display: none !important; }
+    .top-context { display: flex; flex-direction: column; gap: 8px; }
+    .topbar-extra { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
     /* Responsive <= 768px */
     @media (max-width: 768px) {
@@ -329,7 +332,25 @@
       .drawer { width: 100vw; border-left: none; }
       .mobile-nav { display: block; }
       .desktop-only { display: none !important; }
-      .container { padding: 10px 10px 86px; }
+      .mobile-only { display: inline-flex !important; }
+      .topbar-inner { padding: 8px 10px; gap: 6px; }
+      .topbar-row { flex-wrap: nowrap; gap: 6px; }
+      .brand { gap: 6px; min-width: 0; flex-wrap: nowrap; }
+      .brand h1 { font-size: 16px; white-space: nowrap; }
+      .brand #timestamp-meta { display: none; }
+      .brand .badge { font-size: 11px; padding: 2px 6px; }
+      .controls { gap: 4px; flex-wrap: nowrap; flex-shrink: 0; }
+      .controls .btn { height: 30px; padding: 0 8px; font-size: 12px; }
+      .topbar-extra {
+        display: none; width: 100%; padding-top: 6px; margin-top: 2px;
+        border-top: 1px solid var(--border);
+      }
+      .topbar-extra.mobile-open { display: flex; }
+      .topbar-extra .btn, .topbar-extra .ctrl-select { height: 32px; font-size: 12px; }
+      .gap-bar { padding: 6px 10px; gap: 6px; font-size: 12px; }
+      .gap-bar input[type="range"] { flex: 1; min-width: 100px; width: auto; }
+      .macro-strip { padding: 6px 8px; gap: 5px; font-size: 11.5px; }
+      .container { padding: 10px 10px 86px; gap: 12px; }
       .kpi-val { font-size: 17px; }
     }
     /* Safe Markdown Strategic Reader (SASD v6.3.1) */
@@ -393,24 +414,36 @@
               <button class="btn btn-primary" data-main-view="battle">🎯 戰情總覽</button>
               <button class="btn" data-main-view="perf">📈 績效與風控</button>
             </div>
-            <button id="btn-order-ticket" class="btn btn-primary" title="快捷鍵 O">📋 掛單票匣</button>
-            <button id="btn-boss-key" class="btn" title="快捷鍵 H">👁️ 老闆鍵</button>
-            <button id="btn-privacy-toggle" class="btn" title="切換分頁或閒置時自動防窺">🛡️ 防窺</button>
-            <select id="history-date-select" class="ctrl-select" title="切換近 14 日歷史晨報"></select>
-            <button id="btn-refresh" class="btn">🔄 重整</button>
-            <button id="btn-lock" class="btn btn-danger">🔒 上鎖</button>
+            <button id="btn-top-strategy" class="btn hidden" style="background:var(--blue-soft);color:var(--blue-text);border-color:rgba(59,130,246,0.4);" title="開啟今日 Stage 1 完整盤前戰略書">📜 戰略書</button>
+            <button id="btn-order-ticket" class="btn btn-primary" title="快捷鍵 O">📋 <span class="desktop-only">掛單</span>票匣</button>
+            <button id="btn-mobile-tools" class="btn mobile-only" title="展開工具列" aria-expanded="false">☰</button>
           </div>
         </div>
+        <div id="topbar-extra" class="topbar-extra">
+          <span id="timestamp-meta-mobile" class="mobile-only" style="width:100%;font-size:11.5px;color:var(--text-muted);"></span>
+          <button id="btn-boss-key" class="btn" title="快捷鍵 H">👁️ 老闆鍵</button>
+          <button id="btn-privacy-toggle" class="btn" title="切換分頁或閒置時自動防窺">🛡️ 防窺</button>
+          <select id="history-date-select" class="ctrl-select" title="切換近 14 日歷史晨報"></select>
+          <button id="btn-refresh" class="btn">🔄 重整</button>
+          <button id="btn-lock" class="btn btn-danger">🔒 上鎖</button>
+        </div>
+      </div>
+    </header>
 
+    <main class="container">
+      <!-- Scrollable Top Context (Alerts, Gap Stress Slider, Macro Strip) -->
+      <section id="sec-alerts" class="top-context">
         <div id="stale-banner" class="alert-bar alert-amber hidden"></div>
         <div id="settlement-banner" class="hidden"></div>
+      </section>
 
+      <section id="sec-macro-gap" class="top-context">
         <!-- Gap Stress-Test Slider -->
         <div class="gap-bar">
-          <span style="font-weight:700;color:var(--amber-text);">⚡ 早盤跳空壓力測試：</span>
+          <span style="font-weight:700;color:var(--amber-text);">⚡ 跳空試算：</span>
           <input id="gap-slider" type="range" min="-5" max="5" step="0.5" value="0" />
-          <span id="gap-val" class="num" style="font-weight:700;min-width:52px;">0.0%</span>
-          <button id="btn-gap-reset" class="btn" style="height:26px;font-size:11.5px;">重置昨收</button>
+          <span id="gap-val" class="num" style="font-weight:700;min-width:46px;">0.0%</span>
+          <button id="btn-gap-reset" class="btn" style="height:26px;font-size:11.5px;">重置</button>
           <span id="gap-impact-summary" style="color:var(--text-muted);"></span>
         </div>
 
@@ -419,10 +452,7 @@
           <div id="macro-strip" class="macro-strip"></div>
           <div id="macro-detail" class="macro-detail hidden"></div>
         </div>
-      </div>
-    </header>
-
-    <main class="container">
+      </section>
       <!-- View A: Battle + Holdings + 0050 -->
       <div id="view-battle-wrap">
         <!-- Zone 2: Pool Switch & KPIs -->
@@ -902,8 +932,16 @@
       };
       const pb = document.getElementById("phase-badge");
       pb.textContent = phaseLabels[d.phase] || d.phase || "READY";
-      document.getElementById("timestamp-meta").textContent =
-        `價格基準日：${d.price_as_of_date || "--"} ｜ 更新：${(d.generated_at || "").replace("T", " ").slice(0, 16)}`;
+      const tsText = `價格基準日：${d.price_as_of_date || "--"} ｜ 更新：${(d.generated_at || "").replace("T", " ").slice(0, 16)}`;
+      document.getElementById("timestamp-meta").textContent = tsText;
+      const tsMobile = document.getElementById("timestamp-meta-mobile");
+      if (tsMobile) tsMobile.textContent = tsText;
+
+      const btnTopStrat = document.getElementById("btn-top-strategy");
+      if (btnTopStrat) {
+        const hasMd = Boolean(d.morning_brief_overview && d.morning_brief_overview.full_markdown);
+        btnTopStrat.classList.toggle("hidden", !hasMd);
+      }
 
       // Stale data warning on weekday
       const staleEl = document.getElementById("stale-banner");
@@ -955,6 +993,11 @@
         sBanner.className = "hidden";
         sBanner.innerHTML = "";
       }
+      const secAlerts = document.getElementById("sec-alerts");
+      if (secAlerts) {
+        const hasAlert = !staleEl.classList.contains("hidden") || !sBanner.classList.contains("hidden");
+        secAlerts.classList.toggle("hidden", !hasAlert);
+      }
 
       // Macro strip
       const m = d.macro || {};
@@ -1001,7 +1044,7 @@
       if (state.gapPct !== 0) {
         simEl.innerHTML = `模擬開盤 <strong>${fmtPct(state.gapPct)}</strong> ➔ 🔴 P0停損: <strong>${p0Cnt}</strong> ｜ 🟢 P1停利: <strong>${p1Cnt}</strong> ｜ 🟡 P2主動: <strong>${p2Cnt}</strong>`;
       } else {
-        simEl.textContent = "拖曳滑桿可依各股 60 日 Beta 即時模擬開盤跳空觸價預警";
+        simEl.innerHTML = `<span class="desktop-only">拖曳滑桿可依各股 60 日 Beta 即時模擬開盤跳空觸價預警</span>`;
       }
       const ovKeys = Object.keys(state.priceOverrides);
       const ovHint = document.getElementById("override-hint");
@@ -1171,18 +1214,16 @@
       const ov = d.morning_brief_overview || {};
       const briefEl = document.getElementById("brief-card");
       briefEl.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
-          <div style="flex:1;min-width:220px;">
-            <div style="font-size:12px;color:var(--blue-text);font-weight:700;margin-bottom:3px;">🧭 AI 盤前戰略總綱摘要</div>
-            <div>${esc(ov.headline_summary || "尚無晨報摘要")}</div>
-          </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+          <div style="font-size:12.5px;color:var(--blue-text);font-weight:700;">🧭 AI 盤前戰略總綱摘要</div>
           ${ov.full_markdown ? `
             <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;">
-              <button id="btn-open-strategy" class="btn" style="background:var(--blue-soft);color:var(--blue-text);border-color:rgba(59,130,246,0.4);">📜 閱讀完整盤前戰略書</button>
-              <button id="btn-toggle-brief" class="btn">${state.briefExpanded ? "收合全文" : "原地展開"}</button>
+              <button id="btn-open-strategy" class="btn" style="height:28px;font-size:12px;background:var(--blue-soft);color:var(--blue-text);border-color:rgba(59,130,246,0.4);">📜 閱讀完整盤前戰略書</button>
+              <button id="btn-toggle-brief" class="btn" style="height:28px;font-size:12px;">${state.briefExpanded ? "收合全文" : "原地展開"}</button>
             </div>
           ` : ""}
         </div>
+        <div>${esc(ov.headline_summary || "尚無晨報摘要")}</div>
         ${state.briefExpanded && ov.full_markdown ? `<div id="brief-md-inline" class="brief-full" style="white-space:normal;"></div>` : ""}
       `;
       const btnOpenStrat = document.getElementById("btn-open-strategy");
@@ -2102,12 +2143,14 @@
       const isMobile = window.innerWidth <= 768;
       const battleWrap = document.getElementById("view-battle-wrap");
       const perfWrap = document.getElementById("view-perf-wrap");
+      const secMacroGap = document.getElementById("sec-macro-gap");
       const secKpi = document.getElementById("sec-kpi");
       const secQueue = document.getElementById("sec-queue");
       const secHoldings = document.getElementById("sec-holdings");
       const secZone5 = document.getElementById("sec-zone5");
 
       if (isMobile) {
+        if (secMacroGap) secMacroGap.classList.toggle("hidden", state.mobileTab !== "battle");
         if (state.mobileTab === "perf") {
           battleWrap.classList.add("hidden");
           perfWrap.classList.remove("hidden");
@@ -2127,6 +2170,7 @@
         secHoldings.classList.remove("hidden");
         secZone5.classList.remove("hidden");
         const isPerf = state.mainView === "perf";
+        if (secMacroGap) secMacroGap.classList.toggle("hidden", isPerf);
         battleWrap.classList.toggle("hidden", isPerf);
         perfWrap.classList.toggle("hidden", !isPerf);
         document.querySelectorAll("[data-main-view]").forEach((b) => {
@@ -2279,6 +2323,18 @@
       showToast(next ? "🛡️ 已開啟自動防窺（離開60秒或閒置5分鐘自動遮罩）" : "已關閉自動防窺保護");
     });
     document.getElementById("btn-order-ticket").addEventListener("click", openOrderTicketModal);
+    document.getElementById("btn-top-strategy").addEventListener("click", () => {
+      const md = state.latest && state.latest.morning_brief_overview && state.latest.morning_brief_overview.full_markdown;
+      openStrategyModal(md || "");
+    });
+    document.getElementById("btn-mobile-tools").addEventListener("click", () => {
+      const extra = document.getElementById("topbar-extra");
+      const btn = document.getElementById("btn-mobile-tools");
+      if (!extra || !btn) return;
+      const open = extra.classList.toggle("mobile-open");
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      btn.textContent = open ? "✕" : "☰";
+    });
     document.getElementById("btn-close-ticket").addEventListener("click", () => {
       document.getElementById("ticket-modal").classList.add("hidden");
     });
