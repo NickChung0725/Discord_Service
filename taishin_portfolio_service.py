@@ -1112,7 +1112,11 @@ def load_public_deep_fundamental_context(
 
     try:
         try:
-            from quant.fundamental_cache import FundamentalCacheManager
+            from quant.fundamental_cache import (
+                FundamentalCacheManager,
+                should_bypass_quarterly_cache,
+                should_bypass_revenue_cache,
+            )
             from quant.fundamental_analyzer import FundamentalAnalyzer
             from quant.finmind_stock_scanner import (
                 MARGIN_CALENDAR_NOTE,
@@ -1127,7 +1131,11 @@ def load_public_deep_fundamental_context(
             )
             from quant.taxonomy_service import TaxonomyService
         except ImportError:
-            from fundamental_cache import FundamentalCacheManager  # type: ignore[no-redef]
+            from fundamental_cache import (  # type: ignore[no-redef]
+                FundamentalCacheManager,
+                should_bypass_quarterly_cache,
+                should_bypass_revenue_cache,
+            )
             from fundamental_analyzer import FundamentalAnalyzer  # type: ignore[no-redef]
             from finmind_stock_scanner import (  # type: ignore[no-redef]
                 MARGIN_CALENDAR_NOTE,
@@ -1211,8 +1219,23 @@ def load_public_deep_fundamental_context(
             div_df = cache._read_stock_rows(cache._get_worksheet("06_Dividend_Policy"), sid)  # noqa: SLF001
             chip_df = cache._read_stock_rows(cache._get_worksheet("07_Chip_Summary"), sid)  # noqa: SLF001
 
-            # Self-healing sync if a tracked holding is missing quarterly wide metrics or monthly revenue in public cache
-            if (wide_df.empty or rev_df.empty) and hasattr(cache, "check_and_sync_stock"):
+            # Self-healing safety net: sync if a tracked holding is missing OR stale in public cache
+            # (0-cost in-memory watermark check when 22:45 sync-memory already kept data fresh).
+            cached_qtr = (
+                str(wide_df.sort_values("raw_date").iloc[-1].get("year_qtr") or "").strip()
+                if not wide_df.empty and "raw_date" in wide_df.columns
+                else None
+            )
+            cached_rev_ym = (
+                str(rev_df.sort_values("raw_date").iloc[-1].get("rev_ym") or "").strip()
+                if not rev_df.empty and "raw_date" in rev_df.columns
+                else None
+            )
+            is_stale_fin = (not wide_df.empty) and should_bypass_quarterly_cache(cached_qtr, today, stock_id=sid)
+            is_stale_rev = (not rev_df.empty) and should_bypass_revenue_cache(cached_rev_ym, today, stock_id=sid)
+            if (wide_df.empty or rev_df.empty or is_stale_fin or is_stale_rev) and hasattr(
+                cache, "check_and_sync_stock"
+            ):
                 try:
                     cache.check_and_sync_stock(sid)
                     wide_df = cache._read_stock_rows(cache._get_worksheet("05_AI_Metrics_Wide"), sid)  # noqa: SLF001

@@ -91,6 +91,60 @@ class FundamentalConfigTests(unittest.TestCase):
         )
         clear_live_check_timestamps()
 
+    def test_upsert_delta_uses_insert_rows_and_a1_table_range(self) -> None:
+        from fundamental_cache import FundamentalCacheManager
+
+        mgr = FundamentalCacheManager.__new__(FundamentalCacheManager)
+        mgr._headers_cache = {"02_Income_Statement": ["pk_key", "stock_id", "raw_date"]}
+        mgr._records_cache = {"02_Income_Statement": (9e12, [])}
+        mgr._cache_ttl = 90.0
+        mgr.batch_mode = False
+
+        captured: list[tuple[tuple, dict]] = []
+
+        class _DummyWS:
+            title = "02_Income_Statement"
+
+            def append_rows(self, *args, **kwargs):
+                captured.append((args, kwargs))
+
+            def batch_update(self, *args, **kwargs):
+                pass
+
+        df_delta = pd.DataFrame([{"pk_key": "3034_2026Q3", "stock_id": "3034", "raw_date": "2026-09-30"}])
+        mgr._upsert_delta(_DummyWS(), df_delta, "pk_key")
+
+        self.assertEqual(len(captured), 1)
+        _, kwargs = captured[0]
+        self.assertEqual(kwargs.get("value_input_option"), "USER_ENTERED")
+        self.assertEqual(kwargs.get("insert_data_option"), "INSERT_ROWS")
+        self.assertEqual(kwargs.get("table_range"), "A1")
+
+    def test_clear_basic_filters_on_managed_tabs(self) -> None:
+        from fundamental_cache import FundamentalCacheManager
+
+        mgr = FundamentalCacheManager.__new__(FundamentalCacheManager)
+        sent_bodies: list[dict] = []
+
+        class _DummySpreadsheet:
+            def fetch_sheet_metadata(self):
+                return {
+                    "sheets": [
+                        {"properties": {"title": "01_Monthly_Revenue", "sheetId": 101}, "basicFilter": {"range": {}}},
+                        {"properties": {"title": "04_Cash_Flow", "sheetId": 104}},
+                        {"properties": {"title": "User_Custom_Tab", "sheetId": 999}, "basicFilter": {"range": {}}},
+                    ]
+                }
+
+            def batch_update(self, body):
+                sent_bodies.append(body)
+
+        mgr._spreadsheet = _DummySpreadsheet()
+        mgr._clear_basic_filters_on_managed_tabs({})
+
+        self.assertEqual(len(sent_bodies), 1)
+        self.assertEqual(sent_bodies[0], {"requests": [{"clearBasicFilter": {"sheetId": 101}}]})
+
 
 if __name__ == "__main__":
     unittest.main()

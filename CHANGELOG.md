@@ -13,6 +13,10 @@
   * 修復 `parse_strategic_layout_json()` 漏解析 `action` 欄位（導致下游 `ai_action` 恆為空字串）與 `allocation_weight_pct: 0` 被 Python `or` 誤覆寫為均分權重之 Bug，確保 AI #3 主動喊出 `WAIT_OBSERVE` + `0%`（如大盤熔斷）時 100% 生效。
   * `parse_quality_selection_json()` 無顯式 `rank` 時自動依 `quality_score` 降冪排序；`parse_strategic_layout_json()` 自動將尾端 `final_ranking_and_allocation` 合併至各股（完全向後相容舊版內嵌欄位）；`execute_v61_quality_and_strategic_pipeline()` 將 AI #2 的 `bear_case_and_rebuttal` 傳遞至 AI #3 Prompt 並寫入 `audit_rec["Bear_Case_Warning"]` / `RR_Math_Rationale` / `Sizing_Note`，並於最終輸出做確定性重排（**可執行買進優先於 `WAIT_OBSERVE` ➔ 權重降冪 ➔ AI #3 尾端名次 ➔ 分數降冪**），避免 `0%` 觀望股佔據 `#1`。
 * **補充單元測試（[`tests/test_rebound_v6.py`](/tests/test_rebound_v6.py)）**：新增 AI #2 / AI #3 陣列外統一排名配資 Schema 斷言、無 `rank` 自動依分排序、`action=WAIT_OBSERVE` 與 `0%` 權重保留、反方辯證端到端接線及多股最終確定性重排回歸測試。
+* **修復 Google Sheets `basicFilter` 導致財報快取 `append_rows` 寫入錯位與漏抓 Q3 財報（[`quant/fundamental_cache.py`](/quant/fundamental_cache.py)、[`taishin_portfolio_service.py`](/taishin_portfolio_service.py)、[`tests/test_fundamental_cache.py`](/tests/test_fundamental_cache.py)）**：
+  * `_upsert_delta()` 呼叫 `worksheet.append_rows()` 時明確傳入 `insert_data_option="INSERT_ROWS"` 與 `table_range="A1"`，防止預設 `OVERWRITE` 搭配篩選器造成新增列寫入錯位或截斷。
+  * `ensure_workbook_schema()` 新增 `_clear_basic_filters_on_managed_tabs()`，若受管財報快取分頁被手動開啟 Google Sheets 基本篩選器 (`basicFilter`)，於寫入前自動發送 `clearBasicFilter` 清除以保護寫入完整性。
+  * `load_public_deep_fundamental_context()` 晨報自癒保險絲擴充「期別過期檢核」（`should_bypass_quarterly_cache` / `should_bypass_revenue_cache`）：22:45 保鮮已更新時為 0 次 API 呼叫，僅於快取空白或落後應公告季報／月營收水位時才觸發單股補抓。
 * **優化 `MY_STOCK` 手機版頂部固定列排版與 Stage 1 戰略書入口（[`web/private/index.html`](/web/private/index.html)）**：將「早盤跳空壓力測試滑桿」、「國際盤／台股燈號條」與警示橫幅移出 `position: sticky` 頂部列改為自然捲動區，手機版頂部固定列瘦身為單行約 `48px`（次要工具收納至 `☰` 展開列），徹底解決手機畫面被佔用三分之二的問題；並於頂部導覽列新增 `📜 戰略書` 快捷鈕，同時將 `#brief-card` 內的 `📜 閱讀完整盤前戰略書` / `原地展開` 按鈕移至卡片頂端，一眼可見。
 
 ---

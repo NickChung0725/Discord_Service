@@ -577,7 +577,45 @@ class FundamentalCacheManager:
             else:
                 self._headers_cache[tab_name] = first_row
 
+        self._clear_basic_filters_on_managed_tabs(existing_tabs)
         self._schema_ensured = True
+
+    def _clear_basic_filters_on_managed_tabs(self, existing_tabs: Mapping[str, gspread.Worksheet]) -> None:
+        """若公用財報快取分頁被手動開啟 Google Sheets 基本篩選器 (basicFilter)，自動清除以避免 append_rows 寫入錯位或截斷。"""
+        managed_titles = set(SHEET_SCHEMAS.keys())
+        fetch_meta = getattr(self._spreadsheet, "fetch_sheet_metadata", None)
+        batch_update = getattr(self._spreadsheet, "batch_update", None)
+        if not callable(fetch_meta) or not callable(batch_update):
+            return
+        try:
+            meta = self._gspread_call(fetch_meta)
+        except Exception as err:  # noqa: BLE001
+            logger.debug("Skip basicFilter inspection due to metadata error: %s", err)
+            return
+        if not isinstance(meta, Mapping):
+            return
+
+        clear_requests: list[dict[str, Any]] = []
+        cleared_titles: list[str] = []
+        for sheet in meta.get("sheets", []) or []:
+            props = sheet.get("properties") or {}
+            title = str(props.get("title") or "").strip()
+            sheet_id = props.get("sheetId")
+            if title in managed_titles and "basicFilter" in sheet and sheet_id is not None:
+                clear_requests.append({"clearBasicFilter": {"sheetId": sheet_id}})
+                cleared_titles.append(title)
+
+        if not clear_requests:
+            return
+
+        try:
+            self._gspread_call(batch_update, {"requests": clear_requests})
+            logger.warning(
+                "Cleared active Google Sheets basicFilter on managed cache tabs %s to protect append_rows integrity.",
+                cleared_titles,
+            )
+        except Exception as err:  # noqa: BLE001
+            logger.warning("Failed to clear basicFilter on tabs %s: %s", cleared_titles, err)
 
     def check_and_sync_stock(self, stock_id: str, force_refresh: bool = False) -> SyncResult:
         normalized_id = stock_id.strip()
@@ -2013,7 +2051,13 @@ class FundamentalCacheManager:
             self._gspread_call(worksheet.batch_update, batch_updates, value_input_option="USER_ENTERED")
 
         if append_rows:
-            self._gspread_call(worksheet.append_rows, append_rows, value_input_option="USER_ENTERED")
+            self._gspread_call(
+                worksheet.append_rows,
+                append_rows,
+                value_input_option="USER_ENTERED",
+                insert_data_option="INSERT_ROWS",
+                table_range="A1",
+            )
 
         if self.batch_mode:
             self._patch_records_cache(title, headers, batch_updates_by_row, append_rows)
