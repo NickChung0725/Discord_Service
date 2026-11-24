@@ -1,6 +1,6 @@
 {
   "date": "2026-11-12",
-  "last_verified_date": "2026-11-23",
+  "last_verified_date": "2026-11-24",
   "market_overview": {
     "light": "🔴紅燈 (空頭防禦警戒)",
     "regime_state": "RED_DEFENSIVE",
@@ -57,8 +57,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": true,
-            "trading_days_elapsed": 7,
-            "latest_close": 1120.0,
+            "trading_days_elapsed": 8,
+            "latest_close": 1150.0,
             "period_low": 1065.0,
             "period_high": 1405.0,
             "effective_entry_price": 1381.87,
@@ -90,8 +90,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": true,
-            "trading_days_elapsed": 7,
-            "latest_close": 44.2,
+            "trading_days_elapsed": 8,
+            "latest_close": 48.6,
             "period_low": 43.3,
             "period_high": 48.95,
             "effective_entry_price": 47.13,
@@ -138,8 +138,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": true,
-            "trading_days_elapsed": 7,
-            "latest_close": 234.5,
+            "trading_days_elapsed": 8,
+            "latest_close": 245.0,
             "period_low": 223.5,
             "period_high": 279.5,
             "effective_entry_price": 275.37,
@@ -148,7 +148,7 @@
             "outcome_status": "STOP_LOSS_HIT",
             "net_return_10d_pct": -11.84,
             "entry_result_badge": "✅ T+1 進場成交 (均價 275.4)",
-            "outcome_badge": "🛡️ 成功避開下跌 (-12.7%)",
+            "outcome_badge": "🛡️ 成功避開下跌 (-8.8%)",
             "mfe_pct": 1.5,
             "mae_pct": -18.84,
             "pain_badge": "📉 最大套牢 -18.8% / 最高浮盈 +1.5%",

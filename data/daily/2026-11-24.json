@@ -1,0 +1,88 @@
+{
+  "date": "2026-11-24",
+  "last_verified_date": "2026-11-24",
+  "market_overview": {
+    "light": "🔴紅燈 (空頭防禦警戒)",
+    "regime_state": "RED_DEFENSIVE",
+    "recommended_exposure_pct": 35,
+    "summary": "🔴紅燈｜TAIEX 收盤 40,122.35（17MA 41,210.13／45MA 45,194.51／117MA 45,170.59／189MA 資料不足）— 空頭防禦警戒（跌破 45MA 且季線下彎，嚴格過濾基本面與現金流）｜💳 大盤融資 5,823.5 億（單日 +207.3 億 / 5日 -1098.8 億｜⚡ 融資斷頭宣洩（留意止穩黃金坑））｜🛡️ 建議總持倉上限：35% ~ 50%",
+    "us_market": ""
+  },
+  "strategies": [
+    {
+      "id": "alignment_2130",
+      "tab_name": "🔥 21:30 右側順勢強勢股",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 2,
+      "analyzed_count": 2,
+      "ai_model": "gemini-4-neon",
+      "strategy_comment": "美東11/23費半飆14.03%、台積電ADR漲14.08%已反映於今日(11/24)台股大漲8.99%收40,122.35點，不重複計價；然11/24 VIX反彈11.04%至29.56逼近30警戒線，且美國擬祭新關稅、美光與Anthropic盤前下挫。大盤仍處17MA/45MA下方空頭格局，雖近5日融資大減1,098.8億宣洩籌碼，今日回補207.3億，總倉位嚴控35%分批低接。",
+      "recommended_exposure_pct": 35,
+      "has_false_negative_alert": false,
+      "top_picks": [
+        {
+          "rank": 1,
+          "stock_id": "2597",
+          "stock_name": "潤弘",
+          "sector": "營建工程與預鑄建築",
+          "score": 84,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": 50.0,
+          "tactical_type": "🎯 強勢股拉回三階低接（依附17MA/45MA與大量區）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2597/technical-chart",
+            "war_room": "charts/2597_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 192.0,
+            "chase_limit": 184.0,
+            "weighted_avg_entry": 177.9,
+            "tier1": {
+              "price": 183.5,
+              "text": "【第1批 30% 試單】180.50~183.50元（中值182.00）；鎖定MA3(181.33)、60日POC(181.00)、0.236回檔(183.50)與11/24紅K低點上緣，待量縮止穩且K9修正不破50觸發。"
+            },
+            "tier2": {
+              "price": 178.5,
+              "text": "【第2批 40% 核心】174.50~178.50元（中值176.50）；鎖定大量區#2(174.5~177.5)、外資20日VWAP(178.5)與0.382~0.500回檔，待留長下影承接或KD/RSI落底金叉觸發。"
+            },
+            "tier3": {
+              "price": 171.5,
+              "text": "【第3批 30% 黃金坑】168.50~171.50元（中值170.00）；鎖定大量區#1(168.5~171.5)、上升17MA/45MA/117MA糾結區與10/27紅K低點(168.0)，待急殺量縮法人護盤觸發。"
+            },
+            "tp1": 208.5,
+            "tp2": 253.5,
+            "stop_loss": 162.0
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "潤弘具預鑄建築工法護城河，資本效率頂尖（ROE 44.96%、TTM EPS 11.82 元）。2026Q3 毛利率 17.64%（QoQ +0.84%）與營益率 13.22% 高檔持穩，單季 FCF 達 40.07 億元、淨負債比僅 24.15%。合約負債 31.17 億創近 8 季新高，10 月營收 33.85 億（YoY +30.52%）使 Q4 首月已達 Q3 營收 37.5%，確定強勢季增；前瞻 PE 15.1x 具折價與 5.04% 殖利率保護。｜籌碼底氣：籌碼具機構底氣，外資近 5 日/20 日分別大買 1,948 張與 2,976 張，投信同步加碼 310 張與 590 張，三大法人 20 日合計買超 3,649 張呈土洋共買。雖有融資小幅跟進，但融資餘額僅 426 張（使用率 0.55%）、維持率 182.40%，無散戶接刀疑慮。｜技術與支撐定位：11/24跳空爆量1,998張長紅收192元，五線多頭上揚但乖離+12.2%、K9達80.6、RSI73.7過熱，MACD柱擴張。近5/20日RS達+10.26%/+21.43%、Beta 0.37極抗跌；外資20日買2,976張、投信買590張。集保單週快照(11/20)大戶82.2%、散戶5.0%、股東12,321人；融資僅426張；庫存曝險OPEN。",
+            "invalidation_rule": "主要風險為景氣循環股 PB 達 6.70x、DSO 由 24.22 天升至 48.62 天、近半年缺法說展望，且短線正乖離 +12.20%、量比 3.76x 過熱。惟 44.96% 高 ROE 合理化高 PB，前瞻 PE 15.1x 低於同業，且 CCC 為負 3.59 天、單季 FCF 逾 40 億化解請款疑慮；短線過熱依規豁免交由 AI #3 規劃低接。｜失效退場：收盤實體長黑跌破162.00元且失守189MA(162.38)，或外資與投信同步連3日大賣超逾千張並伴隨融資急增時，技術與籌碼結構失效即刻停損退場。"
+          }
+        }
+      ],
+      "watchlist": [],
+      "avoid": [
+        {
+          "stock_id": "3714",
+          "stock_name": "富采",
+          "sector": "LED與Micro LED光電元件",
+          "reason": "【Stage 0 硬性攔截】最近一季本業虧損（營益率 -4.55%）且合約負債 0.00 億 < 1 億，無訂單保護",
+          "close_at_pick": 73.1,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3714/technical-chart",
+            "war_room": "charts/3714_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
+    }
+  ]
+}

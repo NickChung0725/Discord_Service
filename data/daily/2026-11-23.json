@@ -1,6 +1,6 @@
 {
   "date": "2026-11-23",
-  "last_verified_date": "2026-11-23",
+  "last_verified_date": "2026-11-24",
   "market_overview": {
     "light": "🔴紅燈 (空頭防禦警戒)",
     "regime_state": "RED_DEFENSIVE",
@@ -19,7 +19,7 @@
       "ai_model": "gemini-4-neon",
       "strategy_comment": "今日候選股皆被 Stage 0 硬性排雷攔截，無符合條件之進場標的。",
       "recommended_exposure_pct": null,
-      "has_false_negative_alert": false,
+      "has_false_negative_alert": true,
       "top_picks": [],
       "watchlist": [],
       "avoid": [
@@ -30,8 +30,24 @@
           "reason": "【Stage 0 硬性攔截】最近一季本業虧損（營益率 -4.55%）且合約負債 0.00 億 < 1 億，無訂單保護",
           "close_at_pick": 68.6,
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": true,
+            "trading_days_elapsed": 1,
+            "latest_close": 73.1,
+            "period_low": 72.8,
+            "period_high": 75.4,
+            "effective_entry_price": 75.78,
+            "entry_fill_status": "FILLED_T1",
+            "filled_tiers_text": "",
+            "outcome_status": "TP1_HIT_WIN",
+            "net_return_10d_pct": -2.23,
+            "entry_result_badge": "✅ T+1 進場成交 (均價 75.8)",
+            "outcome_badge": "🚨 錯殺飆股 (最高 +0.0%)",
+            "mfe_pct": 0.0,
+            "mae_pct": -3.93,
+            "pain_badge": "📉 最大套牢 -3.9% / 最高浮盈 +0.0%",
+            "is_whipsawed": false,
+            "is_false_negative_miss": true
           },
           "links": {
             "wantgoo": "https://www.wantgoo.com/stock/3714/technical-chart",
@@ -87,8 +103,24 @@
             "stop_loss": 73.5
           },
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 1,
+            "latest_close": 83.5,
+            "period_low": 82.4,
+            "period_high": 83.9,
+            "effective_entry_price": null,
+            "entry_fill_status": "PENDING",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "⏳ 掛單觀察中 (第 1 日，期間最低 82.4)",
+            "outcome_badge": "⏳ 持有觀察中 (第 1 日，現價 83.5)",
+            "mfe_pct": null,
+            "mae_pct": null,
+            "pain_badge": "",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "details": {
             "bull_thesis": "三率與ROE(17.44%)齊步擴張，Q3毛利率18.26%(YoY+4.24%)、營益率12.93%；合約負債49.33億創高鎖定訂單能見度，10月營收YoY+20.39%且Q4首月達標率35.0%。單季FCF達11.91億(OCF/NI 83.54%)，前瞻PE僅8.3倍配5.42%殖利率，長線價值極厚。｜籌碼底氣：本波回跌17.4%主因外資20日提款賣超3,712張，但投信逆勢買超374張，且融資同步減469張(使用率僅0.39%、維持率148.5%)，浮額清洗乾淨屬良性錯殺。｜技術與支撐定位：回測117MA(79.6)收79.3，K9(15.3)未金叉、RSI升至33.1、MACD綠柱初縮；5日RS+5.27%、Beta0.40抗跌。外資20日賣3,712張惟單日縮至-65張，投信買374張、融資減469張；11/20單週大戶81.4%。",
@@ -129,8 +161,24 @@
             "stop_loss": 68.0
           },
           "actual_verification": {
-            "is_pending": true,
-            "trading_days_elapsed": 0
+            "is_pending": false,
+            "is_settled": false,
+            "trading_days_elapsed": 1,
+            "latest_close": 87.2,
+            "period_low": 87.2,
+            "period_high": 87.2,
+            "effective_entry_price": null,
+            "entry_fill_status": "PENDING",
+            "filled_tiers_text": "",
+            "outcome_status": "PENDING",
+            "net_return_10d_pct": null,
+            "entry_result_badge": "⏳ 掛單觀察中 (第 1 日，期間最低 87.2)",
+            "outcome_badge": "⏳ 持有觀察中 (第 1 日，現價 87.2)",
+            "mfe_pct": null,
+            "mae_pct": null,
+            "pain_badge": "",
+            "is_whipsawed": false,
+            "is_false_negative_miss": false
           },
           "details": {
             "bull_thesis": "受惠AI伺服器與電源應用強勁拉貨，10月營收YoY爆發+179.6%，Q4首月達成率達37.2%確立強勢季增；Q3毛利率27.08%(YoY+10.96%)、營益率跳升至16.42%且ROE達16.70%。前瞻PE已收斂至18.0倍(低於同業20倍)，單季FCF轉正，管理層產能滿載展望獲財報強勢印證。｜籌碼底氣：高點急殺52.8%回踩年線，但外資近20日逆勢大買3,373張(近5日+1,288張)、融資大減3,768張呈法人鎖碼；惟維持率130.6%須防短線斷頭洗盤，宜交由AI #3分批低接。｜技術與支撐定位：急殺測189MA(79.81)爆量漲停收79.3，MACD綠柱縮惟K9(17.3)未金叉；20日RS-18.95%、Beta1.69波動高。外資20日逆買3,373張、融資大減3,768張但維持率130.6%；11/20單週大戶59.2%。",
