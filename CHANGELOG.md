@@ -4,6 +4,18 @@
 
 ---
 
+## [v6.3.3-mvp] - 2026-11-24
+### ✨ 新增功能 — 共用新聞情報服務 MVP（高內聚低耦合爬蟲 ＋ 免費輕量 AI 事實整理 ＋ 差異化 TTL 快取）
+* **新建獨立共用新聞情報模組（[`services/news_intel_service.py`](/services/news_intel_service.py)）**：
+  * **高含金量資料來源與正文清洗（純 `requests` ＋ Python 標準庫，零 `bs4`/無頭瀏覽器依賴）**：以鉅亨網公開 JSON API（`us_stock` / `wd_macro` 國際頭條完整正文、`TWS:{sid}:STOCK/news` 180 天個股媒體報導與 `台股預估` FactSet 共識目標價）為主力，輔以 Yahoo 股市個股 RSS 抓取 MOPS 重訊完整正文；自動過濾盤中速報／老師喊盤／權證發行／例行月營收機器人雜訊，剝離 Yahoo 橫幅與 MOPS 公版表頭（`日期／公司名稱／發言人／條款`），並將「法說會／機構投資人說明會／Corporate Day／除息」自動轉譯民國年抽離為獨立 `calendar_events` 事件日曆（含跨來源去重與瞬斷 SSL EOF 自動重試）。
+  * **嚴格零費用免費輕量 AI 事實整理員**：1 次呼叫整合全部國際總經頭條、1 次呼叫整合單一檔個股之 FactSet／近 30 日催化劑／近 180 日法說報導（徹底避免跨股張冠李戴）；內建 `<= 12 RPM` 節流（`NEWS_INTEL_MIN_INTERVAL_SEC`，預設 `5.0s`）、`temperature=0.1` 與 Pydantic `response_schema` 強制附 `[MM-DD｜來源]` / `[YYYY-MM-DD｜來源]` 溯源；撞限流或關閉 `ENABLE_NEWS_INTEL_AI=false` 時自動降級為「Python 清洗原文摘錄」，**絕不偷切付費 Vertex AI**。
+  * **跨排程本地差異化 TTL 快取（`finmind_reports/.state/news_intel_cache/`）**：國際總經 2h TTL（21:30 與 22:00 共用、隔早 08:15 刷新）、個股即時新聞 6h TTL、個股 180 日法說展望 7d TTL（若近期新聞偵測到新法說／財測關鍵字自動提早失效刷新），不消耗 Google Sheets 配額。
+  * **4 套場景專屬 View Adapter ＋ 獨立驗證 CLI**：內建 `render_macro_prompt_block()`、`render_stage1_stock_block()`、`render_cross_stock_block()`、`render_morning_brief_stock_block()`，並提供 `uv run python -m services.news_intel_service --macro --stocks ...` 供 GCP VM 實測驗收（待驗收通過後於 Phase 2 統一接管四大消費端並移除舊有散落之新聞爬蟲邏輯）。
+* **擴充免費版結構化呼叫與獨立日誌開關（[`services/ai_service.py`](/services/ai_service.py)）**：新增 `call_google_ai_structured()`、`get_news_intel_model()`（`NEWS_INTEL_MODEL` ➔ `AI_MODEL_BASE`）與 `is_news_intel_prompt_logging_enabled()`（`NEWS_INTEL_LOG_PROMPTS`，預設 `true` 寫入本地日誌與 BigQuery `ai_prompt_logs` 便於初期以 `parser_ai_prompt.py` 驗收，穩定後可設 `false` 關閉）。
+* **新增單元測試（[`tests/test_news_intel_service.py`](/tests/test_news_intel_service.py)）**：涵蓋 MOPS 去表頭、民國年事件日解析、雜訊/重訊分類路由、2h/6h/7d 差異化快取與新法說提早失效、零付費降級不呼叫 Vertex AI、4 套 View Adapter 與 `NEWS_INTEL_LOG_PROMPTS` 開關驗證。
+
+---
+
 ## [v6.3.2] - 2026-11-24
 ### 🔧 優化與修正 — AI #2 / AI #3 防偏誤自回歸欄位改序（陣列外統一排名配資）、反方辯證與風報比驗算、Parser 逃生閥 Bug 修復
 * **維持單階段 Vertex AI Batch 架構並徹底消除「先行承諾偏誤」（[`quant/fundamental_config.py`](/quant/fundamental_config.py)）**：

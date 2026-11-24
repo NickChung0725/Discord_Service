@@ -262,10 +262,29 @@ def get_gemini_model() -> str:
     return (os.getenv("AI_MODEL_BASE") or DEFAULT_GEMINI_MODEL).strip()
 
 
+def get_news_intel_model() -> str:
+    """Free-tier lightweight model for news fact distillation (NEWS_INTEL_MODEL -> AI_MODEL_BASE)."""
+    return (os.getenv("NEWS_INTEL_MODEL") or get_gemini_model()).strip()
+
+
+def is_news_intel_prompt_logging_enabled(override: bool | None = None) -> bool:
+    """Control whether NEWS_INTEL free-tier calls are logged to local ai_calls.log & BigQuery ai_prompt_logs.
+
+    Defaults to True (env NEWS_INTEL_LOG_PROMPTS) so initial verification is fully observable via parser_ai_prompt.py.
+    """
+    if override is not None:
+        return bool(override)
+    raw = (os.getenv("NEWS_INTEL_LOG_PROMPTS") or "true").strip().lower()
+    return raw not in ("0", "false", "no", "off", "")
+
+
 def _call_google_ai_once(
     prompt: str,
     *,
     model: str | None,
+    response_schema: Any | None = None,
+    temperature: float | None = None,
+    system_instruction: str | None = None,
 ) -> AIResponse:
     api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
     if not api_key:
@@ -276,9 +295,18 @@ def _call_google_ai_once(
         http_options=types.HttpOptions(timeout=GOOGLE_AI_HTTP_TIMEOUT_MS),  # 300 秒超時 (毫秒)
     )
     resolved_model = (model or get_gemini_model()).strip()
-    config = types.GenerateContentConfig(
-        thinking_config=types.ThinkingConfig(thinking_budget=GOOGLE_AI_THINKING_BUDGET)
-    )
+    cfg_kwargs: dict[str, Any] = {
+        "thinking_config": types.ThinkingConfig(thinking_budget=GOOGLE_AI_THINKING_BUDGET),
+    }
+    if response_schema is not None:
+        cfg_kwargs["response_mime_type"] = "application/json"
+        cfg_kwargs["response_schema"] = response_schema
+    if temperature is not None:
+        cfg_kwargs["temperature"] = temperature
+    if system_instruction is not None:
+        cfg_kwargs["system_instruction"] = system_instruction
+
+    config = types.GenerateContentConfig(**cfg_kwargs)
     response = client.models.generate_content(
         model=resolved_model,
         contents=prompt,
@@ -299,6 +327,124 @@ def _call_google_ai_once(
         prompt_tokens=prompt_tokens,
         output_tokens=output_tokens,
     )
+
+
+def call_google_ai_structured(
+    prompt: str,
+    *,
+    response_schema: Any | None = None,
+    model: str | None = None,
+    temperature: float | None = 0.1,
+    system_instruction: str | None = None,
+    tag: str | None = None,
+    task_type: str = "NEWS_INTEL",
+    stock_id: str | None = None,
+    log_prompts: bool | None = None,
+    retry_delays: tuple[float, ...] = (8.0, 16.0),
+) -> AIResponse:
+    """Call Google AI Studio FREE tier ONLY with optional JSON structured output & retry/backoff.
+
+    Strict cost guardrail: NEVER falls back to paid Vertex AI.
+    Prompt/output logging to local ai_calls.log and BigQuery ai_prompt_logs is controlled by
+    ``log_prompts`` (or env ``NEWS_INTEL_LOG_PROMPTS``, default True).
+    """
+    resolved_model = (model or get_news_intel_model()).strip()
+    should_log = is_news_intel_prompt_logging_enabled(log_prompts)
+    started = time.perf_counter()
+    attempt_notes: list[str] = []
+    last_error: BaseException | None = None
+    last_meta: AIResponse | None = None
+
+    total_attempts = 1 + len(retry_delays)
+    for attempt_idx in range(total_attempts):
+        try:
+            meta = _call_google_ai_once(
+                prompt,
+                model=resolved_model,
+                response_schema=response_schema,
+                temperature=temperature,
+                system_instruction=system_instruction,
+            )
+            last_meta = meta
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            _print_ai_telemetry(
+                provider=meta.provider,
+                tag=tag or task_type,
+                requested_model=meta.requested_model,
+                model_version=meta.model_version,
+                prompt_tokens=meta.prompt_tokens,
+                output_tokens=meta.output_tokens,
+                elapsed_ms=elapsed_ms,
+                status="ok",
+            )
+            if should_log:
+                _append_ai_log(
+                    _fmt_ai_log_block(
+                        provider=meta.provider,
+                        requested_model=meta.requested_model,
+                        model_version=meta.model_version,
+                        tag=tag or task_type,
+                        prompt=prompt,
+                        output_text=meta.text,
+                        prompt_tokens=meta.prompt_tokens,
+                        output_tokens=meta.output_tokens,
+                        elapsed_ms=elapsed_ms,
+                        attempt_notes=attempt_notes,
+                        error=None,
+                    )
+                )
+                _archive_online_call(
+                    prompt=prompt,
+                    meta=meta,
+                    elapsed_ms=elapsed_ms,
+                    tag=tag or task_type,
+                    task_type=task_type,
+                    stock_id=stock_id or "GENERAL",
+                    blocking=False,
+                )
+            return meta
+        except MissingGeminiApiKeyError:
+            raise
+        except Exception as err:  # noqa: BLE001
+            last_error = err
+            if attempt_idx < len(retry_delays) and _is_retryable_gemini_error(err):
+                delay = retry_delays[attempt_idx]
+                attempt_notes.append(
+                    f"@@AI_RETRY@@ attempt={attempt_idx + 1} delay={delay}s error={type(err).__name__}: {err}"
+                )
+                time.sleep(delay)
+                continue
+            break
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    _print_ai_telemetry(
+        provider="google_ai_studio",
+        tag=tag or task_type,
+        requested_model=resolved_model,
+        model_version=(last_meta.model_version if last_meta else ""),
+        prompt_tokens=None,
+        output_tokens=None,
+        elapsed_ms=elapsed_ms,
+        status="error",
+    )
+    if should_log and last_error is not None:
+        _append_ai_log(
+            _fmt_ai_log_block(
+                provider="google_ai_studio",
+                requested_model=resolved_model,
+                model_version="",
+                tag=tag or task_type,
+                prompt=prompt,
+                output_text="",
+                prompt_tokens=None,
+                output_tokens=None,
+                elapsed_ms=elapsed_ms,
+                attempt_notes=attempt_notes,
+                error=last_error,
+            )
+        )
+    assert last_error is not None
+    raise last_error
 
 
 _THREAD_LOCAL = threading.local()

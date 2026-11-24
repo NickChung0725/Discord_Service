@@ -81,6 +81,7 @@ Discord_Service/
 ├── services/                    # [Discord 指令與共用外部服務層]
 │   ├── __init__.py
 │   ├── ai_service.py            # 雙軌 AI 服務：免費版 Google AI Studio 與付費版 Vertex AI 呼叫封裝與 /ai 指令
+│   ├── news_intel_service.py    # [MVP] 共用新聞情報服務：鉅亨網 JSON API＋Yahoo MOPS 去表頭＋差異化 TTL 快取＋免費輕量 AI 事實整理與 4 套 View Adapter
 │   ├── github_uploader.py       # 透過 GitHub Contents API 與 Git Trees API 發布個股戰情室、公開戰情總部與私人加密戰情中心（雙向路徑隔離）
 │   ├── my_stock_publisher.py    # MY_STOCK 私人戰情中心打包與模式 B 端到端加密發布器（Gzip+32KB填充+AES-256-GCM+AAD、知行合一紀律檢核、14日清理）
 │   ├── portal_publisher.py      # 量化戰情總部打包器（近 30 交易日 JSON、manifest/audit_summary/robots.txt 重建、檔案鎖與 30 日過期清理）
@@ -313,6 +314,10 @@ uv run python taishin_portfolio_service.py publish-my-stock --rotate-all  # 更�
 
 # （向下相容手動單次健診指令）
 uv run python taishin_portfolio_service.py sync-daily --dry-run
+
+# --- 共用新聞情報服務 MVP CLI（國際盤 + 個股即時/FactSet/180日法說展望，走免費版 Gemini AI） ---
+uv run python -m services.news_intel_service --macro --stocks "2006:東和鋼鐵,3034:聯詠,3293:鈊象,6526:達發" --force-refresh
+uv run python -m services.news_intel_service --macro --stocks "2006:東和鋼鐵,6526:達發" --no-ai --force-refresh  # 純爬蟲清洗測試
 ```
 
 > ⚠️ **部署與套件同步重要提醒 (`uv sync --inexact`)**：`taishin_sdk` 係直接透過 `pip` 安裝於 Python 虛擬環境中，在更新環境或執行 `uv sync` 時，請務必加上 `--inexact`（即 `uv sync --inexact`），避免 `uv` 自動移除手動安裝之 `taishin_sdk`。
@@ -454,6 +459,7 @@ pscp -i "G:\我的雲端硬碟\Google cloud platform\Hung-PC.ppk" -r "C:\path\to
 | **Discord `/ai`** | `GENERAL_QA` | 萬用 AI 問答 |
 | **08:15 `taishin-morning-brief`** | `MORNING_BRIEF` | 台新盤前開盤作戰晨報 |
 | **22:45 `taishin-memory-sync`** | `THESIS_SYNC` | 台新盤後持股健診與建倉記憶歸因 |
+| **共用新聞情報服務 (MVP)** | `NEWS_INTEL_MACRO` / `NEWS_INTEL_STOCK` | 免費版輕量模型國際總經／單股事實整理（由 `NEWS_INTEL_LOG_PROMPTS` 開關控管，預設 `true`） |
 
 ## Phase 3 微結構模組 (v5.7.0)
 - 新增頂層模組 `quant/signal_audit_service.py`（SQLite `data/signal_audit.db` 的 `signal_audit_log` 審計表）。
