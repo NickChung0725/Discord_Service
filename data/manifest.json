@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-25 21:47:39",
+  "updated_at": "2026-11-25 23:54:08",
   "available_dates": [
     "2026-11-25",
     "2026-11-24",
@@ -291,6 +291,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/2006/technical-chart",
       "war_room_url": "charts/2006_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-25",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 78
+        },
         {
           "date": "2026-11-24",
           "strategy_id": "rebound_2200",
@@ -694,6 +701,21 @@
         }
       ]
     },
+    "2395": {
+      "stock_name": "研華",
+      "sector": "工業電腦與嵌入式系統",
+      "wantgoo_url": "https://www.wantgoo.com/stock/2395/technical-chart",
+      "war_room_url": "charts/2395_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-25",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 62
+        }
+      ]
+    },
     "2408": {
       "stock_name": "南亞科",
       "sector": "半導體業",
@@ -968,10 +990,17 @@
     },
     "2615": {
       "stock_name": "萬海",
-      "sector": "航運業",
+      "sector": "貨櫃航運",
       "wantgoo_url": "https://www.wantgoo.com/stock/2615/technical-chart",
       "war_room_url": "charts/2615_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-25",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 66
+        },
         {
           "date": "2026-11-03",
           "strategy_id": "alignment_2130",
@@ -1110,10 +1139,17 @@
     },
     "2637": {
       "stock_name": "慧洋-KY",
-      "sector": "航運業",
+      "sector": "散裝航運",
       "wantgoo_url": "https://www.wantgoo.com/stock/2637/technical-chart",
       "war_room_url": "charts/2637_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-25",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 75
+        },
         {
           "date": "2026-11-02",
           "strategy_id": "alignment_2130",
@@ -1801,6 +1837,21 @@
         {
           "date": "2026-11-13",
           "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        }
+      ]
+    },
+    "3406": {
+      "stock_name": "玉晶光",
+      "sector": "光學鏡頭與鏡片",
+      "wantgoo_url": "https://www.wantgoo.com/stock/3406/technical-chart",
+      "war_room_url": "charts/3406_fund.html",
+      "appearances": [
+        {
+          "date": "2026-11-25",
+          "strategy_id": "rebound_2200",
           "category": "AVOID",
           "rank": null,
           "score": null
@@ -2747,6 +2798,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/6933/technical-chart",
       "war_room_url": "charts/6933_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-25",
+          "strategy_id": "rebound_2200",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-24",
           "strategy_id": "rebound_2200",
