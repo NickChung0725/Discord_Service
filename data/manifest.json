@@ -1,6 +1,7 @@
 {
-  "updated_at": "2026-11-24 22:50:26",
+  "updated_at": "2026-11-25 21:47:39",
   "available_dates": [
+    "2026-11-25",
     "2026-11-24",
     "2026-11-23",
     "2026-11-20",
@@ -40,7 +41,7 @@
     "settled_trades": 19,
     "win_rate_pct": 21.1,
     "profit_factor": 0.1,
-    "false_negative_rate_pct": 15.4
+    "false_negative_rate_pct": 14.0
   },
   "stock_search_index": {
     "1216": {
@@ -891,6 +892,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/2597/technical-chart",
       "war_room_url": "charts/2597_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-25",
+          "strategy_id": "alignment_2130",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 82
+        },
         {
           "date": "2026-11-24",
           "strategy_id": "alignment_2130",
@@ -2023,6 +2031,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/3714/technical-chart",
       "war_room_url": "charts/3714_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-25",
+          "strategy_id": "alignment_2130",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-24",
           "strategy_id": "alignment_2130",
