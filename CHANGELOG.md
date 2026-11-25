@@ -4,6 +4,12 @@
 
 ---
 
+## [v6.3.4] - 2026-11-25
+### 🔧 優化與修正 — 資安：移除誤提交的加密金鑰
+* **[`.env.example`](/.env.example)**：`MY_STOCK_ENC_PASSPHRASE` / `MY_STOCK_KDF_SALT` 先前誤貼 `gen-my-stock-secret` 輸出的真實值（自 `6dbd928` 起進入 git 歷史），已改為佔位字串，並註明請勿將真實值貼回此檔。舊金鑰視同外流，需重新產生並重新發佈 `private/*` 加密頁面。
+
+---
+
 ## [v6.3.3] - 2026-11-24
 ### ✨ 新增功能 & 🧹 債務清理 — 共用新聞情報服務全排程落地（高內聚低耦合）＋ 國際盤十大硬指標升級 ＋ 全面移除舊爬蟲髒碼
 * **新建並優化統一共用新聞情報服務（[`services/news_intel_service.py`](/services/news_intel_service.py)）**：
