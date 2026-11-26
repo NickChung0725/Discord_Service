@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-11-26 21:51:50",
+  "updated_at": "2026-11-26 22:33:05",
   "available_dates": [
     "2026-11-26",
     "2026-11-25",
@@ -298,6 +298,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/2006/technical-chart",
       "war_room_url": "charts/2006_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 2,
+          "score": 84
+        },
         {
           "date": "2026-11-25",
           "strategy_id": "rebound_2200",
@@ -640,6 +647,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/2357/technical-chart",
       "war_room_url": "charts/2357_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-06",
           "strategy_id": "rebound_2200",
@@ -990,10 +1004,17 @@
     },
     "2609": {
       "stock_name": "陽明",
-      "sector": "航運業",
+      "sector": "貨櫃航運",
       "wantgoo_url": "https://www.wantgoo.com/stock/2609/technical-chart",
       "war_room_url": "charts/2609_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 4,
+          "score": 76
+        },
         {
           "date": "2026-10-28",
           "strategy_id": "alignment_2130",
@@ -1016,6 +1037,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/2615/technical-chart",
       "war_room_url": "charts/2615_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 3,
+          "score": 80
+        },
         {
           "date": "2026-11-25",
           "strategy_id": "rebound_2200",
@@ -1159,6 +1187,13 @@
       "war_room_url": "charts/2637_fund.html",
       "appearances": [
         {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 1,
+          "score": 81
+        },
+        {
           "date": "2026-11-25",
           "strategy_id": "rebound_2200",
           "category": "TOP_PICK",
@@ -1246,6 +1281,13 @@
       "war_room_url": "charts/2855_fund.html",
       "appearances": [
         {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-09",
           "strategy_id": "rebound_2200",
           "category": "PENDING_SCAN",
@@ -1260,6 +1302,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/2881/technical-chart",
       "war_room_url": "charts/2881_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-16",
           "strategy_id": "alignment_2130",
@@ -1312,6 +1361,13 @@
       "war_room_url": "charts/2885_fund.html",
       "appearances": [
         {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-16",
           "strategy_id": "alignment_2130",
           "category": "AVOID",
@@ -1348,6 +1404,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/2891/technical-chart",
       "war_room_url": "charts/2891_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-24",
           "strategy_id": "rebound_2200",
@@ -2011,6 +2074,13 @@
       "war_room_url": "charts/3624_fund.html",
       "appearances": [
         {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "TOP_PICK",
+          "rank": 5,
+          "score": 62
+        },
+        {
           "date": "2026-11-24",
           "strategy_id": "rebound_2200",
           "category": "TOP_PICK",
@@ -2035,10 +2105,17 @@
     },
     "3653": {
       "stock_name": "健策",
-      "sector": "電子工業",
+      "sector": "散熱模組與均熱片",
       "wantgoo_url": "https://www.wantgoo.com/stock/3653/technical-chart",
       "war_room_url": "charts/3653_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-02",
           "strategy_id": "rebound_2200",
@@ -2771,6 +2848,13 @@
       "war_room_url": "charts/6933_fund.html",
       "appearances": [
         {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "AVOID",
+          "rank": null,
+          "score": null
+        },
+        {
           "date": "2026-11-25",
           "strategy_id": "rebound_2200",
           "category": "WATCHLIST",
@@ -2821,6 +2905,13 @@
       "wantgoo_url": "https://www.wantgoo.com/stock/7711/technical-chart",
       "war_room_url": "charts/7711_fund.html",
       "appearances": [
+        {
+          "date": "2026-11-26",
+          "strategy_id": "rebound_2200",
+          "category": "WATCHLIST",
+          "rank": null,
+          "score": null
+        },
         {
           "date": "2026-11-06",
           "strategy_id": "alignment_2130",
