@@ -1,6 +1,6 @@
 {
   "date": "2026-11-20",
-  "last_verified_date": "2026-11-25",
+  "last_verified_date": "2026-11-26",
   "market_overview": {
     "light": "🔴紅燈 (空頭防禦警戒)",
     "regime_state": "RED_DEFENSIVE",
@@ -57,8 +57,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": true,
-            "trading_days_elapsed": 3,
-            "latest_close": 775.0,
+            "trading_days_elapsed": 4,
+            "latest_close": 784.0,
             "period_low": 740.0,
             "period_high": 810.0,
             "effective_entry_price": 753.75,
@@ -115,8 +115,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": true,
-            "trading_days_elapsed": 3,
-            "latest_close": 520.0,
+            "trading_days_elapsed": 4,
+            "latest_close": 531.0,
             "period_low": 500.0,
             "period_high": 543.0,
             "effective_entry_price": 510.64,
@@ -148,8 +148,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": false,
-            "trading_days_elapsed": 3,
-            "latest_close": 10.95,
+            "trading_days_elapsed": 4,
+            "latest_close": 11.15,
             "period_low": 10.1,
             "period_high": 12.0,
             "effective_entry_price": null,
@@ -157,8 +157,8 @@
             "filled_tiers_text": "",
             "outcome_status": "PENDING",
             "net_return_10d_pct": null,
-            "entry_result_badge": "⏳ 掛單觀察中 (第 3 日，期間最低 10.1)",
-            "outcome_badge": "⏳ 持有觀察中 (第 3 日，現價 10.9)",
+            "entry_result_badge": "⏳ 掛單觀察中 (第 4 日，期間最低 10.1)",
+            "outcome_badge": "⏳ 持有觀察中 (第 4 日，現價 11.2)",
             "mfe_pct": null,
             "mae_pct": null,
             "pain_badge": "",
@@ -181,8 +181,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": true,
-            "trading_days_elapsed": 3,
-            "latest_close": 68.0,
+            "trading_days_elapsed": 4,
+            "latest_close": 71.7,
             "period_low": 65.5,
             "period_high": 75.4,
             "effective_entry_price": 67.33,

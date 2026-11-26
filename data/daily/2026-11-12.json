@@ -1,6 +1,6 @@
 {
   "date": "2026-11-12",
-  "last_verified_date": "2026-11-25",
+  "last_verified_date": "2026-11-26",
   "market_overview": {
     "light": "🔴紅燈 (空頭防禦警戒)",
     "regime_state": "RED_DEFENSIVE",
@@ -57,8 +57,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": true,
-            "trading_days_elapsed": 9,
-            "latest_close": 1075.0,
+            "trading_days_elapsed": 10,
+            "latest_close": 1175.0,
             "period_low": 1045.0,
             "period_high": 1405.0,
             "effective_entry_price": 1381.87,
@@ -90,8 +90,8 @@
           "actual_verification": {
             "is_pending": false,
             "is_settled": true,
-            "trading_days_elapsed": 9,
-            "latest_close": 45.7,
+            "trading_days_elapsed": 10,
+            "latest_close": 46.05,
             "period_low": 43.3,
             "period_high": 48.95,
             "effective_entry_price": 47.13,
