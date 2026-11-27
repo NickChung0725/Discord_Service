@@ -125,6 +125,355 @@
       ],
       "avoid": [],
       "pending_candidates": []
+    },
+    {
+      "id": "rebound_2200",
+      "tab_name": "🛡️ 22:00 型態A長均線反彈",
+      "status": "READY",
+      "status_badge": "",
+      "total_candidates": 15,
+      "analyzed_count": 12,
+      "ai_model": "gemini-4-neon",
+      "strategy_comment": "美東11/25費半-0.65%、TSM ADR-1.96%，該跌幅已於11/27台股消化勿重複計價；惟VIX 25.65未觸及30熔斷卻仍偏高，美債10Y升至4.90%且聯準會與日銀12月升息風險猶存。台股收39,308.08(+0.40%)處45MA下屬🔴紅燈空頭防禦期（無OTC日線數據），但大盤融資自11/16大減逾1,480億至5,601.8億、MACD綠柱收斂，籌碼沉澱。建議總倉位上限40%，嚴守長均線分批低接、不追高。",
+      "recommended_exposure_pct": 40,
+      "has_false_negative_alert": false,
+      "top_picks": [
+        {
+          "rank": 1,
+          "stock_id": "2637",
+          "stock_name": "慧洋-KY",
+          "sector": "散裝航運",
+          "score": 79,
+          "outlook_verdict": "高度可信",
+          "allocation_weight_pct": 7.0,
+          "tactical_type": "🎯 型態A長均線三階低接（右腳止穩＋破線洗盤承接）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2637/technical-chart",
+            "war_room": "charts/2637_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 88.0,
+            "chase_limit": 88.0,
+            "weighted_avg_entry": 85.01,
+            "tier1": {
+              "price": 87.4,
+              "text": "【第1批 30% 試單】86.20~87.40元；對齊黃金分割0.786(86.20)、4%殖利率底(87.50)與11/24缺口支撐，須維持K9>D9與MACD綠柱收斂量縮止穩。"
+            },
+            "tier2": {
+              "price": 85.1,
+              "text": "【第2批 40% 核心】83.50~85.10元；鎖定下檔大量支撐POC #1(83.10~85.10)、布林下軌(83.77)與缺口下緣，見破線長下影且融資續退時承接。"
+            },
+            "tier3": {
+              "price": 82.5,
+              "text": "【第3批 30% 黃金坑】81.50~82.50元；對齊189MA(82.29)與11/23左腳低點(81.10)極限防守區，配合基本面前瞻PE 7.9x價值鐵底分批承接。"
+            },
+            "tp1": 93.0,
+            "tp2": 101.0,
+            "stop_loss": 80.5
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q3毛利率44.64%(QoQ+5.47%)、營益率43.36%、ROE 16.99%齊創8季新高，單季FCF達35.41億(OCF/NI 110.35%)。10月營收年增31.25%、Q4達成率36.8%超前，北美穀物燃煤旺季與節能船隊持續推升運價，法說展望高度可信。前瞻PE僅7.9x(同業中位數0.39倍)，具3.98%殖利率護體。｜籌碼底氣：回跌16.2%回踩189MA量縮至0.42x，近20日外資大買5,463張、近5日投信轉買385張，融資20日大減559張(使用率僅0.76%)，屬標準籌碼清洗後的良性錯殺。｜技術與支撐定位：收88.00處17MA(92.95)與117MA(90.30)下、守189MA(82.29)上，連三日量縮至980張留上影。K9(39.05)>D9(34.50)金叉、MACD綠柱連收斂。20日RS+0.62%、Beta 0.58具防禦性。外資20日買5,463張、投信5日轉買385張、融資20日減559張；11/20單週快照大戶84.4%。惟與庫存2609相關係數0.7065須降權。",
+            "invalidation_rule": "【反方】Q3業外佔稅前淨利比達24.17%(含處分老船利益)，且屬景氣循環股並續舉債購船。【辯證】處分舊船汰換節能新船本為公司常態商業模式，剔除業外後前10月本業營業利益仍大增143%、10月單月營益年增63.55%，且淨負債比已降至27.11%、連8季正FCF，本業獲利純度無虞。｜失效退場：若帶量長黑收破左腳81.10及停損80.50，或投信轉連賣且BDI運價反轉、月營益年增驟減，無條件停損退場。"
+          }
+        },
+        {
+          "rank": 2,
+          "stock_id": "1303",
+          "stock_name": "南亞",
+          "sector": "塑膠原料與電子材料加工",
+          "score": 73,
+          "outlook_verdict": "高度可信",
+          "allocation_weight_pct": 5.0,
+          "tactical_type": "🎯 型態A長均線三階低接（右腳止穩＋破線洗盤承接）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/1303/technical-chart",
+            "war_room": "charts/1303_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 241.0,
+            "chase_limit": 230.0,
+            "weighted_avg_entry": 216.05,
+            "tier1": {
+              "price": 225.5,
+              "text": "【第1批 30% 試單】220.50~225.50元；現價乖離117MA過大嚴禁追價，待回測117MA(220.37)、VAL(222.00)及POC #1下緣縮量且KD維持金叉低接。"
+            },
+            "tier2": {
+              "price": 218.0,
+              "text": "【第2批 40% 核心】209.00~218.00元；鎖定下檔POC #2(209.00~222.00)破117MA洗盤區，須見長下影承接、投信續買護盤與融資斷頭退場。"
+            },
+            "tier3": {
+              "price": 204.0,
+              "text": "【第3批 30% 黃金坑】196.00~204.00元；對齊布林下軌(203.16)與11/23前波左腳低點(196.00)極限支撐區承接。"
+            },
+            "tp1": 256.5,
+            "tp2": 294.0,
+            "stop_loss": 190.5
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "受惠AI高階電子材料比重拉升與轉投資南亞科獲利爆發，2026Q3三率大幅擴張、ROE強彈至16.77%，TTM EPS達10.69元，淨負債比降至10.94%。8~10月營收YoY連加速至+64.60%，Q4首月達成率36.6%確定季增，法說與法人展望高度可信，為本批最具AI主流題材張力與反彈爆發力之標的。｜籌碼底氣：股價自高點回跌31.2%主因外資20日狂砍13.65萬張之流動性賣壓，但投信逆勢大買6.38萬張(5日續買1.17萬張)強力鎖碼護盤，融資大減9,690張，屬經典良性土洋換手。｜技術與支撐定位：收241.00低於17MA(256.53)與45MA(275.63)、高於117MA(220.37)達9.4%，短線反彈後留上影。K9(40.03)>D9(33.59)、MACD綠柱連縮至-3.56。5日RS+7.90%最強但Beta高達1.81波動劇烈。外資20日狂賣13.65萬張但今日縮至-375張，投信20日大買6.38萬張強力護盤、融資減9,690張；11/20單週快照大戶85.2%；與庫存5351相關0.7161。",
+            "invalidation_rule": "【反方】Q3業外(主因南亞科)佔稅前比達61.26%，致OCF/NI僅56.7%且純本業前瞻PE達35.1x偏高，化工EG與聚酯亦偏弱。【辯證】毛利率(24.48%)與營益率(19.13%)均屬業外前之純本業指標，QoQ同步跳升逾5.5%、YoY大增逾16%，證實高階AI電子材料爆發為真，且單季FCF已大舉轉正至166.6億，外資目標價喊逾500元具強烈題材共鳴。｜失效退場：若帶量長黑灌破左腳196.00及停損190.50，或投信棄守轉連賣、南亞科獲利與AI材料動能下修，嚴格執行停損。"
+          }
+        },
+        {
+          "rank": 3,
+          "stock_id": "4961",
+          "stock_name": "天鈺",
+          "sector": "IC設計-驅動與電源IC",
+          "score": 85,
+          "outlook_verdict": "高度可信",
+          "allocation_weight_pct": 0.0,
+          "tactical_type": "🎯 型態A長均線三階低接（右腳止穩＋破線洗盤承接）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/4961/technical-chart",
+            "war_room": "charts/4961_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 173.0,
+            "chase_limit": 172.0,
+            "weighted_avg_entry": 166.7,
+            "tier1": {
+              "price": 171.0,
+              "text": "【第1批 30% 試單】169.00~171.00元；現價已貼17MA嚴禁追高，待量縮回踩117MA(170.76)與VAL(169.50)右腳止穩、K9>D9與MACD收斂時進場。"
+            },
+            "tier2": {
+              "price": 167.0,
+              "text": "【第2批 40% 核心】163.00~167.00元；鎖定下檔POC #2(165.00~169.50)與黃金分割0.786(163.00)破線洗盤區，見長下影承接與融資退場加碼。"
+            },
+            "tier3": {
+              "price": 162.0,
+              "text": "【第3批 30% 黃金坑】159.00~162.00元；對齊下檔POC #1(160.00~165.00)、189MA(162.60)與11/25波段低點(159.00)，具前瞻PE 9.2x價值底。"
+            },
+            "tp1": 179.5,
+            "tp2": 189.0,
+            "stop_loss": 157.0
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "本批基本面最純粹之科技轉機成長股：2026Q3毛利率29.51%(QoQ+2.64%)創8季新高、營益率連3季擴張至12.89%(QoQ+3.73%、YoY+6.74%)，業外佔比僅10%，單季EPS 4.08元。8~10月營收YoY連加速至+67.39%，電視/螢幕PMIC送樣韓系客戶、2027年ESL與AI SoC放量，前瞻PE僅9.2x且殖利率4.46%、零有息負債。｜籌碼底氣：近20日外資買超1,020張、投信買超584張形成土洋共振，近5日雖有零星融資進場但投信仍逆勢買超175張，回踩長均線量縮至725張整理，浮額壓力可控。｜技術與支撐定位：收173.00正好觸及下彎17MA(172.94)留上影、量縮至725張，守穩117MA(170.76)與189MA(162.60)。K9(37.16)>D9(36.70)甫金叉、MACD綠柱連縮至-0.51。20日RS+7.34%居五檔之冠、Beta 0.53。近20日外資+1,020張、投信+584張土洋共振且近3日齊買，融資今日微減34張；11/20大戶49.7%(近1週-1.0%)；庫存曝險OPEN(相關0.5966)。",
+            "invalidation_rule": "【反方】Q3單季FCF為-4.09億(OCF/NI -57.18%)、ROE僅7.36%，且W48出現近5日外資微賣197張與融資增254張警訊。【辯證】Q3現金流出主因營收跳增46%之AR與存貨備料(近4季累計FCF仍為+10.71億、CCC降至43天)，且近20日外資(+1,020)與投信(+584)同步加碼、投信5日續買，量縮0.59x非爆量出貨。｜失效退場：若帶量長黑跌破11/25低點159.00及停損157.00，或投信外資轉同步倒貨、Q4備料轉存貨跌價致毛利率失守27%，果斷退場。"
+          }
+        },
+        {
+          "rank": 4,
+          "stock_id": "2006",
+          "stock_name": "東和鋼鐵",
+          "sector": "電爐煉鋼與型鋼鋼筋",
+          "score": 83,
+          "outlook_verdict": "無資料",
+          "allocation_weight_pct": 0.0,
+          "tactical_type": "🎯 型態A長均線三階低接（右腳止穩＋破線洗盤承接）",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2006/technical-chart",
+            "war_room": "charts/2006_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 82.0,
+            "chase_limit": 81.5,
+            "weighted_avg_entry": 79.71,
+            "tier1": {
+              "price": 80.9,
+              "text": "【第1批 30% 試單】80.10~80.90元；嚴禁於現價82逼近17MA追高，待回測117MA(80.13)與籌碼下緣VAL(80.50)右腳縮量、KD維持金叉承接。"
+            },
+            "tier2": {
+              "price": 79.8,
+              "text": "【第2批 40% 核心】78.80~79.80元；鎖定下檔大量支撐POC #1(79.00~80.50)與破117MA洗盤區，搭配盤中長下影與投信續買護盤觸發。"
+            },
+            "tier3": {
+              "price": 78.4,
+              "text": "【第3批 30% 黃金坑】77.40~78.40元；對齊11/23前波左腳低點(77.40)與布林下軌(77.69)，受5.24%高息與合約負債新高價值鐵底保護。"
+            },
+            "tp1": 83.2,
+            "tp2": 86.5,
+            "stop_loss": 76.8
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q3毛利率18.26%(YoY+4.24%)創8季新高、營益率12.93%(YoY+4.11%)，TTM EPS升至8.39元、ROE達17.44%。近8季FCF全正(Q3為11.91億、OCF/NI 83.54%)，淨負債比僅15.77%、利息保障倍數51.35x。合約負債高檔搭配Q4首月達成率35.0%，展現電爐鋼龍頭定價與獲利韌性。｜籌碼底氣：自高點回跌14.6%主因外資短線提款(-5,555張)，但投信近5日與20日逆勢連買(+263/+603張)，融資20日減少428張(使用率僅0.38%)，長線籌碼安定度極高。｜技術與支撐定位：收82.00站穩上揚117MA(80.13)與189MA(76.04)、距17MA(83.24)僅1.5%，今日留長下影。K9(50.11)>D9(37.93)強勢金叉、MACD綠柱收斂至-0.24。20日RS+4.17%抗跌、Beta 0.47極低。外資20日賣5,555張但投信連6日逆勢買超(+263張)、融資20日減428張(使用率0.38%)；11/20單週快照大戶81.4%；庫存曝險OPEN(相關0.6546)。",
+            "invalidation_rule": "【反方】外資近20日賣超5,555張壓抑股價，近180天缺乏管理層量化法說展望，且Trailing PE 9.77x逼近循環股10x上緣。【辯證】雖缺法說指引，但2026Q3合約負債創8季新高至49.33億元、10月營收加速年增20.39%，實質訂單能見度極高，且本業前瞻PE收斂至8.6x並具5.24%高息防禦。｜失效退場：若帶量長黑灌破左腳77.40及停損76.80，或投信由連買轉大幅棄守、鋼筋型鋼利差惡化致月營收轉衰，即刻停損。"
+          }
+        },
+        {
+          "rank": 5,
+          "stock_id": "2615",
+          "stock_name": "萬海",
+          "sector": "貨櫃航運",
+          "score": 64,
+          "outlook_verdict": "待驗證",
+          "allocation_weight_pct": 0.0,
+          "tactical_type": "🛡️ 破線防禦／暫緩追價觀望",
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2615/technical-chart",
+            "war_room": "charts/2615_fund.html"
+          },
+          "predicted_plan": {
+            "close_at_pick": 99.0,
+            "chase_limit": 99.0,
+            "weighted_avg_entry": 96.2,
+            "tier1": {
+              "price": 98.5,
+              "text": "【第1批 30% 試單】97.00~98.50元（僅供換股參考）；對齊下檔POC #1上緣右腳回測，須待投信停止調節且日KD續維持金叉向上。"
+            },
+            "tier2": {
+              "price": 96.5,
+              "text": "【第2批 40% 核心】94.50~96.50元（僅供換股參考）；鎖定下檔POC #1(94.60~97.80)與11/25外資大買低點(95.50)，見長下影承接與融資退場觸發。"
+            },
+            "tier3": {
+              "price": 93.5,
+              "text": "【第3批 30% 黃金坑】91.50~93.50元（僅供換股參考）；對齊布林下軌(93.08)、11/23左腳(91.40)及189MA(90.82)防線。"
+            },
+            "tp1": 105.0,
+            "tp2": 115.0,
+            "stop_loss": 90.5
+          },
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "details": {
+            "bull_thesis": "2026Q3毛利率跳升至47.62%(QoQ+17.25%)、營益率44.17%(QoQ+18.22%)，單季EPS 7.77元、ROE達17.06%，單季FCF爆增至259.64億(OCF/NI 143.46%)。10月營收連7月月增、Q4達成率39.3%確定強勢季增，高雄五櫃與大阪C9碼頭啟用挹注營運，本業前瞻PE僅3.6x遠低同業。｜籌碼底氣：高點回跌23.6%主因投信結帳調節(-7,596張)，但外資近20日逆勢大買13,738張(持股49.23%)，融資同步大減5,529張且今日量縮至0.53x，籌碼已高度沉澱。｜技術與支撐定位：收99.00逼近117MA(100.23)反壓、連兩日留上影且量縮至8,076張。K9(34.63)>D9(31.22)、MACD綠柱收斂，但20日RS-4.44%與5日RS-4.88%弱於大盤(Beta 0.37)。外資20日買13,738張、融資大減5,529張，但投信20日大賣7,596張且今日續賣289張；11/20單週快照大戶89.6%。與同產業庫存2609相關係數達0.7616。",
+            "invalidation_rule": "【反方】2027年全球名目運力供給增速仍高於需求，合約負債為0且近一年殖利率僅3.03%，投信近20日大賣7,596張。【辯證】Q3本業業外佔比僅6.59%純度極高，10月營收年增加速至124.36%，且帳上現金逾1,260億(淨負債比-28.22%)、PB僅0.90x已深度反映循環折價，下檔安全邊際極厚。｜失效退場：若帶量收破左腳91.40與189MA(90.82)失守90.50，或投信續砍且外資轉連賣、全球運力過剩致運價崩跌，立即退場。"
+          }
+        }
+      ],
+      "watchlist": [
+        {
+          "stock_id": "6505",
+          "stock_name": "台塑化",
+          "sector": "石化基礎原料與煉油",
+          "reason": "Q3本業三率擴張、單季FCF達391億(OCF/NI 161%)且前瞻PE 8.1x具價值，惟10月煉油銷量月減21%且11/26亞洲汽油裂解價差驟降至負5.92美元創六年新低，衝擊Q4利差，待11/30法說會確認柴油支撐力道。",
+          "close_at_pick": 86.3,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/6505/technical-chart",
+            "war_room": "charts/6505_fund.html"
+          }
+        },
+        {
+          "stock_id": "2885",
+          "stock_name": "元大金",
+          "sector": "綜合證券與金融控股",
+          "reason": "金融股中ROE達16.38%最優、淨利率穩居35.31%且回測189MA止穩，惟10月營收月減13.72%、YoY驟降至0.30%呈現高基期鈍化，且PB 2.15x、殖利率僅2.85%防禦力偏弱，待成交量與營收動能回溫。",
+          "close_at_pick": 63.2,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2885/technical-chart",
+            "war_room": "charts/2885_fund.html"
+          }
+        },
+        {
+          "stock_id": "2882",
+          "stock_name": "國泰金",
+          "sector": "金控與綜合金融服務",
+          "reason": "前10月調整後EPS達16.5元、CSM餘額突破5,678億且外資5日大買7萬張，惟連4月營收年減逾3成(10月YoY -45.76%)、連3季FCF流出且投信5日大賣7.4萬張土洋激戰，續觀籌碼沉澱與實際配息率。",
+          "close_at_pick": 102.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2882/technical-chart",
+            "war_room": "charts/2882_fund.html"
+          }
+        },
+        {
+          "stock_id": "3406",
+          "stock_name": "玉晶光",
+          "sector": "光學鏡頭與鏡片",
+          "reason": "獲3M私募入股切入EBO/NPO光通訊具2027年成長題材、合約負債升至3.91億且淨現金體質佳，惟10月營收年減5.78%、Q3應收大增致OCF/NI驟降至26.5%，且融資維持率僅137.5%具斷頭風險，待籌碼洗淨。",
+          "close_at_pick": 708.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3406/technical-chart",
+            "war_room": "charts/3406_fund.html"
+          }
+        },
+        {
+          "stock_id": "2891",
+          "stock_name": "中信金",
+          "sector": "綜合商業銀行與金控",
+          "reason": "獲利底氣猶在、Q3 FCF達1,754.9億且千張大戶持股79.71%，惟近3月營收連負(10月YoY -27.16%)、ROE受淨值擴增稀釋至11.58%且PE 16.40x評價偏高，待11/30法說會釐清營運展望與投信賣壓。",
+          "close_at_pick": 68.9,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2891/technical-chart",
+            "war_room": "charts/2891_fund.html"
+          }
+        },
+        {
+          "stock_id": "2881",
+          "stock_name": "富邦金",
+          "sector": "綜合金融控股",
+          "reason": "前三季EPS 8.80元、北富銀獲利年增27%且千張大戶持股84.73%體質尚穩，惟連10月營收年減(10月YoY -74.48%)、FactSet微幅下修2026年EPS且近兩季FCF負值、外資20日賣超2.8萬張，暫列觀察。",
+          "close_at_pick": 140.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/2881/technical-chart",
+            "war_room": "charts/2881_fund.html"
+          }
+        }
+      ],
+      "avoid": [
+        {
+          "stock_id": "4770",
+          "stock_name": "上品",
+          "sector": "特用化學品-氟樹脂工程塑膠",
+          "reason": "【Stage 0 硬性攔截】最新日成交量 223 張 < 300 張（流動性陷阱）",
+          "close_at_pick": 243.5,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/4770/technical-chart",
+            "war_room": "charts/4770_fund.html"
+          }
+        },
+        {
+          "stock_id": "3029",
+          "stock_name": "零壹",
+          "sector": "資訊服務與資安代理",
+          "reason": "觸及FAKE_REVENUE_DILUTION殺價搶單紅線：雖10月營收創高(+91.1% YoY)，但Q3毛利率季減2.29%至10.56%、營益率季減1.60%至5.40%雙率惡化；且連3季FCF為負(OCF/NI -174%)、合約負債為0，近5日外資大賣而融資逆增接刀，予以淘汰。",
+          "close_at_pick": 112.0,
+          "actual_verification": {
+            "is_pending": true,
+            "trading_days_elapsed": 0
+          },
+          "links": {
+            "wantgoo": "https://www.wantgoo.com/stock/3029/technical-chart",
+            "war_room": "charts/3029_fund.html"
+          }
+        }
+      ],
+      "pending_candidates": []
     }
   ]
 }
